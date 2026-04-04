@@ -1,2 +1,7 @@
 .env
 venv_stable/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+trading_journal_*.txt

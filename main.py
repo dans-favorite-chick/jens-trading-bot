@@ -22,7 +22,7 @@ class TradingState(TypedDict):
     log: List[str]
 
 # 3. The Brain: Gemini 2.5 Pro
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-pro", temperature=0)
+llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro", temperature=0)
 
 # --- THE SEVEN-BOT COUNCIL NODES ---
 
@@ -30,25 +30,25 @@ def tech_bot(state: TradingState):
     """BOT 1: Triple Timeframe + MenthorQ Gamma Levels"""
     prompt = "1H Trend: UP | 5m: Engulfing + Retest. Above Gamma Flip? Return 'BULLISH' or 'WAIT'."
     res = llm.invoke(prompt).content.strip()
-    return {"tech_signal": res, "log": [f"Tech: {res}"]}
+    return {"tech_signal": res.replace("*", ""), "log": [f"Tech: {res}"]}
 
 def macro_bot(state: TradingState):
     """BOT 2: News & Politics (Trump/CPI/FOMC)"""
     prompt = "Trump Sentiment: BULLISH | CPI: 2hrs away. Return 'STABLE' or 'SIT OUT'."
     res = llm.invoke(prompt).content.strip()
-    return {"macro_signal": res, "log": [f"Macro: {res}"]}
+    return {"macro_signal": res.replace("*", ""), "log": [f"Macro: {res}"]}
 
 def psychologist_bot(state: TradingState):
     """BOT 3: Retail Exhaustion & Institutional Traps"""
     prompt = "Fear & Greed: 85 (Extreme Greed). Is this a Retail Trap? Return 'STABLE' or 'CAUTION'."
     res = llm.invoke(prompt).content.strip()
-    return {"psych_signal": res, "log": [f"Psychologist: {res}"]}
+    return {"psych_signal": res.replace("*", ""), "log": [f"Psychologist: {res}"]}
 
 def tape_reader_bot(state: TradingState):
     """BOT 4: Level 2 Order Flow & MenthorQ Gamma/Delta"""
     prompt = "Buy Wall at 18100 | Gamma/Delta Flow. Return 'SUPPORT' or 'THIN'."
     res = llm.invoke(prompt).content.strip()
-    return {"tape_signal": res, "log": [f"Tape Reader: {res}"]}
+    return {"tape_signal": res.replace("*", ""), "log": [f"Tape Reader: {res}"]}
 
 def safety_officer_bot(state: TradingState):
     """BOT 5: Risk Manager ($20 per trade / $50 daily stop)"""
@@ -70,10 +70,10 @@ def integration_captain(state: TradingState):
     """Final Confidence Filter & Execution Logic"""
     
     # Check all Consensus Criteria
-    tech_ok = "BULLISH" in state["tech_signal"]
-    macro_ok = "STABLE" in state["macro_signal"]
-    psych_ok = "STABLE" in state["psych_signal"]
-    tape_ok = "SUPPORT" in state["tape_signal"]
+    tech_ok = state["tech_signal"].upper() == "BULLISH"
+    macro_ok = state["macro_signal"].upper() == "STABLE"
+    psych_ok = state["psych_signal"].upper() == "STABLE"
+    tape_ok = state["tape_signal"].upper() == "SUPPORT"
     risk_ok = state["risk_status"] == "GO"
     
     if all([tech_ok, macro_ok, psych_ok, tape_ok, risk_ok]):
