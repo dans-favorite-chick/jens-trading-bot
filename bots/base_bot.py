@@ -65,10 +65,14 @@ class BaseBot:
         """Load strategy instances from config. Override in subclass if needed."""
         from strategies.bias_momentum import BiasMomentumFollow
         from strategies.spring_setup import SpringSetup
+        from strategies.vwap_pullback import VWAPPullback
+        from strategies.high_precision import HighPrecisionOnly
 
         strategy_classes = {
             "bias_momentum": BiasMomentumFollow,
             "spring_setup": SpringSetup,
+            "vwap_pullback": VWAPPullback,
+            "high_precision_only": HighPrecisionOnly,
         }
 
         for name, config in STRATEGIES.items():
@@ -137,15 +141,26 @@ class BaseBot:
                     if exit_reason:
                         await self._exit_trade(ws, price, exit_reason)
 
+                # Execute pending signals from strategy evaluation
+                if hasattr(self, '_pending_signal') and self._pending_signal and self.positions.is_flat:
+                    signal = self._pending_signal
+                    self._pending_signal = None
+                    await self._enter_trade(ws, signal)
+
     # ─── Bar Event Handler ──────────────────────────────────────────
     def _on_bar(self, timeframe: str, bar):
         """Called by tick_aggregator when a bar completes."""
-        # Only evaluate strategies on 5m bar completions
-        if timeframe != "5m":
+        # Evaluate on 1m AND 5m bar completions
+        if timeframe not in ("1m", "5m"):
             return
 
         # Update session regime
-        self.session.get_current_regime()
+        regime = self.session.get_current_regime()
+
+        # Log bar completion
+        logger.info(f"[BAR {timeframe}] close={bar.close:.2f} vol={bar.volume} "
+                     f"regime={regime} bars_1m={self.aggregator.bars_1m.bar_count} "
+                     f"bars_5m={self.aggregator.bars_5m.bar_count}")
 
         # Run strategy pipeline (async-safe: store signal for main loop)
         self._evaluate_strategies()
@@ -159,6 +174,7 @@ class BaseBot:
         can_trade, reason = self.risk.can_trade()
         if not can_trade:
             self.last_rejection = reason
+            logger.debug(f"[RISK GATE] Blocked: {reason}")
             return
 
         # Session check
@@ -169,27 +185,37 @@ class BaseBot:
         bars_5m = list(self.aggregator.bars_5m.completed)
         bars_1m = list(self.aggregator.bars_1m.completed)
 
-        # Apply runtime confluence override
-        min_conf = self._runtime_params.get("min_confluence", 3.5)
-        regime_override = self.session.get_confluence_override()
-        if regime_override:
-            min_conf = max(min_conf, regime_override)
+        logger.info(f"[EVAL] price={market.get('price',0):.2f} "
+                     f"vwap={market.get('vwap',0):.2f} ema9={market.get('ema9',0):.2f} "
+                     f"cvd={market.get('cvd',0):.0f} "
+                     f"tf_bull={market.get('tf_votes_bullish',0)} tf_bear={market.get('tf_votes_bearish',0)} "
+                     f"bars_1m={len(bars_1m)} bars_5m={len(bars_5m)} "
+                     f"regime={session_info.get('regime','?')}")
 
         best_signal = None
         for strat in self.strategies:
             if not strat.enabled:
+                logger.debug(f"  [{strat.name}] SKIP — disabled")
                 continue
             if not self.session.is_strategy_allowed(strat.name):
+                logger.debug(f"  [{strat.name}] SKIP — not allowed in {session_info.get('regime')}")
                 continue
 
             try:
                 signal = strat.evaluate(market, bars_5m, bars_1m, session_info)
-                if signal and signal.confidence > (best_signal.confidence if best_signal else 0):
-                    best_signal = signal
+                if signal:
+                    logger.info(f"  [{strat.name}] SIGNAL: {signal.direction} conf={signal.confidence:.0f} "
+                                 f"score={signal.entry_score:.0f} — {signal.reason}")
+                    if signal.confidence > (best_signal.confidence if best_signal else 0):
+                        best_signal = signal
+                else:
+                    logger.info(f"  [{strat.name}] no signal")
             except Exception as e:
-                logger.error(f"Strategy {strat.name} error: {e}")
+                logger.error(f"  [{strat.name}] ERROR: {e}")
 
         if best_signal:
+            logger.info(f"[TRADE QUEUED] {best_signal.direction} via {best_signal.strategy} "
+                         f"conf={best_signal.confidence:.0f}")
             self.last_signal = {
                 "direction": best_signal.direction,
                 "strategy": best_signal.strategy,

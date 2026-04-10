@@ -42,10 +42,10 @@ REGIME_CONFIG = {
         "notes": "First pullback territory",
     },
     "AFTERNOON_CHOP": {
-        "min_confluence_override": 5.5,
+        "min_confluence_override": 4.0,
         "size_multiplier": 0.5,
-        "allowed_strategies": [],  # Skip most trades
-        "notes": "DEATH ZONE — lunch lull, very selective",
+        "allowed_strategies": None,  # Lab bot needs to trade here too for data
+        "notes": "DEATH ZONE — lunch lull, very selective (lab still trades)",
     },
     "LATE_AFTERNOON": {
         "min_confluence_override": None,
@@ -54,10 +54,10 @@ REGIME_CONFIG = {
         "notes": "Institutional reposition window",
     },
     "CLOSE_CHOP": {
-        "min_confluence_override": 5.0,
+        "min_confluence_override": 4.0,
         "size_multiplier": 0.3,
-        "allowed_strategies": [],
-        "notes": "Avoid — directionless, tight stops",
+        "allowed_strategies": None,  # Lab trades here for data
+        "notes": "Avoid in prod — directionless, tight stops",
     },
     "AFTERHOURS": {
         "min_confluence_override": None,

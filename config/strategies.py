@@ -88,7 +88,7 @@ STRATEGIES = {
         "max_hold_min": 15,
     },
     "tick_scalp": {
-        "enabled": False,     # Disabled by default
+        "enabled": True,      # Enabled for lab bot
         "validated": False,
         "stop_ticks": 5,
         "target_rr": 1.5,
