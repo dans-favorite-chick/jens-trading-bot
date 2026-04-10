@@ -24,8 +24,8 @@ FILE_FALLBACK_PATH = r"C:\temp\mnq_data.json"
 
 # ─── Connection Thresholds ──────────────────────────────────────────
 HEARTBEAT_INTERVAL_S = 3        # NT8 indicator sends heartbeat every N seconds
-STALE_THRESHOLD_S = 5           # Yellow warning after N seconds without data
-DISCONNECT_THRESHOLD_S = 10     # Red / switch to file fallback after N seconds
+STALE_THRESHOLD_S = 10          # Yellow warning after N seconds without data
+DISCONNECT_THRESHOLD_S = 30     # Red / switch to file fallback after N seconds
 FILE_POLL_INTERVAL_S = 0.25     # Poll file fallback every N seconds
 TICK_BUFFER_SIZE = 100          # Ring buffer of recent ticks for late-connecting bots
 

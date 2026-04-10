@@ -75,6 +75,16 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
 .profile-btns { display:flex; gap:8px; margin-bottom:12px; }
 .profile-btn { padding:8px 16px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--text); cursor:pointer; font-weight:600; }
 .profile-btn.active { background:var(--blue); color:#000; border-color:var(--blue); }
+
+/* Bot control buttons */
+.bot-controls { display:flex; gap:8px; align-items:center; margin-left:auto; }
+.bot-btn { padding:6px 16px; border-radius:6px; border:none; cursor:pointer; font-weight:700; font-size:12px; text-transform:uppercase; letter-spacing:0.5px; }
+.bot-btn-start { background:var(--green); color:#000; }
+.bot-btn-start:hover { background:#4ddf62; }
+.bot-btn-stop { background:var(--red); color:#fff; }
+.bot-btn-stop:hover { background:#ff6b5e; }
+.bot-btn:disabled { opacity:0.4; cursor:not-allowed; }
+.bot-proc-status { font-size:11px; font-family:var(--mono); color:var(--text-dim); }
 .slider-row { display:flex; align-items:center; gap:12px; margin-bottom:8px; }
 .slider-row label { min-width:180px; font-size:12px; color:var(--text-dim); }
 .slider-row input[type=range] { flex:1; accent-color:var(--blue); }
@@ -154,6 +164,11 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
 <div class="tab-bar">
   <button class="tab-btn active" onclick="switchBot('prod')">Prod Bot</button>
   <button class="tab-btn" onclick="switchBot('lab')">Lab Bot</button>
+  <div class="bot-controls">
+    <span class="bot-proc-status" id="bot-proc-label">Prod: stopped</span>
+    <button class="bot-btn bot-btn-start" id="bot-start-btn" onclick="startBot()">Start</button>
+    <button class="bot-btn bot-btn-stop" id="bot-stop-btn" onclick="stopBot()">Stop</button>
+  </div>
 </div>
 
 <!-- ===== SECTION: Position Bar ===== -->
@@ -285,6 +300,7 @@ async function poll() {
     renderTrades(status[activeBot]?.trades || []);
     renderStrategies(status[activeBot]?.strategies || []);
     renderPosition(status[activeBot]?.position || {});
+    renderBotControls(status.bot_processes || {});
 
     document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
   } catch (e) {
@@ -449,6 +465,44 @@ function renderBot(bot) {
   // Session regime
   const regime = bot.session?.regime || '--';
   el('mk-regime').textContent = regime;
+}
+
+// ── Bot Process Controls ──────────────────────────────────────────
+function startBot() {
+  const btn = el('bot-start-btn');
+  btn.disabled = true;
+  btn.textContent = 'Starting...';
+  fetch('/api/bot/start', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name: activeBot})})
+    .then(r => r.json())
+    .then(d => {
+      if (!d.ok) alert(d.error || 'Failed to start');
+      btn.disabled = false;
+      btn.textContent = 'Start';
+    })
+    .catch(() => { btn.disabled = false; btn.textContent = 'Start'; });
+}
+
+function stopBot() {
+  const btn = el('bot-stop-btn');
+  btn.disabled = true;
+  btn.textContent = 'Stopping...';
+  fetch('/api/bot/stop', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name: activeBot})})
+    .then(r => r.json())
+    .then(() => { btn.disabled = false; btn.textContent = 'Stop'; })
+    .catch(() => { btn.disabled = false; btn.textContent = 'Stop'; });
+}
+
+function renderBotControls(botProcs) {
+  const proc = botProcs || {};
+  const running = proc[activeBot] === 'running';
+  const label = el('bot-proc-label');
+  const startBtn = el('bot-start-btn');
+  const stopBtn = el('bot-stop-btn');
+
+  label.textContent = activeBot.charAt(0).toUpperCase() + activeBot.slice(1) + ': ' + (running ? 'running' : 'stopped');
+  label.style.color = running ? 'var(--green)' : 'var(--text-dim)';
+  startBtn.disabled = running;
+  stopBtn.disabled = !running;
 }
 
 // ── Controls ───────────────────────────────────────────────────────

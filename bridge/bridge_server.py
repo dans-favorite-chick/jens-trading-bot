@@ -107,17 +107,27 @@ class BridgeServer:
             self.connection_events.pop(0)
         conn_log.info(f"[{level.upper()}] {message}")
 
-    # ─── NT8 Handler (port 8765) ────────────────────────────────────
-    async def handle_nt8(self, websocket):
-        remote = websocket.remote_address
+    # ─── NT8 TCP Handler (port 8765) ──────────────────────────────────
+    # NT8 connects via raw TCP (not WebSocket) because .NET Framework 4.8's
+    # ClientWebSocket has a known bug where SendAsync silently drops data.
+    # Protocol: newline-delimited JSON over TCP.
+    async def handle_nt8_tcp(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        remote = writer.get_extra_info("peername")
         self._log_event("info", f"NT8 client connected from {remote}")
-        self.nt8_ws = websocket
         self.nt8_connected = True
         self.nt8_connect_time = time.time()
         self.nt8_last_tick_time = time.time()
 
         try:
-            async for message in websocket:
+            while True:
+                line = await reader.readline()
+                if not line:
+                    break  # Connection closed
+
+                message = line.decode("utf-8", errors="ignore").strip()
+                if not message:
+                    continue
+
                 try:
                     data = json.loads(message)
                 except json.JSONDecodeError:
@@ -140,8 +150,8 @@ class BridgeServer:
                     # Buffer for late-connecting bots
                     self.tick_buffer.append(data)
 
-                    # Fan out to all connected bots
-                    await self._broadcast_to_bots(message)
+                    # Fan out to all connected bots (still WebSocket)
+                    await self._broadcast_to_bots(json.dumps(data))
 
                     # Log every 100th tick to avoid spam
                     if self.ticks_received % 100 == 0:
@@ -149,13 +159,15 @@ class BridgeServer:
                         n_bots = len(self.bot_connections)
                         logger.info(f"[TICK #{self.ticks_received}] price={price} bots={n_bots}")
 
-        except websockets.exceptions.ConnectionClosed:
+        except asyncio.IncompleteReadError:
+            pass
+        except ConnectionResetError:
             pass
         except Exception as e:
             logger.error(f"NT8 handler error: {e}")
         finally:
             self.nt8_connected = False
-            self.nt8_ws = None
+            writer.close()
             self._log_event("warn", f"NT8 disconnected from {remote}")
 
     # ─── Bot Handler (port 8766) ────────────────────────────────────
@@ -306,7 +318,7 @@ class BridgeServer:
                 self._log_event("error", f"NT8 data stale ({age:.0f}s) — switching to file fallback")
                 was_stale = True
             elif age < 5 and was_stale:
-                self._log_event("info", "NT8 data resumed (WebSocket live)")
+                self._log_event("info", "NT8 data resumed (TCP live)")
                 was_stale = False
 
     # ─── File Fallback Poller ───────────────────────────────────────
@@ -379,16 +391,14 @@ class BridgeServer:
         logger.info("  PHOENIX BRIDGE SERVER")
         logger.info("=" * 60)
 
-        # Start NT8 WebSocket server
-        nt8_server = await websockets.serve(
-            self.handle_nt8,
+        # Start NT8 TCP server (raw TCP, not WebSocket — see TickStreamer v2.0)
+        nt8_server = await asyncio.start_server(
+            self.handle_nt8_tcp,
             "127.0.0.1",
             NT8_WS_PORT,
-            ping_interval=20,
-            ping_timeout=10,
         )
-        logger.info(f"[OK] NT8 server  : ws://127.0.0.1:{NT8_WS_PORT}")
-        self._log_event("info", f"Bridge started — NT8 server on :{NT8_WS_PORT}")
+        logger.info(f"[OK] NT8 server  : tcp://127.0.0.1:{NT8_WS_PORT}")
+        self._log_event("info", f"Bridge started — NT8 TCP server on :{NT8_WS_PORT}")
 
         # Start Bot WebSocket server
         bot_server = await websockets.serve(

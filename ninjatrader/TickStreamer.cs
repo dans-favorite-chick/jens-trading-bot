@@ -1,32 +1,26 @@
 // ============================================================================
-// TickStreamer — Lean Tick-Only NT8 Indicator for Phoenix Bot
+// TickStreamer v2.0 — TCP Edition (replaces WebSocket)
 // ============================================================================
-// PURPOSE:  Stream raw ticks from NinjaTrader 8 to Python via WebSocket.
-//           Python owns all derived math (ATR, VWAP, CVD, bars, etc.).
+// WHY TCP:  .NET Framework 4.8's ClientWebSocket (WinHTTP) has a known bug
+//           where SendAsync silently succeeds but data never reaches the server.
+//           NT8's threading model (indicator threads paused, timers drift) makes
+//           async WebSocket unreliable. Raw TCP with synchronous Write() is
+//           atomic, blocking, and proven to work in NT8 (MNQDataBridge.cs).
 //
-// ARCHITECTURE:
-//   This indicator is a WebSocket CLIENT connecting OUT to Python server.
-//   Python runs the WebSocket SERVER on port 8765.
-//   NT8 → ws://127.0.0.1:8765 → Python bridge_server.py
+// PROTOCOL: Newline-delimited JSON over TCP to 127.0.0.1:8765
+//   Tick:      {"type":"tick","price":18527.5,"bid":18527.25,"ask":18527.75,"vol":1,"ts":"..."}\n
+//   Heartbeat: {"type":"heartbeat","ts":"..."}\n
+//   Connect:   {"type":"connect","instrument":"MNQM6 06-26","ts":"..."}\n
 //
-// MESSAGES SENT:
-//   Tick:      {"type":"tick","price":18527.5,"bid":18527.25,"ask":18527.75,"vol":1,"ts":"..."}
-//   Heartbeat: {"type":"heartbeat","ts":"..."}
-//   Connect:   {"type":"connect","instrument":"MNQM6 06-26","ts":"..."}
-//
-// INSTALL:
-//   1. NinjaTrader 8 → File → Utilities → Edit NinjaScript → Indicators
-//   2. Create new file "TickStreamer.cs", paste this code
-//   3. Save and compile (F5)
-//   4. Add to any MNQM6 chart (right-click chart → Indicators → TickStreamer)
+// INSTALL:  Same as before — paste into NinjaScript Indicator editor, F5.
 // ============================================================================
 
 #region Using declarations
 using System;
-using System.Net.WebSockets;
+using System.IO;
+using System.Net.Sockets;
 using System.Text;
 using System.Threading;
-using System.Threading.Tasks;
 using NinjaTrader.NinjaScript;
 using NinjaTrader.NinjaScript.Indicators;
 #endregion
@@ -36,25 +30,27 @@ namespace NinjaTrader.NinjaScript.Indicators
     public class TickStreamer : Indicator
     {
         // ── CONFIG ────────────────────────────────────────────────────────
-        private const string PYTHON_WS_URI  = "ws://127.0.0.1:8765";
+        private const string HOST           = "127.0.0.1";
+        private const int    PORT           = 8765;
         private const int    HEARTBEAT_MS   = 3000;   // Heartbeat every 3 seconds
-        private const int    RECONNECT_MS   = 2000;   // Retry connection after 2 seconds
-        private const int    SEND_TIMEOUT_MS = 1000;  // Max wait for send to complete
+        private const int    RECONNECT_MS   = 5000;   // Retry after 5 seconds
+        private const int    CONNECT_TIMEOUT = 3000;  // TCP connect timeout
 
         // ── STATE ─────────────────────────────────────────────────────────
-        private ClientWebSocket socket;
-        private CancellationTokenSource cts;
-        private DateTime lastSendTime = DateTime.MinValue;
-        private DateTime lastHeartbeat = DateTime.MinValue;
-        private bool isConnected = false;
-        private int sendErrors = 0;
+        private TcpClient client;
+        private NetworkStream stream;
+        private Timer heartbeatTimer;
+        private DateTime lastConnectAttempt = DateTime.MinValue;
+        private volatile bool isConnected = false;
+        private volatile bool isConnecting = false;
         private string instrumentName = "";
+        private readonly object sendLock = new object();
 
         protected override void OnStateChange()
         {
             if (State == State.SetDefaults)
             {
-                Description = "Streams raw ticks to Python bridge via WebSocket";
+                Description = "Streams raw ticks to Python bridge via TCP";
                 Name = "TickStreamer";
                 Calculate = Calculate.OnEachTick;
                 IsOverlay = true;
@@ -62,11 +58,18 @@ namespace NinjaTrader.NinjaScript.Indicators
             else if (State == State.DataLoaded)
             {
                 instrumentName = Instrument.FullName;
-                cts = new CancellationTokenSource();
                 TryConnect();
+
+                // Heartbeat timer — fires every 3s, handles heartbeat + reconnect
+                heartbeatTimer = new Timer(HeartbeatCallback, null, HEARTBEAT_MS, HEARTBEAT_MS);
             }
             else if (State == State.Terminated)
             {
+                if (heartbeatTimer != null)
+                {
+                    heartbeatTimer.Dispose();
+                    heartbeatTimer = null;
+                }
                 Disconnect();
             }
         }
@@ -75,7 +78,6 @@ namespace NinjaTrader.NinjaScript.Indicators
         {
             if (State != State.Realtime) return;
 
-            // ── Send tick data ─────────────────────────────────────────
             if (isConnected)
             {
                 var sb = new StringBuilder(256);
@@ -86,19 +88,22 @@ namespace NinjaTrader.NinjaScript.Indicators
                 sb.Append(",\"vol\":").Append(Volume[0]);
                 sb.Append(",\"ts\":\"").Append(DateTime.UtcNow.ToString("o")).Append("\"");
                 sb.Append("}");
-
-                SendMessage(sb.ToString());
+                Send(sb.ToString());
             }
+        }
 
-            // ── Heartbeat check ────────────────────────────────────────
-            if ((DateTime.Now - lastHeartbeat).TotalMilliseconds >= HEARTBEAT_MS)
+        // ── HEARTBEAT TIMER ────────────────────────────────────────────
+        private void HeartbeatCallback(object state)
+        {
+            if (isConnected)
             {
-                SendHeartbeat();
-                lastHeartbeat = DateTime.Now;
+                var sb = new StringBuilder(64);
+                sb.Append("{\"type\":\"heartbeat\"");
+                sb.Append(",\"ts\":\"").Append(DateTime.UtcNow.ToString("o")).Append("\"");
+                sb.Append("}");
+                Send(sb.ToString());
             }
-
-            // ── Auto-reconnect ─────────────────────────────────────────
-            if (!isConnected && (DateTime.Now - lastSendTime).TotalMilliseconds >= RECONNECT_MS)
+            else if (!isConnecting && (DateTime.Now - lastConnectAttempt).TotalMilliseconds >= RECONNECT_MS)
             {
                 TryConnect();
             }
@@ -107,103 +112,109 @@ namespace NinjaTrader.NinjaScript.Indicators
         // ── CONNECTION ─────────────────────────────────────────────────
         private void TryConnect()
         {
-            try
+            lock (sendLock)
             {
-                if (socket != null)
-                {
-                    try { socket.Dispose(); } catch { }
-                }
+                if (isConnecting) return;
+                isConnecting = true;
+                lastConnectAttempt = DateTime.Now;
 
-                socket = new ClientWebSocket();
-                var connectTask = socket.ConnectAsync(new Uri(PYTHON_WS_URI), cts.Token);
-                if (connectTask.Wait(3000))
+                try
                 {
-                    isConnected = socket.State == WebSocketState.Open;
-                    if (isConnected)
+                    // Clean up old connection
+                    CleanupSocket();
+
+                    client = new TcpClient();
+                    client.NoDelay = true;  // Disable Nagle — send immediately
+                    client.SendTimeout = 2000;
+
+                    // Connect with timeout
+                    var connectResult = client.BeginConnect(HOST, PORT, null, null);
+                    bool connected = connectResult.AsyncWaitHandle.WaitOne(CONNECT_TIMEOUT);
+
+                    if (connected && client.Connected)
                     {
-                        sendErrors = 0;
-                        Print("TickStreamer: Connected to Python bridge at " + PYTHON_WS_URI);
+                        client.EndConnect(connectResult);
+                        stream = client.GetStream();
+                        isConnected = true;
+                        Print("TickStreamer: Connected to Python bridge (TCP " + HOST + ":" + PORT + ")");
 
-                        // Send connect message with instrument info
+                        // Send connect message
                         var sb = new StringBuilder(128);
                         sb.Append("{\"type\":\"connect\"");
                         sb.Append(",\"instrument\":\"").Append(instrumentName).Append("\"");
                         sb.Append(",\"ts\":\"").Append(DateTime.UtcNow.ToString("o")).Append("\"");
                         sb.Append("}");
-                        SendMessage(sb.ToString());
+                        SendInternal(sb.ToString());
+
+                        // Immediate heartbeat
+                        var hb = new StringBuilder(64);
+                        hb.Append("{\"type\":\"heartbeat\"");
+                        hb.Append(",\"ts\":\"").Append(DateTime.UtcNow.ToString("o")).Append("\"");
+                        hb.Append("}");
+                        SendInternal(hb.ToString());
+                    }
+                    else
+                    {
+                        CleanupSocket();
                     }
                 }
-                else
+                catch (Exception ex)
                 {
                     isConnected = false;
+                    Print("TickStreamer: Connect failed — " + ex.Message);
+                    CleanupSocket();
+                }
+                finally
+                {
+                    isConnecting = false;
                 }
             }
-            catch (Exception ex)
-            {
-                isConnected = false;
-                Print("TickStreamer: Connect failed — " + ex.Message);
-            }
-            lastSendTime = DateTime.Now;
+        }
+
+        private void CleanupSocket()
+        {
+            isConnected = false;
+            try { stream?.Close(); } catch { }
+            try { client?.Close(); } catch { }
+            stream = null;
+            client = null;
         }
 
         private void Disconnect()
         {
-            isConnected = false;
-            try
+            lock (sendLock)
             {
-                cts?.Cancel();
-                if (socket != null && socket.State == WebSocketState.Open)
-                {
-                    socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Indicator removed", CancellationToken.None).Wait(1000);
-                }
-                socket?.Dispose();
+                CleanupSocket();
             }
-            catch { }
             Print("TickStreamer: Disconnected");
         }
 
-        // ── MESSAGING ──────────────────────────────────────────────────
-        private void SendMessage(string json)
+        // ── SEND (synchronous, blocking, atomic) ──────────────────────
+        private void Send(string json)
         {
-            if (!isConnected || socket == null || socket.State != WebSocketState.Open)
+            lock (sendLock)
             {
-                isConnected = false;
-                return;
+                SendInternal(json);
             }
+        }
+
+        private void SendInternal(string json)
+        {
+            // Must be called inside sendLock
+            if (!isConnected || stream == null) return;
 
             try
             {
-                var bytes = Encoding.UTF8.GetBytes(json);
-                var segment = new ArraySegment<byte>(bytes);
-                var sendTask = socket.SendAsync(segment, WebSocketMessageType.Text, true, cts.Token);
-                if (!sendTask.Wait(SEND_TIMEOUT_MS))
-                {
-                    sendErrors++;
-                    if (sendErrors > 5)
-                    {
-                        Print("TickStreamer: Too many send timeouts, reconnecting...");
-                        isConnected = false;
-                    }
-                }
-                else
-                {
-                    sendErrors = 0;
-                    lastSendTime = DateTime.Now;
-                }
+                byte[] data = Encoding.UTF8.GetBytes(json + "\n");
+                stream.Write(data, 0, data.Length);
+                stream.Flush();
             }
             catch (Exception)
             {
                 isConnected = false;
+                Print("TickStreamer: Send failed, will reconnect");
+                CleanupSocket();
             }
-        }
-
-        private void SendHeartbeat()
-        {
-            var sb = new StringBuilder(64);
-            sb.Append("{\"type\":\"heartbeat\"");
-            sb.Append(",\"ts\":\"").Append(DateTime.UtcNow.ToString("o")).Append("\"");
-            sb.Append("}");
-            SendMessage(sb.ToString());
         }
     }
 }

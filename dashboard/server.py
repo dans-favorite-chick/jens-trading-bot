@@ -8,6 +8,8 @@ Polls bridge health and bot state; serves to browser on :5000.
 import json
 import logging
 import os
+import signal
+import subprocess
 import time
 import threading
 
@@ -19,6 +21,71 @@ from config.settings import DASHBOARD_PORT, HEALTH_HTTP_PORT
 
 app = Flask(__name__)
 logger = logging.getLogger("Dashboard")
+
+# ─── Bot Process Manager ───────────────────────────────────────────
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+_bot_processes: dict[str, subprocess.Popen] = {}
+_bot_proc_lock = threading.Lock()
+
+
+def _start_bot(name: str) -> dict:
+    """Start a bot subprocess. name = 'prod' or 'lab'."""
+    with _bot_proc_lock:
+        # Check if already running
+        proc = _bot_processes.get(name)
+        if proc and proc.poll() is None:
+            return {"ok": False, "error": f"{name} bot already running (pid {proc.pid})"}
+
+        script = os.path.join(PROJECT_ROOT, "bots", f"{name}_bot.py")
+        if not os.path.exists(script):
+            return {"ok": False, "error": f"Script not found: {script}"}
+
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, script],
+                cwd=PROJECT_ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
+            )
+            _bot_processes[name] = proc
+            logger.info(f"Started {name} bot (pid {proc.pid})")
+            return {"ok": True, "pid": proc.pid}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+
+def _stop_bot(name: str) -> dict:
+    """Stop a running bot subprocess."""
+    with _bot_proc_lock:
+        proc = _bot_processes.get(name)
+        if not proc or proc.poll() is not None:
+            _bot_processes.pop(name, None)
+            return {"ok": True, "message": f"{name} bot not running"}
+
+        try:
+            if sys.platform == "win32":
+                proc.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                proc.terminate()
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        except Exception:
+            proc.kill()
+
+        _bot_processes.pop(name, None)
+        logger.info(f"Stopped {name} bot")
+        return {"ok": True}
+
+
+def _bot_status(name: str) -> str:
+    """Return 'running' or 'stopped'."""
+    with _bot_proc_lock:
+        proc = _bot_processes.get(name)
+        if proc and proc.poll() is None:
+            return "running"
+        return "stopped"
 
 # ─── Shared State ───────────────────────────────────────────────────
 # Bots push state here via POST /api/bot-state
@@ -83,6 +150,10 @@ def api_status():
             "prod": _state["prod"],
             "lab": _state["lab"],
             "bridge": _state["bridge_health"],
+            "bot_processes": {
+                "prod": _bot_status("prod"),
+                "lab": _bot_status("lab"),
+            },
             "ts": time.time(),
         })
 
@@ -196,6 +267,35 @@ def api_get_commands():
     with _state_lock:
         cmds = _state.pop("_commands", [])
     return jsonify(cmds)
+
+
+# ─── API: Bot Process Control ──────────────────────────────────────
+@app.route("/api/bot/start", methods=["POST"])
+def api_start_bot():
+    data = request.get_json(silent=True) or {}
+    name = data.get("name", "")
+    if name not in ("prod", "lab"):
+        return jsonify({"ok": False, "error": "name must be 'prod' or 'lab'"}), 400
+    result = _start_bot(name)
+    return jsonify(result)
+
+
+@app.route("/api/bot/stop", methods=["POST"])
+def api_stop_bot():
+    data = request.get_json(silent=True) or {}
+    name = data.get("name", "")
+    if name not in ("prod", "lab"):
+        return jsonify({"ok": False, "error": "name must be 'prod' or 'lab'"}), 400
+    result = _stop_bot(name)
+    return jsonify(result)
+
+
+@app.route("/api/bot/status")
+def api_bot_proc_status():
+    return jsonify({
+        "prod": _bot_status("prod"),
+        "lab": _bot_status("lab"),
+    })
 
 
 # ─── Main ───────────────────────────────────────────────────────────
