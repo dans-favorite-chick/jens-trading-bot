@@ -13,11 +13,12 @@ import asyncio
 import json
 import logging
 import time
+import urllib.request
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from config.settings import BOT_WS_PORT, TICK_SIZE, LIVE_TRADING
+from config.settings import BOT_WS_PORT, TICK_SIZE, LIVE_TRADING, DASHBOARD_PORT
 from config.strategies import STRATEGIES, STRATEGY_DEFAULTS
 from core.tick_aggregator import TickAggregator
 from core.risk_manager import RiskManager
@@ -96,6 +97,9 @@ class BaseBot:
         logger.info(f"  Live trading: {LIVE_TRADING}")
         logger.info(f"{'=' * 50}")
 
+        # Start dashboard state pusher in background
+        asyncio.ensure_future(self._dashboard_loop())
+
         while True:
             try:
                 await self._connect_and_listen()
@@ -103,6 +107,51 @@ class BaseBot:
                 logger.error(f"Connection error: {e}")
             logger.info("Reconnecting in 5s...")
             await asyncio.sleep(5)
+
+    # ─── Dashboard State Pusher ─────────────────────────────────────
+    async def _dashboard_loop(self):
+        """Push bot state to dashboard every 2s and poll for commands."""
+        url_state = f"http://127.0.0.1:{DASHBOARD_PORT}/api/bot-state"
+        url_cmds = f"http://127.0.0.1:{DASHBOARD_PORT}/api/commands"
+
+        while True:
+            try:
+                # Push state
+                state_json = json.dumps(self.to_dict()).encode("utf-8")
+                req = urllib.request.Request(
+                    url_state,
+                    data=state_json,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                urllib.request.urlopen(req, timeout=2)
+
+                # Poll for commands from dashboard
+                try:
+                    cmd_resp = urllib.request.urlopen(url_cmds, timeout=2)
+                    cmds = json.loads(cmd_resp.read().decode())
+                    for cmd in cmds:
+                        self._handle_dashboard_command(cmd)
+                except Exception:
+                    pass
+
+            except Exception as e:
+                logger.debug(f"Dashboard push failed: {e}")
+
+            await asyncio.sleep(2)
+
+    def _handle_dashboard_command(self, cmd: dict):
+        """Process a command from the dashboard."""
+        cmd_type = cmd.get("type", "")
+        if cmd_type == "set_profile":
+            self.set_profile(cmd.get("profile", "balanced"))
+        elif cmd_type == "toggle_strategy":
+            self.toggle_strategy(cmd.get("name", ""), cmd.get("enabled", True))
+        elif cmd_type == "update_params":
+            self.update_runtime_params(cmd.get("params", {}))
+        elif cmd_type == "test_trade":
+            logger.info(f"[TEST TRADE] {cmd.get('action', 'ENTER_LONG')}")
+            # TODO: fire test trade
 
     async def _connect_and_listen(self):
         uri = f"ws://127.0.0.1:{BOT_WS_PORT}"
