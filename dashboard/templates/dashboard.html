@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Phoenix Trading Bot</title>
+<style>
+/* ===== SECTION: CSS Variables & Base ===== */
+:root {
+  --bg: #0d1117; --surface: #161b22; --border: #30363d;
+  --text: #e6edf3; --text-dim: #8b949e; --text-bright: #ffffff;
+  --green: #3fb950; --red: #f85149; --yellow: #d29922; --blue: #58a6ff; --purple: #bc8cff;
+  --font: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --mono: 'Cascadia Code', 'Consolas', monospace;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:var(--bg); color:var(--text); font-family:var(--font); font-size:14px; }
+.container { max-width:1400px; margin:0 auto; padding:12px; }
+
+/* ===== SECTION: Health Bar ===== */
+.health-bar { display:flex; gap:8px; padding:10px 16px; background:var(--surface); border:1px solid var(--border); border-radius:8px; margin-bottom:12px; align-items:center; flex-wrap:wrap; }
+.health-pill { display:inline-flex; align-items:center; gap:6px; padding:4px 12px; border-radius:16px; font-size:12px; font-weight:600; font-family:var(--mono); }
+.health-pill .dot { width:8px; height:8px; border-radius:50%; }
+.health-pill.live { background:#0d2818; color:var(--green); }
+.health-pill.live .dot { background:var(--green); animation:pulse 2s infinite; }
+.health-pill.stale { background:#2d1f00; color:var(--yellow); }
+.health-pill.stale .dot { background:var(--yellow); }
+.health-pill.dead { background:#2d0000; color:var(--red); }
+.health-pill.dead .dot { background:var(--red); animation:pulse 0.5s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+/* Alert banner */
+.alert-banner { display:none; background:#f8514933; border:2px solid var(--red); color:var(--red); padding:12px 20px; border-radius:8px; margin-bottom:12px; font-weight:700; font-size:16px; text-align:center; animation:flash 1s infinite; }
+.alert-banner.active { display:block; }
+@keyframes flash { 0%,100%{opacity:1} 50%{opacity:0.6} }
+
+/* ===== SECTION: Layout ===== */
+.header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+.header h1 { font-size:20px; color:var(--text-bright); }
+.header .mode-badge { padding:4px 10px; border-radius:4px; font-size:11px; font-weight:700; text-transform:uppercase; }
+.header .mode-sim { background:#1f3a1f; color:var(--green); }
+.header .mode-live { background:#3a1f1f; color:var(--red); }
+
+.grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.grid-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
+.card { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:16px; }
+.card h3 { font-size:13px; color:var(--text-dim); text-transform:uppercase; letter-spacing:1px; margin-bottom:10px; }
+
+/* ===== SECTION: Connection Log ===== */
+.conn-log { max-height:150px; overflow-y:auto; font-family:var(--mono); font-size:11px; }
+.conn-log .evt { padding:2px 0; border-bottom:1px solid var(--border); }
+.conn-log .evt-info { color:var(--blue); }
+.conn-log .evt-warn { color:var(--yellow); }
+.conn-log .evt-error { color:var(--red); }
+.conn-log .evt-ts { color:var(--text-dim); margin-right:8px; }
+
+/* ===== SECTION: Bot Tabs ===== */
+.tab-bar { display:flex; gap:4px; margin-bottom:12px; }
+.tab-btn { padding:8px 20px; background:var(--surface); border:1px solid var(--border); border-radius:6px 6px 0 0; cursor:pointer; color:var(--text-dim); font-weight:600; }
+.tab-btn.active { background:var(--border); color:var(--text-bright); border-bottom-color:var(--border); }
+.tab-content { display:none; }
+.tab-content.active { display:block; }
+
+/* ===== SECTION: Position Bar ===== */
+.position-bar { display:flex; align-items:center; gap:16px; padding:12px 16px; border-radius:8px; margin-bottom:12px; font-family:var(--mono); }
+.position-bar.flat { background:var(--surface); border:1px solid var(--border); }
+.position-bar.long { background:#0d2818; border:1px solid var(--green); }
+.position-bar.short { background:#2d0000; border:1px solid var(--red); }
+.pos-label { font-weight:700; font-size:16px; min-width:60px; }
+.pos-item { display:flex; flex-direction:column; }
+.pos-item .label { font-size:10px; color:var(--text-dim); }
+.pos-item .value { font-size:14px; font-weight:600; }
+
+/* ===== SECTION: Strategy Controls ===== */
+.profile-btns { display:flex; gap:8px; margin-bottom:12px; }
+.profile-btn { padding:8px 16px; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--text); cursor:pointer; font-weight:600; }
+.profile-btn.active { background:var(--blue); color:#000; border-color:var(--blue); }
+.slider-row { display:flex; align-items:center; gap:12px; margin-bottom:8px; }
+.slider-row label { min-width:180px; font-size:12px; color:var(--text-dim); }
+.slider-row input[type=range] { flex:1; accent-color:var(--blue); }
+.slider-row .slider-val { min-width:50px; font-family:var(--mono); font-size:13px; text-align:right; }
+.toggle-row { display:flex; align-items:center; gap:10px; padding:6px 0; }
+.toggle-row label { font-size:13px; }
+.toggle { width:36px; height:20px; border-radius:10px; background:var(--border); position:relative; cursor:pointer; border:none; }
+.toggle.on { background:var(--green); }
+.toggle::after { content:''; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%; background:#fff; transition:0.2s; }
+.toggle.on::after { left:18px; }
+
+/* ===== SECTION: Trade Log ===== */
+.trade-table { width:100%; border-collapse:collapse; font-size:12px; font-family:var(--mono); }
+.trade-table th { text-align:left; padding:6px 8px; color:var(--text-dim); border-bottom:1px solid var(--border); font-size:11px; }
+.trade-table td { padding:6px 8px; border-bottom:1px solid var(--border); }
+.trade-table .win { color:var(--green); }
+.trade-table .loss { color:var(--red); }
+.trade-reason { cursor:pointer; color:var(--blue); text-decoration:underline; }
+.reason-detail { display:none; padding:8px 12px; background:#1c2333; border-radius:4px; margin:4px 0; font-size:11px; }
+.reason-detail.open { display:block; }
+.reason-detail ul { margin:4px 0 4px 16px; }
+
+/* ===== SECTION: Stats ===== */
+.stat-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:8px; }
+.stat { text-align:center; }
+.stat .val { font-size:20px; font-weight:700; font-family:var(--mono); }
+.stat .label { font-size:10px; color:var(--text-dim); text-transform:uppercase; }
+.pnl-positive { color:var(--green); }
+.pnl-negative { color:var(--red); }
+
+/* Daily loss meter */
+.meter { height:8px; background:var(--border); border-radius:4px; overflow:hidden; margin-top:6px; }
+.meter-fill { height:100%; border-radius:4px; transition:width 0.3s; }
+.meter-fill.safe { background:var(--green); }
+.meter-fill.warn { background:var(--yellow); }
+.meter-fill.danger { background:var(--red); }
+
+/* Market data pills */
+.pill { display:inline-block; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:600; }
+.pill-bullish { background:#0d2818; color:var(--green); }
+.pill-bearish { background:#2d0000; color:var(--red); }
+.pill-neutral { background:#2d2d00; color:var(--yellow); }
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- ===== SECTION: Header ===== -->
+<div class="header">
+  <h1>Phoenix Trading Bot</h1>
+  <div>
+    <span id="mode-badge" class="mode-badge mode-sim">SIMULATION</span>
+    <span style="color:var(--text-dim); margin-left:12px; font-size:12px;">Last update: <span id="last-update">--</span></span>
+  </div>
+</div>
+
+<!-- ===== SECTION: Alert Banner ===== -->
+<div id="alert-banner" class="alert-banner">CONNECTION LOST — NT8 feed disconnected</div>
+
+<!-- ===== SECTION: Health Bar ===== -->
+<div class="health-bar">
+  <span style="font-size:11px; color:var(--text-dim); margin-right:8px;">CONNECTIONS</span>
+  <span id="h-nt8" class="health-pill dead"><span class="dot"></span>NT8 Feed: <span class="age">--</span></span>
+  <span id="h-bridge-nt" class="health-pill dead"><span class="dot"></span>Bridge :8765: <span class="age">--</span></span>
+  <span id="h-bridge-bot" class="health-pill dead"><span class="dot"></span>Bridge :8766: <span class="age">--</span></span>
+  <span id="h-prod" class="health-pill dead"><span class="dot"></span>Prod Bot: <span class="age">--</span></span>
+  <span id="h-lab" class="health-pill dead"><span class="dot"></span>Lab Bot: <span class="age">--</span></span>
+</div>
+
+<!-- ===== SECTION: Connection Log ===== -->
+<div class="card" style="margin-bottom:12px;">
+  <h3>Connection Log</h3>
+  <div id="conn-log" class="conn-log"></div>
+</div>
+
+<!-- ===== SECTION: Bot Tabs ===== -->
+<div class="tab-bar">
+  <button class="tab-btn active" onclick="switchBot('prod')">Prod Bot</button>
+  <button class="tab-btn" onclick="switchBot('lab')">Lab Bot</button>
+</div>
+
+<!-- ===== SECTION: Position Bar ===== -->
+<div id="position-bar" class="position-bar flat">
+  <span class="pos-label" id="pos-dir">FLAT</span>
+  <div class="pos-item"><span class="label">Entry</span><span class="value" id="pos-entry">--</span></div>
+  <div class="pos-item"><span class="label">Stop</span><span class="value" id="pos-stop">--</span></div>
+  <div class="pos-item"><span class="label">Target</span><span class="value" id="pos-target">--</span></div>
+  <div class="pos-item"><span class="label">Contracts</span><span class="value" id="pos-qty">--</span></div>
+  <div class="pos-item"><span class="label">U/P&L</span><span class="value" id="pos-pnl">--</span></div>
+  <div class="pos-item"><span class="label">Strategy</span><span class="value" id="pos-strat">--</span></div>
+</div>
+
+<div class="grid-2">
+<!-- ===== SECTION: Strategy Controls ===== -->
+<div class="card">
+  <h3>Strategy Controls</h3>
+  <div class="profile-btns">
+    <button class="profile-btn" onclick="setProfile('safe')">Safe</button>
+    <button class="profile-btn active" onclick="setProfile('balanced')">Balanced</button>
+    <button class="profile-btn" onclick="setProfile('aggressive')">Aggressive</button>
+  </div>
+  <div id="strategy-toggles"></div>
+  <hr style="border-color:var(--border); margin:12px 0;">
+  <div class="slider-row">
+    <label>Min Confluence</label>
+    <input type="range" min="2.0" max="5.0" step="0.1" value="3.5" id="sl-confluence" oninput="updateSlider(this)">
+    <span class="slider-val" id="sv-confluence">3.5</span>
+  </div>
+  <div class="slider-row">
+    <label>Momentum Confidence</label>
+    <input type="range" min="40" max="90" step="5" value="60" id="sl-momentum" oninput="updateSlider(this)">
+    <span class="slider-val" id="sv-momentum">60</span>
+  </div>
+  <div class="slider-row">
+    <label>Risk Per Trade ($)</label>
+    <input type="range" min="5" max="20" step="1" value="15" id="sl-risk" oninput="updateSlider(this)">
+    <span class="slider-val" id="sv-risk">$15</span>
+  </div>
+  <div class="slider-row">
+    <label>Max Daily Loss ($)</label>
+    <input type="range" min="20" max="60" step="5" value="45" id="sl-dailyloss" oninput="updateSlider(this)">
+    <span class="slider-val" id="sv-dailyloss">$45</span>
+  </div>
+  <button onclick="saveParams()" style="margin-top:8px; padding:6px 16px; background:var(--blue); color:#000; border:none; border-radius:4px; cursor:pointer; font-weight:600;">Apply Changes</button>
+</div>
+
+<!-- ===== SECTION: Daily Stats ===== -->
+<div class="card">
+  <h3>Daily Stats</h3>
+  <div class="stat-grid">
+    <div class="stat"><div class="val" id="st-pnl">$0.00</div><div class="label">Session P&L</div></div>
+    <div class="stat"><div class="val" id="st-trades">0</div><div class="label">Trades</div></div>
+    <div class="stat"><div class="val" id="st-winrate">0%</div><div class="label">Win Rate</div></div>
+    <div class="stat"><div class="val" id="st-wl">0/0</div><div class="label">W/L</div></div>
+  </div>
+  <div style="margin-top:12px;">
+    <span style="font-size:11px; color:var(--text-dim);">Daily Loss Used: <span id="st-used">0%</span></span>
+    <div class="meter"><div class="meter-fill safe" id="st-meter" style="width:0%"></div></div>
+  </div>
+
+  <hr style="border-color:var(--border); margin:16px 0;">
+  <h3>Market Data</h3>
+  <div style="font-family:var(--mono); font-size:13px;">
+    <div style="display:flex; gap:16px; flex-wrap:wrap;">
+      <span>MNQ: <b id="mk-price">--</b></span>
+      <span>ATR: <b id="mk-atr">--</b></span>
+      <span>VWAP: <b id="mk-vwap">--</b></span>
+      <span>CVD: <b id="mk-cvd">--</b></span>
+    </div>
+    <div style="margin-top:6px;">
+      <span>Bias: </span>
+      <span id="mk-bias-1m" class="pill pill-neutral">1m: --</span>
+      <span id="mk-bias-5m" class="pill pill-neutral">5m: --</span>
+      <span id="mk-bias-15m" class="pill pill-neutral">15m: --</span>
+      <span id="mk-bias-60m" class="pill pill-neutral">60m: --</span>
+    </div>
+    <div style="margin-top:6px;">
+      <span>Regime: <span id="mk-regime" class="pill pill-neutral">--</span></span>
+      <span style="margin-left:12px;">TF Votes: <b id="mk-tf">--</b></span>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ===== SECTION: Trade Log ===== -->
+<div class="card" style="margin-top:12px;">
+  <h3>Trade Log</h3>
+  <table class="trade-table">
+    <thead>
+      <tr><th>#</th><th>Dir</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Result</th><th>Strategy</th><th>Reason</th></tr>
+    </thead>
+    <tbody id="trade-log"></tbody>
+  </table>
+  <div id="no-trades" style="text-align:center; color:var(--text-dim); padding:20px;">No trades yet</div>
+</div>
+
+</div><!-- /container -->
+
+<!-- ===== SECTION: Audio Alert ===== -->
+<audio id="alert-sound" preload="auto">
+  <source src="data:audio/wav;base64,UklGRl9vT19teleQmFzZT..." type="audio/wav">
+</audio>
+
+<!-- ===== SECTION: JavaScript ===== -->
+<script>
+const POLL_MS = 2000;
+let activeBot = 'prod';
+let lastNt8Status = 'dead';
+let alertPlayed = false;
+
+// ── Polling ────────────────────────────────────────────────────────
+async function poll() {
+  try {
+    const [statusRes, healthRes, logRes] = await Promise.all([
+      fetch('/api/status'),
+      fetch('/api/system-health'),
+      fetch('/api/connection-log'),
+    ]);
+    const status = await statusRes.json();
+    const health = await healthRes.json();
+    const connLog = await logRes.json();
+
+    renderHealth(health);
+    renderConnLog(connLog);
+    renderBot(status[activeBot] || {});
+    renderMarket(status[activeBot]?.market || {});
+    renderStats(status[activeBot]?.risk || {});
+    renderTrades(status[activeBot]?.trades || []);
+    renderStrategies(status[activeBot]?.strategies || []);
+    renderPosition(status[activeBot]?.position || {});
+
+    document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+  } catch (e) {
+    console.error('Poll error:', e);
+  }
+}
+
+// ── Health Bar ─────────────────────────────────────────────────────
+function renderHealth(h) {
+  const nt8Status = h.nt8_status || 'disconnected';
+  const age = h.nt8_last_tick_age_s;
+  const bots = h.bots_connected || [];
+
+  setPill('h-nt8', nt8Status === 'live' ? 'live' : nt8Status === 'stale' ? 'stale' : 'dead',
+    `NT8 Feed: ${nt8Status === 'live' ? age?.toFixed(0) + 's' : nt8Status}`);
+  setPill('h-bridge-nt', h.nt8_connected ? 'live' : 'dead',
+    `Bridge :8765: ${h.nt8_connected ? 'ok' : 'down'}`);
+  setPill('h-bridge-bot', bots.length > 0 ? 'live' : 'dead',
+    `Bridge :8766: ${bots.length} bots`);
+  setPill('h-prod', bots.includes('prod') ? 'live' : 'dead',
+    `Prod: ${bots.includes('prod') ? 'connected' : 'down'}`);
+  setPill('h-lab', bots.includes('lab') ? 'live' : 'dead',
+    `Lab: ${bots.includes('lab') ? 'connected' : 'down'}`);
+
+  // Alert banner
+  const banner = document.getElementById('alert-banner');
+  if (nt8Status === 'disconnected' && !h.nt8_connected) {
+    banner.classList.add('active');
+    banner.textContent = h.error || 'CONNECTION LOST \u2014 NT8 feed disconnected';
+    if (!alertPlayed) { playAlert(); alertPlayed = true; }
+  } else {
+    banner.classList.remove('active');
+    if (nt8Status === 'live') alertPlayed = false;
+  }
+  lastNt8Status = nt8Status;
+}
+
+function setPill(id, cls, text) {
+  const el = document.getElementById(id);
+  el.className = 'health-pill ' + cls;
+  el.innerHTML = '<span class="dot"></span>' + text;
+}
+
+function playAlert() {
+  try { new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEA' +
+    'ABAnAAAQJwAAEAAIAGRhdGEAAAAAA===').play(); } catch(e) {}
+}
+
+// ── Connection Log ─────────────────────────────────────────────────
+function renderConnLog(events) {
+  const el = document.getElementById('conn-log');
+  el.innerHTML = events.slice(-50).reverse().map(e => {
+    const lvl = (e.level || 'info').toLowerCase();
+    const ts = e.ts ? new Date(e.ts).toLocaleTimeString() : '';
+    return `<div class="evt evt-${lvl}"><span class="evt-ts">${ts}</span>${e.message || ''}</div>`;
+  }).join('');
+}
+
+// ── Position Bar ───────────────────────────────────────────────────
+function renderPosition(pos) {
+  const bar = document.getElementById('position-bar');
+  const status = pos.status || 'FLAT';
+  bar.className = 'position-bar ' + (status === 'FLAT' ? 'flat' : (pos.direction === 'LONG' ? 'long' : 'short'));
+  el('pos-dir').textContent = status === 'FLAT' ? 'FLAT' : pos.direction;
+  el('pos-entry').textContent = pos.entry_price?.toFixed(2) || '--';
+  el('pos-stop').textContent = pos.stop_price?.toFixed(2) || '--';
+  el('pos-target').textContent = pos.target_price?.toFixed(2) || '--';
+  el('pos-qty').textContent = pos.contracts || '--';
+  el('pos-strat').textContent = pos.strategy || '--';
+  const pnl = pos.unrealized_pnl || 0;
+  const pnlEl = el('pos-pnl');
+  pnlEl.textContent = '$' + pnl.toFixed(2);
+  pnlEl.style.color = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+}
+
+// ── Stats ──────────────────────────────────────────────────────────
+function renderStats(risk) {
+  const pnl = risk.daily_pnl || 0;
+  el('st-pnl').textContent = '$' + pnl.toFixed(2);
+  el('st-pnl').className = 'val ' + (pnl >= 0 ? 'pnl-positive' : 'pnl-negative');
+  el('st-trades').textContent = risk.trades_today || 0;
+  el('st-winrate').textContent = (risk.win_rate || 0) + '%';
+  el('st-wl').textContent = (risk.wins_today || 0) + '/' + (risk.losses_today || 0);
+  const used = risk.daily_used_pct || 0;
+  el('st-used').textContent = used.toFixed(0) + '%';
+  const meter = el('st-meter');
+  meter.style.width = Math.min(100, used) + '%';
+  meter.className = 'meter-fill ' + (used < 50 ? 'safe' : used < 80 ? 'warn' : 'danger');
+}
+
+// ── Market ─────────────────────────────────────────────────────────
+function renderMarket(m) {
+  el('mk-price').textContent = m.price?.toFixed(2) || '--';
+  el('mk-atr').textContent = m.atr_5m?.toFixed(1) || '--';
+  el('mk-vwap').textContent = m.vwap?.toFixed(2) || '--';
+  el('mk-cvd').textContent = m.cvd?.toFixed(0) || '--';
+  const bias = m.tf_bias || {};
+  ['1m','5m','15m','60m'].forEach(tf => {
+    const b = bias[tf] || 'NEUTRAL';
+    const pill = el('mk-bias-' + tf);
+    pill.textContent = tf + ': ' + b;
+    pill.className = 'pill pill-' + b.toLowerCase();
+  });
+  el('mk-tf').textContent = (m.tf_votes_bullish || 0) + ' bull / ' + (m.tf_votes_bearish || 0) + ' bear';
+}
+
+// ── Strategies ─────────────────────────────────────────────────────
+function renderStrategies(strats) {
+  const container = el('strategy-toggles');
+  container.innerHTML = strats.map(s =>
+    `<div class="toggle-row">
+      <button class="toggle ${s.enabled ? 'on' : ''}" onclick="toggleStrategy('${s.name}', ${!s.enabled})"></button>
+      <label>${s.name} ${s.validated ? '(validated)' : '(lab)'}</label>
+    </div>`
+  ).join('');
+}
+
+// ── Trade Log ──────────────────────────────────────────────────────
+function renderTrades(trades) {
+  const tbody = el('trade-log');
+  const noTrades = el('no-trades');
+  if (!trades.length) { tbody.innerHTML = ''; noTrades.style.display = 'block'; return; }
+  noTrades.style.display = 'none';
+  tbody.innerHTML = trades.slice().reverse().map((t, i) => {
+    const cls = t.result === 'WIN' ? 'win' : 'loss';
+    const id = 'reason-' + i;
+    return `<tr>
+      <td>${trades.length - i}</td>
+      <td>${t.direction}</td>
+      <td>${t.entry_price?.toFixed(2)}</td>
+      <td>${t.exit_price?.toFixed(2) || '--'}</td>
+      <td class="${cls}">$${t.pnl_dollars?.toFixed(2)}</td>
+      <td class="${cls}">${t.result}</td>
+      <td>${t.strategy}</td>
+      <td><span class="trade-reason" onclick="toggleReason('${id}')">Why?</span>
+        <div class="reason-detail" id="${id}">
+          <b>${t.strategy}</b>: ${t.entry_reason || ''}
+          ${t.market_snapshot ? `<br>Price: ${t.market_snapshot.price}, ATR: ${t.market_snapshot.atr_5m}, VWAP: ${t.market_snapshot.vwap}` : ''}
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function toggleReason(id) {
+  document.getElementById(id)?.classList.toggle('open');
+}
+
+// ── Bot Tabs ───────────────────────────────────────────────────────
+function switchBot(name) {
+  activeBot = name;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+}
+
+function renderBot(bot) {
+  // Mode badge
+  const badge = el('mode-badge');
+  if (bot.live_trading) { badge.textContent = 'LIVE'; badge.className = 'mode-badge mode-live'; }
+  else { badge.textContent = 'SIMULATION'; badge.className = 'mode-badge mode-sim'; }
+
+  // Session regime
+  const regime = bot.session?.regime || '--';
+  el('mk-regime').textContent = regime;
+}
+
+// ── Controls ───────────────────────────────────────────────────────
+function setProfile(name) {
+  fetch('/api/runtime-controls/profile', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({profile:name})});
+  document.querySelectorAll('.profile-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+}
+
+function toggleStrategy(name, enabled) {
+  fetch('/api/runtime-controls/strategy', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name, enabled})});
+}
+
+function updateSlider(input) {
+  const id = input.id.replace('sl-', 'sv-');
+  const prefix = input.id.includes('risk') || input.id.includes('daily') ? '$' : '';
+  document.getElementById(id).textContent = prefix + input.value;
+}
+
+function saveParams() {
+  const params = {
+    min_confluence: parseFloat(el('sl-confluence').value),
+    min_momentum_confidence: parseInt(el('sl-momentum').value),
+    risk_per_trade: parseFloat(el('sl-risk').value),
+    max_daily_loss: parseFloat(el('sl-dailyloss').value),
+  };
+  fetch('/api/runtime-controls/params', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(params)});
+}
+
+// ── Helpers ────────────────────────────────────────────────────────
+function el(id) { return document.getElementById(id); }
+
+// ── Start ──────────────────────────────────────────────────────────
+setInterval(poll, POLL_MS);
+poll();
+</script>
+</body>
+</html>
