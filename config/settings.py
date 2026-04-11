@@ -71,6 +71,13 @@ SESSION_WINDOWS = {
 PROD_PRIMARY_START = "08:30"
 PROD_PRIMARY_END = "10:00"
 
+# ─── Phase 4: AI Agents ────────────────────────────────────────────
+# Requires GEMINI_API_KEY in .env or environment variable
+AGENT_COUNCIL_ENABLED = True        # 7-voter bias consensus at session open
+AGENT_PRETRADE_FILTER_ENABLED = True  # Fast AI sanity check before entry
+AGENT_DEBRIEF_ENABLED = True        # End-of-session coaching debrief
+AGENT_MODEL = "gemini-2.0-flash"    # Model for all agents
+
 # ─── Logging ────────────────────────────────────────────────────────
 LOG_DIR = "logs"
 BRIDGE_LOG = "logs/bridge.log"

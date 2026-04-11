@@ -107,6 +107,21 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
 .reason-detail.open { display:block; }
 .reason-detail ul { margin:4px 0 4px 16px; }
 
+/* ===== SECTION: Bridge Activity ===== */
+.bridge-stat { display:inline-flex; flex-direction:column; align-items:center; min-width:80px; }
+.bridge-stat .val { font-family:var(--mono); font-size:18px; font-weight:700; }
+.bridge-stat .label { font-size:10px; color:var(--text-dim); text-transform:uppercase; margin-top:2px; }
+
+/* ===== SECTION: Signal Activity ===== */
+.signal-row { display:flex; align-items:center; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:var(--mono); }
+.signal-row:last-child { border-bottom:none; }
+.sig-badge { padding:2px 7px; border-radius:4px; font-size:11px; font-weight:700; white-space:nowrap; }
+.sig-signal { background:#0d2818; color:var(--green); }
+.sig-no-signal { background:var(--surface); color:var(--text-dim); border:1px solid var(--border); }
+.sig-skip { background:#1c1c1c; color:#555; border:1px solid #333; }
+.sig-blocked { background:#2d0000; color:var(--red); }
+.sig-error { background:#2d1f00; color:var(--yellow); }
+
 /* ===== SECTION: Stats ===== */
 .stat-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:8px; }
 .stat { text-align:center; }
@@ -127,6 +142,32 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
 .pill-bullish { background:#0d2818; color:var(--green); }
 .pill-bearish { background:#2d0000; color:var(--red); }
 .pill-neutral { background:#2d2d00; color:var(--yellow); }
+
+/* ===== SECTION: AI Council ===== */
+.council-banner { display:flex; align-items:center; gap:12px; padding:10px 16px; border-radius:8px; margin-bottom:12px; font-family:var(--mono); }
+.council-banner.bullish { background:#0d2818; border:1px solid var(--green); }
+.council-banner.bearish { background:#2d0000; border:1px solid var(--red); }
+.council-banner.neutral { background:#2d2d00; border:1px solid var(--yellow); }
+.council-banner.inactive { background:var(--surface); border:1px solid var(--border); }
+.council-bias { font-size:16px; font-weight:700; min-width:80px; }
+.council-votes { font-size:13px; color:var(--text-dim); }
+.council-summary { font-size:12px; color:var(--text); flex:1; }
+.council-voters { display:grid; grid-template-columns:repeat(auto-fill, minmax(180px, 1fr)); gap:4px; margin-top:6px; }
+.voter-chip { display:flex; align-items:center; gap:6px; padding:3px 8px; border-radius:4px; font-size:11px; background:var(--surface); border:1px solid var(--border); }
+.voter-chip .v-dot { width:6px; height:6px; border-radius:50%; }
+.voter-chip .v-dot.bullish { background:var(--green); }
+.voter-chip .v-dot.bearish { background:var(--red); }
+.voter-chip .v-dot.neutral { background:var(--yellow); }
+.voter-chip .v-dot.abstain { background:var(--text-dim); }
+
+/* Filter verdict */
+.filter-badge { display:inline-flex; align-items:center; gap:6px; padding:4px 12px; border-radius:16px; font-size:12px; font-weight:600; font-family:var(--mono); }
+.filter-badge.clear { background:#0d2818; color:var(--green); }
+.filter-badge.caution { background:#2d1f00; color:var(--yellow); }
+.filter-badge.sit_out { background:#2d0000; color:var(--red); }
+
+/* Debrief */
+.debrief-content { max-height:300px; overflow-y:auto; font-size:12px; line-height:1.6; white-space:pre-wrap; font-family:var(--font); }
 </style>
 </head>
 <body>
@@ -154,10 +195,32 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
   <span id="h-lab" class="health-pill dead"><span class="dot"></span>Lab Bot: <span class="age">--</span></span>
 </div>
 
-<!-- ===== SECTION: Connection Log ===== -->
-<div class="card" style="margin-bottom:12px;">
-  <h3>Connection Log</h3>
-  <div id="conn-log" class="conn-log"></div>
+<!-- ===== SECTION: AI Council Bias ===== -->
+<div id="council-banner" class="council-banner inactive">
+  <span class="council-bias" id="council-bias">AI COUNCIL</span>
+  <span class="council-votes" id="council-votes">Waiting for session open...</span>
+  <span class="council-summary" id="council-summary"></span>
+</div>
+<div id="council-voters" class="council-voters" style="margin-bottom:12px; display:none;"></div>
+
+<!-- ===== SECTION: Connection Log + Bridge Activity ===== -->
+<div class="grid-2" style="margin-bottom:12px;">
+  <div class="card">
+    <h3>Connection Log</h3>
+    <div id="conn-log" class="conn-log"></div>
+  </div>
+  <div class="card">
+    <h3>Bridge Activity</h3>
+    <div style="display:flex; gap:20px; flex-wrap:wrap; margin-bottom:14px;">
+      <div class="bridge-stat"><div class="val" id="br-ticks">0</div><div class="label">Ticks Rcvd</div></div>
+      <div class="bridge-stat"><div class="val" id="br-rate">0.0</div><div class="label">Ticks/s</div></div>
+      <div class="bridge-stat"><div class="val" id="br-trades">0</div><div class="label">Trades Sent</div></div>
+      <div class="bridge-stat"><div class="val" id="br-uptime">--</div><div class="label">Uptime</div></div>
+    </div>
+    <div style="font-size:12px; font-family:var(--mono); color:var(--text-dim);">
+      Last trade: <span id="br-last-trade" style="color:var(--text);">none this session</span>
+    </div>
+  </div>
 </div>
 
 <!-- ===== SECTION: Bot Tabs ===== -->
@@ -266,6 +329,20 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
   <div id="no-trades" style="text-align:center; color:var(--text-dim); padding:20px;">No trades yet</div>
 </div>
 
+<!-- ===== SECTION: Signal Activity ===== -->
+<div class="card" style="margin-top:12px;">
+  <h3>Signal Activity — Last Bar Evaluation</h3>
+  <div id="signal-activity">
+    <div style="color:var(--text-dim); font-size:12px; padding:8px;">No evaluation yet — waiting for first bar</div>
+  </div>
+</div>
+
+<!-- ===== SECTION: AI Session Debrief ===== -->
+<div class="card" style="margin-top:12px;">
+  <h3>AI Session Debrief</h3>
+  <div id="debrief-content" class="debrief-content" style="color:var(--text-dim); padding:8px;">No debrief yet — runs at session close</div>
+</div>
+
 </div><!-- /container -->
 
 <!-- ===== SECTION: Audio Alert ===== -->
@@ -294,6 +371,7 @@ async function poll() {
 
     renderHealth(health);
     renderConnLog(connLog);
+    renderBridgeActivity(health);
     renderBot(status[activeBot] || {});
     renderMarket(status[activeBot]?.market || {});
     renderStats(status[activeBot]?.risk || {});
@@ -301,10 +379,19 @@ async function poll() {
     renderStrategies(status[activeBot]?.strategies || []);
     renderPosition(status[activeBot]?.position || {});
     renderBotControls(status.bot_processes || {});
+    renderSignalActivity(status[activeBot] || {});
+    renderCouncil(status[activeBot]?.council);
+    renderFilterVerdict(status[activeBot]?.filter_verdict);
 
     document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
   } catch (e) {
     console.error('Poll error:', e);
+  }
+
+  // Poll debrief less frequently (every 30s)
+  if (!window._debriefTimer) {
+    window._debriefTimer = setInterval(pollDebrief, 30000);
+    pollDebrief();
   }
 }
 
@@ -427,6 +514,12 @@ function renderTrades(trades) {
   tbody.innerHTML = trades.slice().reverse().map((t, i) => {
     const cls = t.result === 'WIN' ? 'win' : 'loss';
     const id = 'reason-' + i;
+    const confluences = t.confluences?.length
+      ? '<ul>' + t.confluences.map(c => `<li>${c}</li>`).join('') + '</ul>'
+      : '';
+    const snap = t.market_snapshot
+      ? `<br><span style="color:var(--text-dim)">@ entry: price=${t.market_snapshot.price?.toFixed(2)} ATR=${t.market_snapshot.atr_5m?.toFixed(1)} VWAP=${t.market_snapshot.vwap?.toFixed(2)} CVD=${t.market_snapshot.cvd?.toFixed(0)} regime=${t.market_snapshot.regime||'?'}</span>`
+      : '';
     return `<tr>
       <td>${trades.length - i}</td>
       <td>${t.direction}</td>
@@ -438,7 +531,7 @@ function renderTrades(trades) {
       <td><span class="trade-reason" onclick="toggleReason('${id}')">Why?</span>
         <div class="reason-detail" id="${id}">
           <b>${t.strategy}</b>: ${t.entry_reason || ''}
-          ${t.market_snapshot ? `<br>Price: ${t.market_snapshot.price}, ATR: ${t.market_snapshot.atr_5m}, VWAP: ${t.market_snapshot.vwap}` : ''}
+          ${confluences}${snap}
         </div>
       </td>
     </tr>`;
@@ -447,6 +540,67 @@ function renderTrades(trades) {
 
 function toggleReason(id) {
   document.getElementById(id)?.classList.toggle('open');
+}
+
+// ── Bridge Activity ────────────────────────────────────────────────
+function renderBridgeActivity(h) {
+  el('br-ticks').textContent = (h.ticks_received || 0).toLocaleString();
+  el('br-rate').textContent = (h.tick_rate_10s || 0).toFixed(1);
+  el('br-trades').textContent = h.trades_executed || 0;
+  const uptime = h.uptime_s;
+  if (uptime) {
+    el('br-uptime').textContent = uptime < 3600
+      ? Math.floor(uptime / 60) + 'm'
+      : Math.floor(uptime / 3600) + 'h ' + Math.floor((uptime % 3600) / 60) + 'm';
+  }
+  const lastAgo = h.last_trade_ago_s;
+  el('br-last-trade').textContent = h.last_trade_action
+    ? `${h.last_trade_action} (${lastAgo != null ? Math.floor(lastAgo) + 's ago' : '?'})`
+    : 'none this session';
+}
+
+// ── Signal Activity ────────────────────────────────────────────────
+function renderSignalActivity(bot) {
+  const ev = bot.last_eval || {};
+  const container = el('signal-activity');
+  if (!ev.ts) {
+    container.innerHTML = '<div style="color:var(--text-dim);font-size:12px;padding:8px;">No evaluation yet — waiting for first bar</div>';
+    return;
+  }
+  const ts = new Date(ev.ts).toLocaleTimeString();
+  let html = `<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;">${ts} &mdash; Regime: <b style="color:var(--text)">${ev.regime || '?'}</b></div>`;
+
+  if (ev.risk_blocked) {
+    html += `<div class="signal-row"><span class="sig-badge sig-blocked">RISK GATE</span><span style="color:var(--red);font-size:12px;">${ev.risk_blocked}</span></div>`;
+  }
+
+  const badgeClass = { SIGNAL:'sig-signal', NO_SIGNAL:'sig-no-signal', SKIP_DISABLED:'sig-skip', SKIP_REGIME:'sig-skip', ERROR:'sig-error' };
+  const badgeLabel = { SIGNAL:'SIGNAL', NO_SIGNAL:'no signal', SKIP_DISABLED:'disabled', SKIP_REGIME:'skip (regime)', ERROR:'error' };
+
+  html += (ev.strategies || []).map(s => {
+    const badge = badgeClass[s.result] || 'sig-skip';
+    const label = badgeLabel[s.result] || s.result;
+    let detail = '';
+    if (s.result === 'SIGNAL') {
+      detail = ` &mdash; ${s.direction} conf=${s.confidence?.toFixed(0)} &mdash; ${s.reason || ''}`;
+    } else if (s.reason) {
+      detail = ` &mdash; ${s.reason}`;
+    }
+    return `<div class="signal-row">
+      <span style="min-width:140px;color:var(--text)">${s.name}</span>
+      <span class="sig-badge ${badge}">${label}</span>
+      <span style="color:var(--text-dim);font-size:11px;flex:1">${detail}</span>
+    </div>`;
+  }).join('');
+
+  if (ev.best_signal) {
+    html += `<div style="margin-top:10px;padding:8px 12px;background:#0d2818;border-radius:6px;font-size:12px;color:var(--green);">
+      <b>QUEUED:</b> ${ev.best_signal.direction} via ${ev.best_signal.strategy} &mdash; ${ev.best_signal.reason}</div>`;
+  } else if (!ev.risk_blocked) {
+    html += `<div style="margin-top:10px;padding:8px 12px;background:var(--surface);border-radius:6px;font-size:12px;color:var(--text-dim);border:1px solid var(--border);">No signal this bar</div>`;
+  }
+
+  container.innerHTML = html;
 }
 
 // ── Bot Tabs ───────────────────────────────────────────────────────
@@ -532,12 +686,87 @@ function saveParams() {
   fetch('/api/runtime-controls/params', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(params)});
 }
 
+// ── AI Council ────────────────────────────────────────────────────
+function renderCouncil(council) {
+  const banner = el('council-banner');
+  const biasEl = el('council-bias');
+  const votesEl = el('council-votes');
+  const summaryEl = el('council-summary');
+  const votersEl = el('council-voters');
+
+  if (!council) {
+    banner.className = 'council-banner inactive';
+    biasEl.textContent = 'AI COUNCIL';
+    votesEl.textContent = 'Waiting for session open...';
+    summaryEl.textContent = '';
+    votersEl.style.display = 'none';
+    return;
+  }
+
+  const bias = council.bias || 'NEUTRAL';
+  banner.className = 'council-banner ' + bias.toLowerCase();
+  biasEl.textContent = bias;
+  biasEl.style.color = bias === 'BULLISH' ? 'var(--green)' : bias === 'BEARISH' ? 'var(--red)' : 'var(--yellow)';
+  votesEl.textContent = council.vote_count || '';
+  summaryEl.textContent = council.summary || '';
+
+  const votes = council.votes || [];
+  if (votes.length) {
+    votersEl.style.display = 'grid';
+    votersEl.innerHTML = votes.map(v => {
+      const b = (v.bias || 'ABSTAIN').toLowerCase();
+      return '<div class="voter-chip"><span class="v-dot ' + b + '"></span><span>' + v.voter + '</span><span style="color:var(--text-dim)">' + v.bias + ' ' + v.confidence + '%</span></div>';
+    }).join('');
+  } else {
+    votersEl.style.display = 'none';
+  }
+}
+
+// ── Filter Verdict ────────────────────────────────────────────────
+function renderFilterVerdict(verdict) {
+  let container = el('filter-verdict-display');
+  if (!container) {
+    const sigCard = el('signal-activity').parentElement;
+    const div = document.createElement('div');
+    div.id = 'filter-verdict-display';
+    div.style.marginTop = '8px';
+    sigCard.appendChild(div);
+    container = div;
+  }
+  if (!verdict || !verdict.action) { container.innerHTML = ''; return; }
+  const cls = verdict.action.toLowerCase().replace(' ', '_');
+  container.innerHTML = '<div style="display:flex;align-items:center;gap:8px;margin-top:8px;">' +
+    '<span style="font-size:11px;color:var(--text-dim)">AI Filter:</span>' +
+    '<span class="filter-badge ' + cls + '">' + verdict.action + '</span>' +
+    '<span style="font-size:11px;color:var(--text-dim)">' + (verdict.reason || '') + '</span>' +
+    '<span style="font-size:10px;color:var(--text-dim);margin-left:auto">' + (verdict.latency_ms ? verdict.latency_ms.toFixed(0) + 'ms' : '') + '</span>' +
+    '</div>';
+}
+
+// ── Debrief ───────────────────────────────────────────────────────
+async function pollDebrief() {
+  try {
+    const res = await fetch('/api/debrief');
+    const data = await res.json();
+    const container = el('debrief-content');
+    if (data.content) {
+      container.textContent = data.content;
+      container.style.color = 'var(--text)';
+    } else {
+      container.textContent = 'No debrief yet — runs at session close';
+      container.style.color = 'var(--text-dim)';
+    }
+  } catch (e) {}
+}
+
 // ── Helpers ────────────────────────────────────────────────────────
 function el(id) { return document.getElementById(id); }
 
 // ── Start ──────────────────────────────────────────────────────────
 setInterval(poll, POLL_MS);
 poll();
+setInterval(pollDebrief, 30000);
+pollDebrief();
 </script>
 </body>
 </html>

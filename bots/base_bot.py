@@ -14,17 +14,37 @@ import json
 import logging
 import time
 import urllib.request
+from datetime import datetime
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from config.settings import BOT_WS_PORT, TICK_SIZE, LIVE_TRADING, DASHBOARD_PORT
+# Load .env for API keys (GEMINI_API_KEY)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+except ImportError:
+    pass
+
+from config.settings import (BOT_WS_PORT, TICK_SIZE, LIVE_TRADING, DASHBOARD_PORT,
+                             AGENT_COUNCIL_ENABLED, AGENT_PRETRADE_FILTER_ENABLED,
+                             AGENT_DEBRIEF_ENABLED)
 from config.strategies import STRATEGIES, STRATEGY_DEFAULTS
 from core.tick_aggregator import TickAggregator
 from core.risk_manager import RiskManager
 from core.session_manager import SessionManager
 from core.position_manager import PositionManager
+from core.trade_memory import TradeMemory
+from core.history_logger import HistoryLogger
 from strategies.base_strategy import BaseStrategy, Signal
+
+# Phase 4: AI Agents (optional — failures never block trading)
+try:
+    from agents import council_gate, pretrade_filter, session_debriefer
+    from agents.council_gate import council_to_dict
+    AGENTS_AVAILABLE = True
+except ImportError as e:
+    AGENTS_AVAILABLE = False
 
 try:
     import websockets
@@ -49,15 +69,25 @@ class BaseBot:
         self.risk = RiskManager()
         self.session = SessionManager()
         self.positions = PositionManager()
+        self.trade_memory = TradeMemory()
+        self.history = HistoryLogger(bot_name=self.bot_name)
         self.strategies: list[BaseStrategy] = []
 
         # State for dashboard
         self.status = "IDLE"
         self.last_signal: dict | None = None
         self.last_rejection: str | None = None
+        self._last_eval: dict = {}
 
         # Runtime config (from dashboard sliders)
         self._runtime_params = dict(STRATEGY_DEFAULTS)
+
+        # Phase 4: AI Agent state
+        self._council_result = None         # Latest CouncilResult dict
+        self._council_ran_today = False     # Only run once per session day
+        self._last_regime = None            # Track regime transitions
+        self._filter_verdict = None         # Latest pre-trade filter verdict
+        self._debrief_ran_today = False     # Only run once per session day
 
         # Register bar callback
         self.aggregator.on_bar(self._on_bar)
@@ -177,7 +207,13 @@ class BaseBot:
                 except json.JSONDecodeError:
                     continue
 
-                if tick.get("type") != "tick":
+                msg_type = tick.get("type")
+
+                if msg_type == "dom":
+                    self.aggregator.process_dom(tick)
+                    continue
+
+                if msg_type != "tick":
                     continue
 
                 # Process tick through aggregator
@@ -194,6 +230,48 @@ class BaseBot:
                 if hasattr(self, '_pending_signal') and self._pending_signal and self.positions.is_flat:
                     signal = self._pending_signal
                     self._pending_signal = None
+
+                    # Phase 4: Pre-trade filter (3s timeout, defaults to CLEAR)
+                    if AGENTS_AVAILABLE and AGENT_PRETRADE_FILTER_ENABLED:
+                        try:
+                            market_snap = self.aggregator.snapshot()
+                            regime = self.session.get_current_regime()
+                            recent = self.trade_memory.recent(5)
+                            verdict = await pretrade_filter.check(
+                                signal=signal.to_dict() if hasattr(signal, 'to_dict') else {
+                                    "direction": signal.direction,
+                                    "strategy": signal.strategy,
+                                    "reason": signal.reason,
+                                    "confluences": signal.confluences,
+                                    "confidence": signal.confidence,
+                                    "entry_score": signal.entry_score,
+                                    "stop_ticks": signal.stop_ticks,
+                                    "target_rr": signal.target_rr,
+                                },
+                                market=market_snap,
+                                recent_trades=recent,
+                                regime=regime,
+                            )
+                            self._filter_verdict = {
+                                "action": verdict.action,
+                                "reason": verdict.reason,
+                                "confidence": verdict.confidence,
+                                "latency_ms": verdict.latency_ms,
+                                "source": verdict.source,
+                                "timestamp": datetime.now().isoformat(),
+                            }
+                            logger.info(f"[FILTER] {verdict.action} ({verdict.confidence:.0f}%) "
+                                        f"in {verdict.latency_ms:.0f}ms: {verdict.reason}")
+
+                            if verdict.action == "SIT_OUT":
+                                logger.info(f"[FILTER] SIT_OUT — skipping trade")
+                                self.last_rejection = f"AI filter: {verdict.reason}"
+                                continue
+                            # CAUTION handled in _enter_trade via self._filter_verdict
+                        except Exception as e:
+                            logger.warning(f"[FILTER] Error (defaulting to CLEAR): {e}")
+                            self._filter_verdict = {"action": "CLEAR", "reason": f"Error: {e}", "source": "default"}
+
                     await self._enter_trade(ws, signal)
 
     # ─── Bar Event Handler ──────────────────────────────────────────
@@ -211,6 +289,28 @@ class BaseBot:
                      f"regime={regime} bars_1m={self.aggregator.bars_1m.bar_count} "
                      f"bars_5m={self.aggregator.bars_5m.bar_count}")
 
+        # Persist bar to history
+        market = self.aggregator.snapshot()
+        self.history.log_bar(timeframe, bar, market, regime)
+
+        # Phase 4: Council — run on OPEN_MOMENTUM start (once per day)
+        if (AGENTS_AVAILABLE and AGENT_COUNCIL_ENABLED
+                and regime == "OPEN_MOMENTUM"
+                and self._last_regime != "OPEN_MOMENTUM"
+                and not self._council_ran_today):
+            self._council_ran_today = True
+            asyncio.ensure_future(self._run_council(market))
+
+        # Phase 4: Debrief — run when transitioning to AFTERHOURS (once per day)
+        if (AGENTS_AVAILABLE and AGENT_DEBRIEF_ENABLED
+                and regime == "AFTERHOURS"
+                and self._last_regime != "AFTERHOURS"
+                and not self._debrief_ran_today):
+            self._debrief_ran_today = True
+            asyncio.ensure_future(self._run_debrief())
+
+        self._last_regime = regime
+
         # Run strategy pipeline (async-safe: store signal for main loop)
         self._evaluate_strategies()
 
@@ -219,20 +319,38 @@ class BaseBot:
         if not self.positions.is_flat:
             return  # Already in a trade
 
+        # Session check
+        session_info = self.session.to_dict()
+
+        # Start building eval record for dashboard
+        self._last_eval = {
+            "ts": datetime.now().isoformat(),
+            "regime": session_info.get("regime", "?"),
+            "risk_blocked": None,
+            "strategies": [],
+            "best_signal": None,
+        }
+
+        # Minimum bars guard — prevent signals on startup/reconnect with no history
+        bars_5m = list(self.aggregator.bars_5m.completed)
+        bars_1m = list(self.aggregator.bars_1m.completed)
+        if len(bars_5m) < 5 or len(bars_1m) < 5:
+            reason = f"Warming up ({len(bars_5m)} 5m bars, {len(bars_1m)} 1m bars — need 5 each)"
+            self.last_rejection = reason
+            self._last_eval["risk_blocked"] = reason
+            logger.info(f"[WARMUP] {reason}")
+            return
+
         # Risk gate
         can_trade, reason = self.risk.can_trade()
         if not can_trade:
             self.last_rejection = reason
+            self._last_eval["risk_blocked"] = reason
             logger.debug(f"[RISK GATE] Blocked: {reason}")
             return
 
-        # Session check
-        session_info = self.session.to_dict()
-
         # Get market state
         market = self.aggregator.snapshot()
-        bars_5m = list(self.aggregator.bars_5m.completed)
-        bars_1m = list(self.aggregator.bars_1m.completed)
 
         logger.info(f"[EVAL] price={market.get('price',0):.2f} "
                      f"vwap={market.get('vwap',0):.2f} ema9={market.get('ema9',0):.2f} "
@@ -245,9 +363,11 @@ class BaseBot:
         for strat in self.strategies:
             if not strat.enabled:
                 logger.debug(f"  [{strat.name}] SKIP — disabled")
+                self._last_eval["strategies"].append({"name": strat.name, "result": "SKIP_DISABLED"})
                 continue
             if not self.session.is_strategy_allowed(strat.name):
                 logger.debug(f"  [{strat.name}] SKIP — not allowed in {session_info.get('regime')}")
+                self._last_eval["strategies"].append({"name": strat.name, "result": "SKIP_REGIME"})
                 continue
 
             try:
@@ -255,16 +375,32 @@ class BaseBot:
                 if signal:
                     logger.info(f"  [{strat.name}] SIGNAL: {signal.direction} conf={signal.confidence:.0f} "
                                  f"score={signal.entry_score:.0f} — {signal.reason}")
+                    self._last_eval["strategies"].append({
+                        "name": strat.name,
+                        "result": "SIGNAL",
+                        "direction": signal.direction,
+                        "confidence": signal.confidence,
+                        "reason": signal.reason,
+                        "confluences": signal.confluences,
+                    })
                     if signal.confidence > (best_signal.confidence if best_signal else 0):
                         best_signal = signal
                 else:
                     logger.info(f"  [{strat.name}] no signal")
+                    self._last_eval["strategies"].append({"name": strat.name, "result": "NO_SIGNAL"})
             except Exception as e:
                 logger.error(f"  [{strat.name}] ERROR: {e}")
+                self._last_eval["strategies"].append({"name": strat.name, "result": "ERROR", "reason": str(e)})
 
         if best_signal:
             logger.info(f"[TRADE QUEUED] {best_signal.direction} via {best_signal.strategy} "
                          f"conf={best_signal.confidence:.0f}")
+            self._last_eval["best_signal"] = {
+                "direction": best_signal.direction,
+                "strategy": best_signal.strategy,
+                "confidence": best_signal.confidence,
+                "reason": best_signal.reason,
+            }
             self.last_signal = {
                 "direction": best_signal.direction,
                 "strategy": best_signal.strategy,
@@ -279,6 +415,9 @@ class BaseBot:
             self.last_signal = None
             self._pending_signal = None
 
+        # Persist full eval to history (every bar evaluation, signal or not)
+        self.history.log_eval(self._last_eval, market)
+
     # ─── Trade Execution ────────────────────────────────────────────
     async def _enter_trade(self, ws, signal: Signal):
         """Execute entry via bridge → OIF."""
@@ -291,6 +430,11 @@ class BaseBot:
         if risk_dollars <= 0:
             self.last_rejection = f"Risk tier SKIP (score={signal.entry_score})"
             return
+
+        # Phase 4: CAUTION verdict = 50% size reduction
+        if (self._filter_verdict and self._filter_verdict.get("action") == "CAUTION"):
+            risk_dollars *= 0.5
+            logger.info(f"[FILTER] CAUTION — risk reduced to ${risk_dollars:.2f}")
 
         # Adjust stop for volatility
         stop_ticks = self.risk.calculate_stop_ticks(signal.stop_ticks, atr_5m)
@@ -331,11 +475,16 @@ class BaseBot:
                      f"SL={stop_price:.2f} TP={target_price:.2f} "
                      f"risk=${risk_dollars} tier={tier} strat={signal.strategy}")
 
+        self.history.log_entry(signal, price, contracts, stop_price,
+                               target_price, risk_dollars, tier, market)
+
     async def _exit_trade(self, ws, price: float, reason: str):
         """Execute exit via bridge → OIF."""
         trade = self.positions.close_position(price, reason)
         if trade:
             self.risk.record_trade(trade["pnl_dollars"])
+            self.trade_memory.record(trade)
+            self.history.log_exit(trade, self.aggregator.snapshot())
             self.status = "SCANNING"
 
             await ws.send(json.dumps({
@@ -346,6 +495,31 @@ class BaseBot:
             }))
 
             logger.info(f"[EXIT] P&L=${trade['pnl_dollars']:.2f} reason={reason}")
+
+    # ─── Phase 4: AI Agent Runners ────────────────────────────────────
+    async def _run_council(self, market: dict):
+        """Run council gate in background. Non-blocking — errors logged only."""
+        try:
+            logger.info("[COUNCIL] Running 7-voter session bias vote...")
+            recent = self.trade_memory.recent(10)
+            result = await council_gate.run_council(market, recent)
+            self._council_result = council_to_dict(result)
+            logger.info(f"[COUNCIL] Result: {result.bias} ({result.vote_count}) "
+                        f"in {result.total_latency_ms:.0f}ms")
+        except Exception as e:
+            logger.error(f"[COUNCIL] Failed (non-blocking): {e}")
+
+    async def _run_debrief(self):
+        """Run session debrief in background. Non-blocking."""
+        try:
+            logger.info("[DEBRIEF] Running end-of-session coaching debrief...")
+            path = await session_debriefer.run_debrief(bot_name=self.bot_name)
+            if path:
+                logger.info(f"[DEBRIEF] Saved to {path}")
+            else:
+                logger.warning("[DEBRIEF] No debrief generated (no data or AI failure)")
+        except Exception as e:
+            logger.error(f"[DEBRIEF] Failed (non-blocking): {e}")
 
     # ─── Dashboard State ────────────────────────────────────────────
     def to_dict(self) -> dict:
@@ -360,11 +534,14 @@ class BaseBot:
             "market": market,
             "last_signal": self.last_signal,
             "last_rejection": self.last_rejection,
+            "last_eval": self._last_eval,
             "strategies": [
                 {"name": s.name, "enabled": s.enabled, "validated": s.validated, "params": s.params}
                 for s in self.strategies
             ],
-            "trades": self.positions.recent_trades(20),
+            "trades": self.trade_memory.recent(20),
+            "council": self._council_result,
+            "filter_verdict": self._filter_verdict,
         }
 
     # ─── Runtime Control ────────────────────────────────────────────

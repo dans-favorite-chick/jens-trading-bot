@@ -158,6 +158,28 @@ def api_status():
         })
 
 
+@app.route("/api/council")
+def api_council():
+    """Get latest council vote result from active bot."""
+    with _state_lock:
+        prod_council = _state.get("prod", {}).get("council")
+        lab_council = _state.get("lab", {}).get("council")
+    return jsonify({"prod": prod_council, "lab": lab_council})
+
+
+@app.route("/api/debrief")
+def api_debrief():
+    """Get latest debrief file content."""
+    from datetime import date
+    debrief_dir = os.path.join(PROJECT_ROOT, "logs")
+    today = date.today().isoformat()
+    debrief_path = os.path.join(debrief_dir, f"ai_debrief_{today}.txt")
+    if os.path.exists(debrief_path):
+        with open(debrief_path, "r", encoding="utf-8") as f:
+            return jsonify({"date": today, "content": f.read()})
+    return jsonify({"date": today, "content": None})
+
+
 @app.route("/api/system-health")
 def api_system_health():
     with _state_lock:
