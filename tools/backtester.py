@@ -52,37 +52,29 @@ def bar_to_ticks(timestamp: str, o: float, h: float, l: float, c: float,
     """
     Convert a 1-min OHLCV bar into synthetic ticks for the aggregator.
 
-    Generates ticks in realistic order:
-      Bullish bar (close > open): O → L → H → C
-      Bearish bar (close < open): O → H → L → C
-      Doji: O → H → L → C
+    IMPORTANT: Positions are only evaluated on BAR CLOSE, not intra-bar.
+    We generate ticks that build the bar, but stop/target checks happen
+    on the CLOSE price — matching how the live bot works (check_exits
+    fires on each tick, but entries only happen on bar completion).
 
-    Volume split proportionally. Bid/ask estimated as price ± half spread.
+    For backtesting accuracy, we generate:
+      1. Open tick (first price of bar)
+      2. Several intermediate ticks for volume/indicator calculation
+      3. Close tick (final price — this is what matters for signals)
+
+    Stop/target exits are checked against HIGH and LOW of the bar
+    AFTER the bar completes, simulating realistic execution.
     """
     spread = TICK_SIZE  # 0.25 = 1 tick spread
     ticks = []
 
-    # Determine tick order based on bar direction
-    if c >= o:
-        # Bullish: open → dip to low → rally to high → settle at close
-        prices = [o, l, h, c]
-    else:
-        # Bearish: open → rally to high → drop to low → settle at close
-        prices = [o, h, l, c]
-
-    # Add intermediate prices for better aggregator behavior
-    # Insert midpoints for smoother price action
-    expanded = []
-    for i, p in enumerate(prices):
-        expanded.append(p)
-        if i < len(prices) - 1:
-            mid = (p + prices[i + 1]) / 2
-            # Snap to tick boundary
-            mid = round(mid / TICK_SIZE) * TICK_SIZE
-            expanded.append(mid)
+    # Generate ticks that build the bar progressively
+    # Key: the CLOSE tick comes last, which is when strategies evaluate
+    mid = round((o + c) / 2 / TICK_SIZE) * TICK_SIZE
+    prices = [o, mid, c]  # Simple: open → mid → close
 
     # Split volume across ticks
-    vol_per_tick = max(1, volume // len(expanded))
+    vol_per_tick = max(1, volume // len(prices))
 
     # Parse timestamp
     try:
@@ -90,9 +82,8 @@ def bar_to_ticks(timestamp: str, o: float, h: float, l: float, c: float,
     except ValueError:
         dt = datetime.now()
 
-    for i, price in enumerate(expanded):
-        # Stagger timestamps within the 1-min bar
-        tick_offset = (i / len(expanded)) * 59  # spread across 59 seconds
+    for i, price in enumerate(prices):
+        tick_offset = (i / len(prices)) * 59
         tick_time = dt.timestamp() + tick_offset
 
         ticks.append({
@@ -103,6 +94,27 @@ def bar_to_ticks(timestamp: str, o: float, h: float, l: float, c: float,
             "vol": vol_per_tick,
             "ts": datetime.fromtimestamp(tick_time).isoformat(),
         })
+
+    # Add HIGH and LOW as final check ticks (for stop/target evaluation)
+    # These come after bar builds but before next bar, simulating
+    # "worst case" intra-bar price action
+    end_time = dt.timestamp() + 59.5
+    ticks.append({
+        "type": "tick",
+        "price": round(h, 2),
+        "bid": round(h - spread / 2, 2),
+        "ask": round(h + spread / 2, 2),
+        "vol": 1,
+        "ts": datetime.fromtimestamp(end_time).isoformat(),
+    })
+    ticks.append({
+        "type": "tick",
+        "price": round(l, 2),
+        "bid": round(l - spread / 2, 2),
+        "ask": round(l + spread / 2, 2),
+        "vol": 1,
+        "ts": datetime.fromtimestamp(end_time + 0.1).isoformat(),
+    })
 
     return ticks
 
@@ -222,7 +234,7 @@ class Backtester:
 
         logger.info(f"Backtest complete: {elapsed:.1f}s, "
                      f"{len(self.trades)} trades, "
-                     f"P&L ${results['total_pnl']:.2f}")
+                     f"P&L ${results['summary']['total_pnl']:.2f}")
 
         return results
 
