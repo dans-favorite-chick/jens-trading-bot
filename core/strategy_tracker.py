@@ -97,6 +97,7 @@ class StrategyTracker:
         hold_time = trade.get("hold_time_s", 0)
         regime = trade.get("market_snapshot", {}).get("regime", "UNKNOWN")
         trade_id = trade.get("trade_id", "")
+        source = trade.get("source", "live")  # "live" or "backtest"
 
         # Init strategy stats if needed
         if strategy not in self.strategies:
@@ -154,7 +155,7 @@ class StrategyTracker:
             rs["losses"] += 1
 
         # Log
-        logger.info(f"[TRACKER:{trade_id}] {strategy} in {regime}: {result} ${pnl:.2f} "
+        logger.info(f"[TRACKER:{trade_id}:{source}] {strategy} in {regime}: {result} ${pnl:.2f} "
                      f"(total: {s['total_trades']} trades, {s['wins']}W/{s['losses']}L, "
                      f"${s['total_pnl']:.2f})")
 
