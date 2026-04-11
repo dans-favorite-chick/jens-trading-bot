@@ -21,7 +21,8 @@ logger = logging.getLogger("OIF")
 _oif_counter = 0
 
 
-def write_oif(action: str, qty: int = 1, stop_price: float = None, target_price: float = None) -> list[str]:
+def write_oif(action: str, qty: int = 1, stop_price: float = None,
+              target_price: float = None, trade_id: str = "") -> list[str]:
     """
     Write OIF file(s) to NT8 incoming folder.
 
@@ -30,6 +31,7 @@ def write_oif(action: str, qty: int = 1, stop_price: float = None, target_price:
         qty: Number of contracts (default 1)
         stop_price: Optional stop loss price (Phase 2: OCO brackets)
         target_price: Optional profit target price (Phase 2: OCO brackets)
+        trade_id: Unique trade ID for correlation
 
     Returns:
         List of file paths written
@@ -73,29 +75,35 @@ def write_oif(action: str, qty: int = 1, stop_price: float = None, target_price:
             with open(filepath, "w") as f:
                 f.write(cmd)
             written.append(filepath)
-            logger.info(f"[OIF] {filepath} -> {cmd.strip()}")
+            logger.info(f"[OIF:{trade_id or 'N/A'}] {filepath} -> {cmd.strip()}")
         except Exception as e:
             logger.error(f"[OIF FAILED] {filepath}: {e}")
 
     return written
 
 
-def check_fills() -> list[dict]:
+def check_fills(since_time: float = 0) -> list[dict]:
     """
     Read fill confirmations from NT8's outgoing folder.
 
-    Returns list of dicts: [{"file": "oif1.txt", "content": "FILLED;1;24219", "mtime": 1234567890.0}]
+    Args:
+        since_time: Only return fills newer than this timestamp
+
+    Returns list of dicts with file, content, mtime
     """
     fills = []
     try:
         files = glob.glob(os.path.join(OIF_OUTGOING, "*.txt"))
-        for f in sorted(files, key=os.path.getmtime, reverse=True)[:5]:
+        for f in sorted(files, key=os.path.getmtime, reverse=True)[:10]:
             try:
+                mtime = os.path.getmtime(f)
+                if since_time and mtime < since_time:
+                    continue
                 content = open(f).read().strip()
                 fills.append({
                     "file": os.path.basename(f),
                     "content": content,
-                    "mtime": os.path.getmtime(f),
+                    "mtime": mtime,
                 })
             except Exception:
                 pass
@@ -104,10 +112,44 @@ def check_fills() -> list[dict]:
     return fills
 
 
-def check_latest_fill() -> str | None:
+def check_latest_fill(since_time: float = 0) -> str | None:
     """Return the content of the most recent fill file, or None."""
-    fills = check_fills()
+    fills = check_fills(since_time)
     return fills[0]["content"] if fills else None
+
+
+async def wait_for_fill(trade_id: str, timeout_s: float = 5.0,
+                        poll_interval: float = 0.3) -> dict:
+    """
+    Wait for fill confirmation with retry. Non-blocking async.
+
+    Returns:
+        {"status": "FILLED", "content": "...", "latency_ms": N}
+        {"status": "TIMEOUT", "content": None}
+        {"status": "REJECTED", "content": "..."}
+    """
+    import asyncio
+    start = time.time()
+    check_start = start  # Only look at fills after we sent the order
+
+    while (time.time() - start) < timeout_s:
+        fills = check_fills(since_time=check_start - 1)  # 1s buffer
+        for fill in fills:
+            content = fill["content"].upper()
+            if "REJECT" in content or "ERROR" in content:
+                logger.error(f"[OIF:{trade_id}] ORDER REJECTED: {fill['content']}")
+                return {"status": "REJECTED", "content": fill["content"],
+                        "latency_ms": (time.time() - start) * 1000}
+            if "FILLED" in content or "PLACE" in content:
+                latency = (time.time() - start) * 1000
+                logger.info(f"[OIF:{trade_id}] Fill confirmed in {latency:.0f}ms: {fill['content']}")
+                return {"status": "FILLED", "content": fill["content"],
+                        "latency_ms": latency}
+        await asyncio.sleep(poll_interval)
+
+    logger.warning(f"[OIF:{trade_id}] No fill confirmation after {timeout_s}s")
+    return {"status": "TIMEOUT", "content": None,
+            "latency_ms": (time.time() - start) * 1000}
 
 
 # ── CLI test mode ───────────────────────────────────────────────────

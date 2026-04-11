@@ -5,7 +5,8 @@ All strategies inherit from this. Dashboard toggles `enabled`.
 Prod bot only runs strategies where `validated=True`.
 """
 
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -19,6 +20,20 @@ class Signal:
     strategy: str          # Strategy name
     reason: str            # Human-readable entry reason
     confluences: list[str] # List of confluences met
+    trade_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+
+    def to_dict(self) -> dict:
+        return {
+            "trade_id": self.trade_id,
+            "direction": self.direction,
+            "strategy": self.strategy,
+            "reason": self.reason,
+            "confluences": self.confluences,
+            "confidence": self.confidence,
+            "entry_score": self.entry_score,
+            "stop_ticks": self.stop_ticks,
+            "target_rr": self.target_rr,
+        }
 
 
 class BaseStrategy:

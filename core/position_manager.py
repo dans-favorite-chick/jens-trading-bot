@@ -20,6 +20,7 @@ DOLLAR_PER_TICK = TICK_SIZE * 2
 
 @dataclass
 class Position:
+    trade_id: str   # Unique ID flowing through the whole pipeline
     direction: str  # "LONG" or "SHORT"
     entry_price: float
     entry_time: float
@@ -48,15 +49,16 @@ class PositionManager:
     def is_short(self) -> bool:
         return self.position is not None and self.position.direction == "SHORT"
 
-    def open_position(self, direction: str, entry_price: float, contracts: int,
-                      stop_price: float, target_price: float,
+    def open_position(self, trade_id: str, direction: str, entry_price: float,
+                      contracts: int, stop_price: float, target_price: float,
                       strategy: str, reason: str, market_snapshot: dict = None):
         """Open a new position. Raises if already in a position."""
         if self.position is not None:
-            logger.warning("Cannot open position — already in trade")
+            logger.warning(f"[{trade_id}] Cannot open position — already in trade")
             return False
 
         self.position = Position(
+            trade_id=trade_id,
             direction=direction.upper(),
             entry_price=entry_price,
             entry_time=time.time(),
@@ -67,7 +69,7 @@ class PositionManager:
             reason=reason,
             market_snapshot=market_snapshot or {},
         )
-        logger.info(f"[OPEN] {direction} {contracts}x @ {entry_price} "
+        logger.info(f"[OPEN:{trade_id}] {direction} {contracts}x @ {entry_price} "
                      f"SL={stop_price} TP={target_price} strat={strategy}")
         return True
 
@@ -86,6 +88,7 @@ class PositionManager:
         hold_time = time.time() - pos.entry_time
 
         trade = {
+            "trade_id": pos.trade_id,
             "direction": pos.direction,
             "entry_price": pos.entry_price,
             "exit_price": exit_price,
@@ -107,7 +110,7 @@ class PositionManager:
         self.trade_history.append(trade)
         self.position = None
 
-        logger.info(f"[CLOSE] {trade['direction']} @ {exit_price} "
+        logger.info(f"[CLOSE:{pos.trade_id}] {trade['direction']} @ {exit_price} "
                      f"P&L=${trade['pnl_dollars']:.2f} ({trade['pnl_ticks']}t) "
                      f"reason={exit_reason} hold={trade['hold_time_s']:.0f}s")
 

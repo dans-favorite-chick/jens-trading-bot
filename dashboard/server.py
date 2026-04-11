@@ -167,6 +167,15 @@ def api_council():
     return jsonify({"prod": prod_council, "lab": lab_council})
 
 
+@app.route("/api/strategy-performance")
+def api_strategy_performance():
+    """Get per-strategy performance metrics for AI learning."""
+    with _state_lock:
+        prod_perf = _state.get("prod", {}).get("strategy_performance")
+        lab_perf = _state.get("lab", {}).get("strategy_performance")
+    return jsonify({"prod": prod_perf, "lab": lab_perf})
+
+
 @app.route("/api/debrief")
 def api_debrief():
     """Get latest debrief file content."""

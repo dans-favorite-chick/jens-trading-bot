@@ -36,6 +36,7 @@ from core.session_manager import SessionManager
 from core.position_manager import PositionManager
 from core.trade_memory import TradeMemory
 from core.history_logger import HistoryLogger
+from core.strategy_tracker import StrategyTracker
 from strategies.base_strategy import BaseStrategy, Signal
 
 # Phase 4: AI Agents (optional — failures never block trading)
@@ -71,6 +72,7 @@ class BaseBot:
         self.positions = PositionManager()
         self.trade_memory = TradeMemory()
         self.history = HistoryLogger(bot_name=self.bot_name)
+        self.tracker = StrategyTracker()
         self.strategies: list[BaseStrategy] = []
 
         # State for dashboard
@@ -222,6 +224,12 @@ class BaseBot:
                 # Check position exits on every tick
                 if not self.positions.is_flat:
                     price = snapshot.get("price", 0)
+                    # Market close auto-exit
+                    if hasattr(self, '_pending_exit_reason') and self._pending_exit_reason:
+                        reason = self._pending_exit_reason
+                        self._pending_exit_reason = None
+                        await self._exit_trade(ws, price, reason)
+                        continue
                     exit_reason = self.positions.check_exits(price)
                     if exit_reason:
                         await self._exit_trade(ws, price, exit_reason)
@@ -309,6 +317,16 @@ class BaseBot:
             self._debrief_ran_today = True
             asyncio.ensure_future(self._run_debrief())
 
+        # Market close auto-exit: close open positions before session end
+        # CLOSE_CHOP starts at 15:00, give 1 min warning before 16:15 close
+        if (regime == "CLOSE_CHOP" and not self.positions.is_flat):
+            from datetime import time as dtime
+            now_time = datetime.now().time()
+            # Auto-exit at 16:10 CST (5 min before close)
+            if now_time >= dtime(16, 10):
+                logger.warning(f"[MARKET CLOSE] Auto-exiting position before session end")
+                self._pending_exit_reason = "market_close_auto"
+
         self._last_regime = regime
 
         # Run strategy pipeline (async-safe: store signal for main loop)
@@ -341,8 +359,11 @@ class BaseBot:
             logger.info(f"[WARMUP] {reason}")
             return
 
-        # Risk gate
-        can_trade, reason = self.risk.can_trade()
+        # Risk gate (pass ATR as volatility proxy since VIX requires external feed)
+        # ATR > 200 maps to VIX_EXTREME behavior via volatility regime
+        atr_5m = market.get("atr_5m", 0)
+        vix_proxy = min(50, atr_5m / 4) if atr_5m > 0 else 0  # ATR→VIX approximation
+        can_trade, reason = self.risk.can_trade(vix=vix_proxy)
         if not can_trade:
             self.last_rejection = reason
             self._last_eval["risk_blocked"] = reason
@@ -393,8 +414,17 @@ class BaseBot:
                 self._last_eval["strategies"].append({"name": strat.name, "result": "ERROR", "reason": str(e)})
 
         if best_signal:
-            logger.info(f"[TRADE QUEUED] {best_signal.direction} via {best_signal.strategy} "
-                         f"conf={best_signal.confidence:.0f}")
+            logger.info(f"[TRADE QUEUED:{best_signal.trade_id}] {best_signal.direction} "
+                         f"via {best_signal.strategy} conf={best_signal.confidence:.0f}")
+            # Track signal for AI learning
+            self.tracker.record_signal(
+                strategy=best_signal.strategy,
+                direction=best_signal.direction,
+                confidence=best_signal.confidence,
+                taken=True,
+                regime=session_info.get("regime", "UNKNOWN"),
+                trade_id=best_signal.trade_id,
+            )
             self._last_eval["best_signal"] = {
                 "direction": best_signal.direction,
                 "strategy": best_signal.strategy,
@@ -420,13 +450,15 @@ class BaseBot:
 
     # ─── Trade Execution ────────────────────────────────────────────
     async def _enter_trade(self, ws, signal: Signal):
-        """Execute entry via bridge → OIF."""
+        """Execute entry via bridge → OIF with fill confirmation."""
         market = self.aggregator.snapshot()
         price = market.get("price", 0)
         atr_5m = market.get("atr_5m", 0)
+        tid = signal.trade_id
 
-        # Risk sizing
-        risk_dollars, tier = self.risk.get_risk_for_entry(signal.entry_score)
+        # Risk sizing (use ATR-based VIX proxy for volatility adjustment)
+        vix_proxy = min(50, atr_5m / 4) if atr_5m > 0 else 0
+        risk_dollars, tier = self.risk.get_risk_for_entry(signal.entry_score, vix=vix_proxy)
         if risk_dollars <= 0:
             self.last_rejection = f"Risk tier SKIP (score={signal.entry_score})"
             return
@@ -434,7 +466,7 @@ class BaseBot:
         # Phase 4: CAUTION verdict = 50% size reduction
         if (self._filter_verdict and self._filter_verdict.get("action") == "CAUTION"):
             risk_dollars *= 0.5
-            logger.info(f"[FILTER] CAUTION — risk reduced to ${risk_dollars:.2f}")
+            logger.info(f"[{tid}:FILTER] CAUTION — risk reduced to ${risk_dollars:.2f}")
 
         # Adjust stop for volatility
         stop_ticks = self.risk.calculate_stop_ticks(signal.stop_ticks, atr_5m)
@@ -449,8 +481,45 @@ class BaseBot:
             stop_price = price + (stop_ticks * tick_value)
             target_price = price - (stop_ticks * tick_value * signal.target_rr)
 
-        # Open position locally
+        # Log INTENT before execution
+        logger.info(f"[INTENT:{tid}] {signal.direction} {contracts}x @ {price:.2f} "
+                     f"SL={stop_price:.2f} TP={target_price:.2f} "
+                     f"risk=${risk_dollars} tier={tier} strat={signal.strategy}")
+
+        # Send trade command to bridge (bridge writes OIF)
+        action = "ENTER_LONG" if signal.direction == "LONG" else "ENTER_SHORT"
+        try:
+            await ws.send(json.dumps({
+                "type": "trade",
+                "trade_id": tid,
+                "action": action,
+                "qty": contracts,
+                "reason": signal.reason,
+            }))
+        except Exception as e:
+            logger.error(f"[{tid}] Failed to send trade command: {e}")
+            self.last_rejection = f"Bridge send failed: {e}"
+            return
+
+        # Wait for fill confirmation (5s timeout, defaults to FILLED for sim)
+        from bridge.oif_writer import wait_for_fill
+        fill_result = await wait_for_fill(tid, timeout_s=5.0)
+
+        if fill_result["status"] == "REJECTED":
+            logger.error(f"[{tid}] ORDER REJECTED by NT8: {fill_result['content']}")
+            self.last_rejection = f"Order rejected: {fill_result['content']}"
+            return
+
+        if fill_result["status"] == "TIMEOUT":
+            # In sim mode, assume filled (NT8 sim doesn't always write fill files)
+            if not LIVE_TRADING:
+                logger.info(f"[{tid}] No fill file (sim mode) — assuming filled")
+            else:
+                logger.warning(f"[{tid}] Fill timeout in LIVE mode — proceeding cautiously")
+
+        # NOW open position locally (after fill confirmation)
         self.positions.open_position(
+            trade_id=tid,
             direction=signal.direction,
             entry_price=price,
             contracts=contracts,
@@ -462,18 +531,8 @@ class BaseBot:
         )
         self.status = "IN_TRADE"
 
-        # Send trade command to bridge
-        action = "ENTER_LONG" if signal.direction == "LONG" else "ENTER_SHORT"
-        await ws.send(json.dumps({
-            "type": "trade",
-            "action": action,
-            "qty": contracts,
-            "reason": signal.reason,
-        }))
-
-        logger.info(f"[ENTRY] {signal.direction} {contracts}x @ {price:.2f} "
-                     f"SL={stop_price:.2f} TP={target_price:.2f} "
-                     f"risk=${risk_dollars} tier={tier} strat={signal.strategy}")
+        logger.info(f"[FILLED:{tid}] {signal.direction} {contracts}x @ {price:.2f} "
+                     f"fill_latency={fill_result.get('latency_ms', 0):.0f}ms")
 
         self.history.log_entry(signal, price, contracts, stop_price,
                                target_price, risk_dollars, tier, market)
@@ -484,6 +543,7 @@ class BaseBot:
         if trade:
             self.risk.record_trade(trade["pnl_dollars"])
             self.trade_memory.record(trade)
+            self.tracker.record_trade(trade)
             self.history.log_exit(trade, self.aggregator.snapshot())
             self.status = "SCANNING"
 
@@ -502,6 +562,8 @@ class BaseBot:
         try:
             logger.info("[COUNCIL] Running 7-voter session bias vote...")
             recent = self.trade_memory.recent(10)
+            # Enrich recent trades with strategy performance for smarter voting
+            market["strategy_performance"] = self.tracker.get_all_summaries()
             result = await council_gate.run_council(market, recent)
             self._council_result = council_to_dict(result)
             logger.info(f"[COUNCIL] Result: {result.bias} ({result.vote_count}) "
@@ -542,6 +604,7 @@ class BaseBot:
             "trades": self.trade_memory.recent(20),
             "council": self._council_result,
             "filter_verdict": self._filter_verdict,
+            "strategy_performance": self.tracker.to_dict(),
         }
 
     # ─── Runtime Control ────────────────────────────────────────────

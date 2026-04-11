@@ -356,6 +356,11 @@ const POLL_MS = 2000;
 let activeBot = 'prod';
 let lastNt8Status = 'dead';
 let alertPlayed = false;
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s || '';
+  return d.innerHTML;
+}
 
 // ── Polling ────────────────────────────────────────────────────────
 async function poll() {
@@ -428,7 +433,7 @@ function renderHealth(h) {
 function setPill(id, cls, text) {
   const el = document.getElementById(id);
   el.className = 'health-pill ' + cls;
-  el.innerHTML = '<span class="dot"></span>' + text;
+  el.innerHTML = '<span class="dot"></span>' + esc(text);
 }
 
 function playAlert() {
@@ -442,7 +447,7 @@ function renderConnLog(events) {
   el.innerHTML = events.slice(-50).reverse().map(e => {
     const lvl = (e.level || 'info').toLowerCase();
     const ts = e.ts ? new Date(e.ts).toLocaleTimeString() : '';
-    return `<div class="evt evt-${lvl}"><span class="evt-ts">${ts}</span>${e.message || ''}</div>`;
+    return `<div class="evt evt-${esc(lvl)}"><span class="evt-ts">${esc(ts)}</span>${esc(e.message)}</div>`;
   }).join('');
 }
 
@@ -499,8 +504,8 @@ function renderStrategies(strats) {
   const container = el('strategy-toggles');
   container.innerHTML = strats.map(s =>
     `<div class="toggle-row">
-      <button class="toggle ${s.enabled ? 'on' : ''}" onclick="toggleStrategy('${s.name}', ${!s.enabled})"></button>
-      <label>${s.name} ${s.validated ? '(validated)' : '(lab)'}</label>
+      <button class="toggle ${s.enabled ? 'on' : ''}" onclick="toggleStrategy('${esc(s.name)}', ${!s.enabled})"></button>
+      <label>${esc(s.name)} ${s.validated ? '(validated)' : '(lab)'}</label>
     </div>`
   ).join('');
 }
@@ -515,22 +520,22 @@ function renderTrades(trades) {
     const cls = t.result === 'WIN' ? 'win' : 'loss';
     const id = 'reason-' + i;
     const confluences = t.confluences?.length
-      ? '<ul>' + t.confluences.map(c => `<li>${c}</li>`).join('') + '</ul>'
+      ? '<ul>' + t.confluences.map(c => `<li>${esc(c)}</li>`).join('') + '</ul>'
       : '';
     const snap = t.market_snapshot
-      ? `<br><span style="color:var(--text-dim)">@ entry: price=${t.market_snapshot.price?.toFixed(2)} ATR=${t.market_snapshot.atr_5m?.toFixed(1)} VWAP=${t.market_snapshot.vwap?.toFixed(2)} CVD=${t.market_snapshot.cvd?.toFixed(0)} regime=${t.market_snapshot.regime||'?'}</span>`
+      ? `<br><span style="color:var(--text-dim)">@ entry: price=${t.market_snapshot.price?.toFixed(2)} ATR=${t.market_snapshot.atr_5m?.toFixed(1)} VWAP=${t.market_snapshot.vwap?.toFixed(2)} CVD=${t.market_snapshot.cvd?.toFixed(0)} regime=${esc(t.market_snapshot.regime||'?')}</span>`
       : '';
     return `<tr>
       <td>${trades.length - i}</td>
-      <td>${t.direction}</td>
+      <td>${esc(t.direction)}</td>
       <td>${t.entry_price?.toFixed(2)}</td>
       <td>${t.exit_price?.toFixed(2) || '--'}</td>
       <td class="${cls}">$${t.pnl_dollars?.toFixed(2)}</td>
-      <td class="${cls}">${t.result}</td>
-      <td>${t.strategy}</td>
+      <td class="${cls}">${esc(t.result)}</td>
+      <td>${esc(t.strategy)}</td>
       <td><span class="trade-reason" onclick="toggleReason('${id}')">Why?</span>
         <div class="reason-detail" id="${id}">
-          <b>${t.strategy}</b>: ${t.entry_reason || ''}
+          <b>${esc(t.strategy)}</b>: ${esc(t.entry_reason)}
           ${confluences}${snap}
         </div>
       </td>
@@ -568,10 +573,10 @@ function renderSignalActivity(bot) {
     return;
   }
   const ts = new Date(ev.ts).toLocaleTimeString();
-  let html = `<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;">${ts} &mdash; Regime: <b style="color:var(--text)">${ev.regime || '?'}</b></div>`;
+  let html = `<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;">${esc(ts)} &mdash; Regime: <b style="color:var(--text)">${esc(ev.regime || '?')}</b></div>`;
 
   if (ev.risk_blocked) {
-    html += `<div class="signal-row"><span class="sig-badge sig-blocked">RISK GATE</span><span style="color:var(--red);font-size:12px;">${ev.risk_blocked}</span></div>`;
+    html += `<div class="signal-row"><span class="sig-badge sig-blocked">RISK GATE</span><span style="color:var(--red);font-size:12px;">${esc(ev.risk_blocked)}</span></div>`;
   }
 
   const badgeClass = { SIGNAL:'sig-signal', NO_SIGNAL:'sig-no-signal', SKIP_DISABLED:'sig-skip', SKIP_REGIME:'sig-skip', ERROR:'sig-error' };
@@ -582,20 +587,20 @@ function renderSignalActivity(bot) {
     const label = badgeLabel[s.result] || s.result;
     let detail = '';
     if (s.result === 'SIGNAL') {
-      detail = ` &mdash; ${s.direction} conf=${s.confidence?.toFixed(0)} &mdash; ${s.reason || ''}`;
+      detail = ` &mdash; ${esc(s.direction)} conf=${s.confidence?.toFixed(0)} &mdash; ${esc(s.reason)}`;
     } else if (s.reason) {
-      detail = ` &mdash; ${s.reason}`;
+      detail = ` &mdash; ${esc(s.reason)}`;
     }
     return `<div class="signal-row">
-      <span style="min-width:140px;color:var(--text)">${s.name}</span>
-      <span class="sig-badge ${badge}">${label}</span>
+      <span style="min-width:140px;color:var(--text)">${esc(s.name)}</span>
+      <span class="sig-badge ${esc(badge)}">${esc(label)}</span>
       <span style="color:var(--text-dim);font-size:11px;flex:1">${detail}</span>
     </div>`;
   }).join('');
 
   if (ev.best_signal) {
     html += `<div style="margin-top:10px;padding:8px 12px;background:#0d2818;border-radius:6px;font-size:12px;color:var(--green);">
-      <b>QUEUED:</b> ${ev.best_signal.direction} via ${ev.best_signal.strategy} &mdash; ${ev.best_signal.reason}</div>`;
+      <b>QUEUED:</b> ${esc(ev.best_signal.direction)} via ${esc(ev.best_signal.strategy)} &mdash; ${esc(ev.best_signal.reason)}</div>`;
   } else if (!ev.risk_blocked) {
     html += `<div style="margin-top:10px;padding:8px 12px;background:var(--surface);border-radius:6px;font-size:12px;color:var(--text-dim);border:1px solid var(--border);">No signal this bar</div>`;
   }
@@ -715,7 +720,7 @@ function renderCouncil(council) {
     votersEl.style.display = 'grid';
     votersEl.innerHTML = votes.map(v => {
       const b = (v.bias || 'ABSTAIN').toLowerCase();
-      return '<div class="voter-chip"><span class="v-dot ' + b + '"></span><span>' + v.voter + '</span><span style="color:var(--text-dim)">' + v.bias + ' ' + v.confidence + '%</span></div>';
+      return '<div class="voter-chip"><span class="v-dot ' + esc(b) + '"></span><span>' + esc(v.voter) + '</span><span style="color:var(--text-dim)">' + esc(v.bias) + ' ' + esc(String(v.confidence)) + '%</span></div>';
     }).join('');
   } else {
     votersEl.style.display = 'none';
@@ -737,8 +742,8 @@ function renderFilterVerdict(verdict) {
   const cls = verdict.action.toLowerCase().replace(' ', '_');
   container.innerHTML = '<div style="display:flex;align-items:center;gap:8px;margin-top:8px;">' +
     '<span style="font-size:11px;color:var(--text-dim)">AI Filter:</span>' +
-    '<span class="filter-badge ' + cls + '">' + verdict.action + '</span>' +
-    '<span style="font-size:11px;color:var(--text-dim)">' + (verdict.reason || '') + '</span>' +
+    '<span class="filter-badge ' + esc(cls) + '">' + esc(verdict.action) + '</span>' +
+    '<span style="font-size:11px;color:var(--text-dim)">' + esc(verdict.reason) + '</span>' +
     '<span style="font-size:10px;color:var(--text-dim);margin-left:auto">' + (verdict.latency_ms ? verdict.latency_ms.toFixed(0) + 'ms' : '') + '</span>' +
     '</div>';
 }
