@@ -41,7 +41,7 @@ logger = logging.getLogger("PreTradeFilter")
 FILTER_TIMEOUT_S = 3.0
 
 # Default model — Gemini Flash for low latency
-DEFAULT_MODEL = "gemini-2.0-flash"
+DEFAULT_MODEL = "gemini-2.5-flash"
 
 
 @dataclass

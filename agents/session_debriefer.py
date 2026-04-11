@@ -304,7 +304,7 @@ Please write today's coaching debrief. Remember:
 async def run_debrief(
     target_date: date = None,
     bot_name: str = "prod",
-    model: str = "gemini-2.0-flash",
+    model: str = "gemini-2.5-flash",
 ) -> Optional[str]:
     """
     Run the full session debrief pipeline.
@@ -389,7 +389,7 @@ async def main():
                         help="Date to debrief (YYYY-MM-DD, default: today)")
     parser.add_argument("--bot", type=str, default="prod",
                         help="Bot name (prod or lab, default: prod)")
-    parser.add_argument("--model", type=str, default="gemini-2.0-flash",
+    parser.add_argument("--model", type=str, default="gemini-2.5-flash",
                         help="Gemini model to use")
     args = parser.parse_args()
 

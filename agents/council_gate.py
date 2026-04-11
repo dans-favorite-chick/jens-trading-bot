@@ -37,8 +37,8 @@ logger = logging.getLogger("CouncilGate")
 VOTER_TIMEOUT_S = 5.0              # Per-voter timeout
 COUNCIL_TIMEOUT_S = 15.0           # Total council timeout
 QUORUM = 4                         # Votes needed for directional bias (out of 7)
-VOTER_MODEL = "gemini-2.0-flash"             # Fast model for voters
-ORCHESTRATOR_MODEL = "gemini-2.0-flash"      # Synthesis model
+VOTER_MODEL = "gemini-2.5-flash"             # Fast model for voters
+ORCHESTRATOR_MODEL = "gemini-2.5-flash"      # Synthesis model
 
 
 # ─── Data Types ─────────────────────────────────────────────────────

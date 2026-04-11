@@ -76,7 +76,7 @@ PROD_PRIMARY_END = "10:00"
 AGENT_COUNCIL_ENABLED = True        # 7-voter bias consensus at session open
 AGENT_PRETRADE_FILTER_ENABLED = True  # Fast AI sanity check before entry
 AGENT_DEBRIEF_ENABLED = True        # End-of-session coaching debrief
-AGENT_MODEL = "gemini-2.0-flash"    # Model for all agents
+AGENT_MODEL = "gemini-2.5-flash"    # Model for all agents
 
 # ─── Logging ────────────────────────────────────────────────────────
 LOG_DIR = "logs"

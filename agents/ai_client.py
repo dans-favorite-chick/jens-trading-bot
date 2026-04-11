@@ -2,7 +2,7 @@
 Phoenix Bot — AI Client Module
 
 Unified interface for AI providers used by all Phase 4 agents.
-Primary provider: Google Gemini (fast, cost-effective for all agents)
+Primary provider: Google Gemini via google-genai SDK (fast, cost-effective)
 
 All calls are async with timeouts. Failures never block trading.
 """
@@ -16,31 +16,31 @@ from typing import Optional
 
 logger = logging.getLogger("AIClient")
 
-# ─── Provider: Google Gemini ───────────────────────────────────────
+# ─── Provider: Google Gemini (google-genai SDK) ───────────────────
 
-_gemini_models: dict = {}
+_gemini_client = None
 
 
-def _get_gemini_model(model_name: str = "gemini-2.0-flash"):
-    """Lazy-init Gemini client. Caches per model_name."""
-    if model_name not in _gemini_models:
+def _get_gemini_client():
+    """Lazy-init Gemini client."""
+    global _gemini_client
+    if _gemini_client is None:
         try:
-            import google.generativeai as genai
+            from google import genai
             api_key = os.environ.get("GEMINI_API_KEY", "") or os.environ.get("GOOGLE_API_KEY", "")
             if not api_key:
                 logger.warning("GEMINI_API_KEY not set — Gemini calls will fail")
-            genai.configure(api_key=api_key)
-            _gemini_models[model_name] = genai.GenerativeModel(model_name)
+            _gemini_client = genai.Client(api_key=api_key)
         except ImportError:
-            logger.error("google-generativeai not installed. Run: pip install google-generativeai")
+            logger.error("google-genai not installed. Run: pip install google-genai")
             raise
-    return _gemini_models[model_name]
+    return _gemini_client
 
 
 async def ask_gemini(
     prompt: str,
     system: str = "",
-    model_name: str = "gemini-2.0-flash",
+    model_name: str = "gemini-2.5-flash",
     temperature: float = 0.2,
     max_tokens: int = 1024,
     timeout_s: float = 5.0,
@@ -50,7 +50,7 @@ async def ask_gemini(
 
     Args:
         prompt: The user message / main prompt
-        system: System instruction (prepended to prompt)
+        system: System instruction
         model_name: Gemini model to use
         temperature: 0.0 = deterministic, 1.0 = creative
         max_tokens: Max response tokens
@@ -60,22 +60,25 @@ async def ask_gemini(
         Response text, or None on failure/timeout
     """
     try:
-        model = _get_gemini_model(model_name)
+        client = _get_gemini_client()
+        from google.genai import types
 
-        # Gemini uses system_instruction at model level or we prepend to prompt
-        full_prompt = f"{system}\n\n{prompt}" if system else prompt
+        config = types.GenerateContentConfig(
+            temperature=temperature,
+            max_output_tokens=max_tokens,
+        )
+        if system:
+            config.system_instruction = system
 
-        # Gemini's generate_content is synchronous, so we run in executor
+        # google-genai's generate_content is synchronous, run in executor
         loop = asyncio.get_event_loop()
         response = await asyncio.wait_for(
             loop.run_in_executor(
                 None,
-                lambda: model.generate_content(
-                    full_prompt,
-                    generation_config={
-                        "temperature": temperature,
-                        "max_output_tokens": max_tokens,
-                    },
+                lambda: client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=config,
                 ),
             ),
             timeout=timeout_s,
