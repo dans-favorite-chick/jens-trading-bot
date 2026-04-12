@@ -282,18 +282,21 @@ class BaseBot:
                             regime = self.session.get_current_regime()
                             recent = self.trade_memory.recent(5)
 
-                            # Quick news check — block trades during Tier 1 events
+                            # News awareness — inform AI filter but NEVER block trades
+                            # News = opportunity, not restriction
                             try:
                                 from core.market_intel import get_economic_calendar
                                 cal = await get_economic_calendar()
                                 if cal.get("trade_restricted"):
-                                    logger.warning(f"[NEWS GATE] Trade blocked: "
-                                                    f"{cal.get('next_event', {}).get('name', 'event')} imminent")
-                                    self.last_rejection = f"News gate: {cal.get('next_event', {}).get('name')}"
-                                    self._pending_signal = None
-                                    continue
+                                    event_name = cal.get('next_event', {}).get('name', 'event')
+                                    logger.info(f"[NEWS SIGNAL] High-impact event: {event_name} "
+                                                 f"— AI filter will factor this in")
+                                    # Add to market context for AI filter (signal, not gate)
+                                    market_snap["news_event_imminent"] = event_name
+                                    asyncio.ensure_future(tg.notify_alert(
+                                        "NEWS EVENT", f"{event_name} — trade with awareness"))
                             except Exception:
-                                pass  # News check failure never blocks trading
+                                pass
                             verdict = await pretrade_filter.check(
                                 signal=signal.to_dict() if hasattr(signal, 'to_dict') else {
                                     "direction": signal.direction,

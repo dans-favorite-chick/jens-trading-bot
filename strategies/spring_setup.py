@@ -24,10 +24,11 @@ class SpringSetup(BaseStrategy):
         require_vwap = self.config.get("require_vwap_reclaim", True)
         require_delta = self.config.get("require_delta_flip", True)
         max_hold = self.config.get("max_hold_min", 15)
-        tick_size = 0.25  # MNQ
+        from config.settings import TICK_SIZE
+        tick_size = TICK_SIZE
 
-        if len(bars_1m) < 3:
-            return None
+        if len(bars_1m) < 2:
+            return None  # Need at least 2 bars to detect wick pattern
 
         price = market.get("price", 0)
         vwap = market.get("vwap", 0)

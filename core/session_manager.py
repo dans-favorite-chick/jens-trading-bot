@@ -24,10 +24,10 @@ REGIME_CONFIG = {
         "notes": "Thin volume, fade extremes only",
     },
     "PREMARKET_DRIFT": {
-        "min_confluence_override": 4.5,   # TIGHT: backtest showed 31-37% WR, bleeds capital
-        "size_multiplier": 0.3,           # Minimal size — protect capital here
+        "min_confluence_override": None,
+        "size_multiplier": 0.3,           # Reduced size — lower confidence regime
         "allowed_strategies": ["bias_momentum"],
-        "notes": "RESTRICTED: 31% WR in backtest. Lab bot only, prod should avoid.",
+        "notes": "Regime-aware strategies handle their own gating. Size reduced.",
     },
     "OPEN_MOMENTUM": {
         "min_confluence_override": None,  # No override — let strategies use own thresholds

@@ -45,8 +45,9 @@ class TestCanTrade:
         assert "Weekly loss limit" in reason
 
     def test_can_trade_blocks_when_max_trades_reached(self, rm):
-        # Default max is 6
-        rm.state.trades_today = 6
+        # Max trades is effectively uncapped (999) but test the mechanism
+        rm._max_trades = 5  # Override for test
+        rm.state.trades_today = 5
         allowed, reason = rm.can_trade()
         assert allowed is False
         assert "Max trades" in reason

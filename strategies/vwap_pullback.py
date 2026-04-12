@@ -21,7 +21,7 @@ class VWAPPullback(BaseStrategy):
         stop_ticks = self.config.get("stop_ticks", 8)
         target_rr = self.config.get("target_rr", 1.8)
 
-        if len(bars_1m) < 5 or len(bars_5m) < 3:
+        if len(bars_1m) < 2:
             return None
 
         price = market.get("price", 0)
@@ -37,7 +37,8 @@ class VWAPPullback(BaseStrategy):
 
         confluences = []
         direction = None
-        tick_size = 0.25
+        from config.settings import TICK_SIZE
+        tick_size = TICK_SIZE
 
         # Price must be near VWAP (within 6 ticks — wider zone for pullback detection)
         vwap_dist_ticks = abs(price - vwap) / tick_size

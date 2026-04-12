@@ -34,7 +34,7 @@ MAX_LOSS_PER_TRADE = 20.0       # Hard limit per trade ($)
 DAILY_LOSS_LIMIT = 45.0         # Stop trading for the day ($)
 WEEKLY_LOSS_LIMIT = 150.0       # Stop trading for the week ($)
 RECOVERY_MODE_TRIGGER = 30.0    # At -$30 daily: cut size 50%, raise thresholds
-MAX_TRADES_PER_SESSION = 6
+MAX_TRADES_PER_SESSION = 999  # Uncapped — don't limit winning days
 COOLOFF_AFTER_CONSECUTIVE_LOSSES = 3   # Pause 5 min after N consecutive losses
 COOLOFF_DURATION_MIN = 5
 
