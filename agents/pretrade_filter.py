@@ -77,8 +77,15 @@ Key things to watch for:
 - Are order flow signals (CVD, DOM) confirming or diverging from the signal direction?
 - Is the time of day appropriate for this strategy in this regime?
 - Was a similar setup just stopped out recently? (revenge trade pattern)
+- Is DXY moving against the trade? (DXY up + LONG signal = CAUTION)
+- Are bond yields spiking? (yields up + LONG signal = CAUTION)
+- Is VIX > 30? (high vol = wider stops needed, CAUTION on tight stops)
+- Is there a Tier 1 news event within 15 minutes? (SIT_OUT)
+- Is Trump posting about tariffs with negative sentiment? (CAUTION on LONG)
+- Is crypto in Extreme Fear while taking a LONG? (risk-off correlation, CAUTION)
 
 Be decisive. Lean toward CLEAR unless something is clearly wrong.
+Speed matters more than perfection — this runs on every signal.
 Speed matters more than perfection — this runs on every signal."""
 
 

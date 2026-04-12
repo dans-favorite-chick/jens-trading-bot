@@ -9,6 +9,13 @@ Provides real-time market context from multiple free data sources:
   - Reddit/WSB momentum via ApeWisdom API
   - FRED macro data (Fed Funds Rate, CPI trend)
   - Market regime context via yfinance + Alpaca
+  - Crypto Fear & Greed Index (alternative.me)
+  - Dollar Index DXY (yfinance)
+  - Bond Yields 10Y Treasury (yfinance)
+  - Put/Call Ratio (FRED)
+  - CNN Fear & Greed Index
+  - Congressional Trades (Finnhub / QuiverQuant)
+  - Intermarket Correlation Snapshot (yfinance multi-ticker)
 
 All calls are async with 5-second timeouts and safe defaults on failure.
 """
@@ -678,6 +685,465 @@ async def get_fred_macro() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Crypto Fear & Greed Index (alternative.me)
+# ---------------------------------------------------------------------------
+async def get_crypto_fear_greed() -> dict:
+    """
+    Fetch Crypto Fear & Greed Index from alternative.me.
+    No API key needed. Cache: 600 seconds.
+
+    Returns: {score: int, classification: str, source: str}
+    """
+    cached = _cache.get("crypto_fg", 600)
+    if cached is not None:
+        return cached
+
+    result = {"score": 0, "classification": "unavailable", "source": "unavailable"}
+
+    try:
+        def _fetch():
+            session = _requests.Session()
+            session.trust_env = False
+            resp = session.get(
+                "https://api.alternative.me/fng/?limit=1&format=json",
+                timeout=5,
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        data = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(None, _fetch),
+            timeout=5.0,
+        )
+
+        if data and "data" in data and len(data["data"]) > 0:
+            entry = data["data"][0]
+            result["score"] = int(entry.get("value", 0))
+            result["classification"] = entry.get("value_classification", "unknown")
+            result["source"] = "alternative_me"
+            logger.info(f"Crypto Fear & Greed: {result['score']} ({result['classification']})")
+
+    except Exception as e:
+        logger.debug(f"Crypto Fear & Greed fetch failed: {e}")
+
+    _cache.put("crypto_fg", result)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Dollar Index (DXY) via yfinance
+# ---------------------------------------------------------------------------
+async def get_dxy() -> dict:
+    """
+    Fetch Dollar Index (DXY) via yfinance DX-Y.NYB.
+    Cache: 120 seconds.
+    NQ inverse correlation: DXY up = NQ bearish signal.
+
+    Returns: {price: float, change_1h_pct: float, trend: str}
+    """
+    cached = _cache.get("dxy", 120)
+    if cached is not None:
+        return cached
+
+    result = {"price": 0.0, "change_1h_pct": 0.0, "trend": "UNKNOWN"}
+
+    try:
+        def _yf_dxy():
+            ticker = yf.Ticker("DX-Y.NYB")
+            hist = ticker.history(period="2d", interval="5m")
+            return hist
+
+        hist = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(None, _yf_dxy),
+            timeout=5.0,
+        )
+
+        if hist is not None and len(hist) > 12:
+            current = float(hist["Close"].iloc[-1])
+            # 1 hour ago = ~12 bars of 5-min data
+            hour_ago_idx = max(0, len(hist) - 13)
+            hour_ago = float(hist["Close"].iloc[hour_ago_idx])
+            change_pct = ((current - hour_ago) / hour_ago) * 100 if hour_ago > 0 else 0.0
+
+            result["price"] = round(current, 3)
+            result["change_1h_pct"] = round(change_pct, 3)
+
+            if change_pct > 0.05:
+                result["trend"] = "UP"
+            elif change_pct < -0.05:
+                result["trend"] = "DOWN"
+            else:
+                result["trend"] = "FLAT"
+
+            logger.info(f"DXY: {result['price']} ({result['change_1h_pct']:+.3f}% 1h, {result['trend']})")
+
+    except Exception as e:
+        logger.debug(f"DXY fetch failed: {e}")
+
+    _cache.put("dxy", result)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Bond Yields (10Y Treasury) via yfinance
+# ---------------------------------------------------------------------------
+async def get_bond_yields() -> dict:
+    """
+    Fetch 10Y Treasury yield via yfinance ^TNX.
+    Cache: 120 seconds.
+    Rising yields = NQ bearish, falling = NQ bullish.
+
+    Returns: {yield_10y: float, daily_change_bps: float, trend: str}
+    """
+    cached = _cache.get("bonds", 120)
+    if cached is not None:
+        return cached
+
+    result = {"yield_10y": 0.0, "daily_change_bps": 0.0, "trend": "UNKNOWN"}
+
+    try:
+        def _yf_tnx():
+            ticker = yf.Ticker("^TNX")
+            hist = ticker.history(period="5d", interval="1h")
+            return hist
+
+        hist = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(None, _yf_tnx),
+            timeout=5.0,
+        )
+
+        if hist is not None and len(hist) > 1:
+            current = float(hist["Close"].iloc[-1])
+            result["yield_10y"] = round(current, 3)
+
+            # Daily change in basis points: compare to first bar of today or prior day close
+            # Use the bar from ~24h ago as proxy
+            day_ago_idx = max(0, len(hist) - 8)  # ~8 hourly bars = 1 trading day
+            day_ago = float(hist["Close"].iloc[day_ago_idx])
+            daily_change_bps = (current - day_ago) * 100  # yield is in %, bps = % * 100
+            result["daily_change_bps"] = round(daily_change_bps, 1)
+
+            # 5-day trend: compare first bar to last
+            first_close = float(hist["Close"].iloc[0])
+            five_day_change = current - first_close
+            if five_day_change > 0.05:
+                result["trend"] = "RISING"
+            elif five_day_change < -0.05:
+                result["trend"] = "FALLING"
+            else:
+                result["trend"] = "STABLE"
+
+            logger.info(f"10Y Yield: {result['yield_10y']}% ({result['daily_change_bps']:+.1f}bps, {result['trend']})")
+
+    except Exception as e:
+        logger.debug(f"Bond yields fetch failed: {e}")
+
+    _cache.put("bonds", result)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Put/Call Ratio (FRED)
+# ---------------------------------------------------------------------------
+async def get_put_call_ratio() -> dict:
+    """
+    Fetch Put/Call Ratio from FRED series PCERATIO.
+    Cache: 3600 seconds (daily data).
+
+    Signal: >1.0 = extreme fear (contrarian bullish), <0.7 = extreme greed (contrarian bearish).
+    Returns: {ratio: float, signal: "FEAR"|"NEUTRAL"|"GREED"}
+    """
+    cached = _cache.get("putcall", 3600)
+    if cached is not None:
+        return cached
+
+    result = {"ratio": 0.0, "signal": "NEUTRAL", "source": "unavailable"}
+
+    try:
+        def _fetch_pcr():
+            api_key = os.environ.get("FRED_API_KEY", "")
+            if not api_key:
+                return None
+            resp = _requests.get(
+                "https://api.stlouisfed.org/fred/series/observations",
+                params={
+                    "series_id": "PCERATIO",
+                    "sort_order": "desc",
+                    "limit": "1",
+                    "file_type": "json",
+                    "api_key": api_key,
+                },
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                obs = resp.json().get("observations", [])
+                if obs and obs[0].get("value", ".") != ".":
+                    return float(obs[0]["value"])
+            return None
+
+        ratio = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(None, _fetch_pcr),
+            timeout=5.0,
+        )
+
+        if ratio is not None:
+            result["ratio"] = round(ratio, 3)
+            result["source"] = "fred"
+            if ratio > 1.0:
+                result["signal"] = "FEAR"
+            elif ratio < 0.7:
+                result["signal"] = "GREED"
+            else:
+                result["signal"] = "NEUTRAL"
+            logger.info(f"Put/Call Ratio: {result['ratio']} ({result['signal']})")
+
+    except Exception as e:
+        logger.debug(f"Put/Call Ratio fetch failed: {e}")
+
+    _cache.put("putcall", result)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# CNN Fear & Greed Index
+# ---------------------------------------------------------------------------
+async def get_cnn_fear_greed() -> dict:
+    """
+    Fetch CNN Fear & Greed Index.
+    No API key needed. Cache: 600 seconds.
+
+    Returns: {score: int 0-100, rating: str, source: str}
+    """
+    cached = _cache.get("cnn_fg", 600)
+    if cached is not None:
+        return cached
+
+    result = {"score": 0, "rating": "unavailable", "source": "unavailable"}
+
+    try:
+        def _fetch():
+            session = _requests.Session()
+            session.trust_env = False
+            resp = session.get(
+                "https://production.dataviz.cnn.io/index/fearandgreed/graphdata",
+                timeout=5,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        data = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(None, _fetch),
+            timeout=5.0,
+        )
+
+        if data:
+            # CNN response structure: data.fear_and_greed.score / rating
+            fg = data.get("fear_and_greed", {})
+            score = fg.get("score", None)
+            rating = fg.get("rating", "unknown")
+            if score is not None:
+                result["score"] = int(round(float(score)))
+                result["rating"] = str(rating)
+                result["source"] = "cnn"
+                logger.info(f"CNN Fear & Greed: {result['score']} ({result['rating']})")
+
+    except Exception as e:
+        logger.debug(f"CNN Fear & Greed fetch failed: {e}")
+
+    _cache.put("cnn_fg", result)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Congressional Trades (Finnhub / QuiverQuant)
+# ---------------------------------------------------------------------------
+_NQ_HEAVYWEIGHTS = ["NVDA", "AAPL", "MSFT", "GOOG", "META", "AMZN", "TSLA"]
+
+
+async def get_congress_trades() -> dict:
+    """
+    Fetch recent congressional trades via Finnhub or QuiverQuant.
+    Filter for NQ heavyweight tickers.
+    Cache: 3600 seconds (1 hour).
+
+    Returns: {recent_trades: [...], nq_relevant: [...], source: str}
+    """
+    cached = _cache.get("congress", 3600)
+    if cached is not None:
+        return cached
+
+    result = {"recent_trades": [], "nq_relevant": [], "source": "unavailable"}
+
+    # Try Finnhub congressional trading endpoint first
+    try:
+        fc = _get_finnhub()
+        if fc:
+            def _fetch_finnhub_congress():
+                trades = []
+                for ticker in _NQ_HEAVYWEIGHTS:
+                    try:
+                        data = fc.stock_lobbying(ticker)
+                        if data and isinstance(data, list):
+                            for item in data[:3]:
+                                trades.append({
+                                    "ticker": ticker,
+                                    "type": item.get("type", "unknown"),
+                                    "date": item.get("date", ""),
+                                    "description": str(item.get("description", ""))[:100],
+                                })
+                    except Exception:
+                        pass
+                return trades
+
+            trades = await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(None, _fetch_finnhub_congress),
+                timeout=10.0,
+            )
+            if trades:
+                result["recent_trades"] = trades[:20]
+                result["nq_relevant"] = [t for t in trades if t["ticker"] in _NQ_HEAVYWEIGHTS]
+                result["source"] = "finnhub"
+                logger.info(f"Congress trades: {len(trades)} found via Finnhub")
+                _cache.put("congress", result)
+                return result
+    except Exception as e:
+        logger.debug(f"Finnhub congress trades failed: {e}")
+
+    # Fallback: QuiverQuant free API
+    try:
+        def _fetch_quiver():
+            session = _requests.Session()
+            session.trust_env = False
+            resp = session.get(
+                "https://api.quiverquant.com/beta/live/congresstrading",
+                timeout=5,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            return None
+
+        data = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(None, _fetch_quiver),
+            timeout=5.0,
+        )
+
+        if data and isinstance(data, list):
+            trades = []
+            nq_relevant = []
+            for item in data[:50]:
+                ticker = item.get("Ticker", item.get("ticker", ""))
+                entry = {
+                    "politician": item.get("Representative", item.get("politician", "unknown")),
+                    "ticker": ticker,
+                    "type": item.get("Transaction", item.get("type", "unknown")),
+                    "amount": item.get("Amount", item.get("amount", "")),
+                    "date": item.get("TransactionDate", item.get("date", "")),
+                }
+                trades.append(entry)
+                if ticker in _NQ_HEAVYWEIGHTS:
+                    nq_relevant.append(entry)
+
+            result["recent_trades"] = trades[:20]
+            result["nq_relevant"] = nq_relevant
+            result["source"] = "quiverquant"
+            logger.info(f"Congress trades: {len(trades)} found via QuiverQuant, "
+                         f"{len(nq_relevant)} NQ-relevant")
+
+    except Exception as e:
+        logger.debug(f"QuiverQuant congress trades failed: {e}")
+
+    _cache.put("congress", result)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Intermarket Correlation Snapshot (yfinance multi-ticker)
+# ---------------------------------------------------------------------------
+async def get_intermarket() -> dict:
+    """
+    Fetch intermarket data: ES, RTY, Gold, Oil, BTC via yfinance.
+    Plus DXY and 10Y yield from their dedicated functions.
+    Cache: 120 seconds.
+
+    Returns: {es: {price, change_1h}, rty: {...}, gold: {...}, oil: {...},
+              btc: {...}, risk_on: bool, risk_off: bool}
+    """
+    cached = _cache.get("intermarket", 120)
+    if cached is not None:
+        return cached
+
+    tickers_map = {
+        "es": "ES=F",
+        "rty": "RTY=F",
+        "gold": "GC=F",
+        "oil": "CL=F",
+        "btc": "BTC-USD",
+    }
+
+    result = {
+        name: {"price": 0.0, "change_1h_pct": 0.0}
+        for name in tickers_map
+    }
+    result["risk_on"] = False
+    result["risk_off"] = False
+
+    try:
+        def _yf_intermarket():
+            symbols = list(tickers_map.values())
+            data = yf.download(
+                symbols, period="2d", interval="5m",
+                group_by="ticker", progress=False, threads=True,
+            )
+            out = {}
+            for name, symbol in tickers_map.items():
+                try:
+                    if len(symbols) > 1:
+                        df = data[symbol] if symbol in data.columns.get_level_values(0) else None
+                    else:
+                        df = data
+                    if df is not None and len(df) > 12:
+                        current = float(df["Close"].dropna().iloc[-1])
+                        hour_ago_idx = max(0, len(df) - 13)
+                        hour_ago = float(df["Close"].dropna().iloc[hour_ago_idx])
+                        change = ((current - hour_ago) / hour_ago) * 100 if hour_ago > 0 else 0.0
+                        out[name] = {"price": round(current, 2), "change_1h_pct": round(change, 3)}
+                except Exception:
+                    out[name] = {"price": 0.0, "change_1h_pct": 0.0}
+            return out
+
+        market_data = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(None, _yf_intermarket),
+            timeout=10.0,
+        )
+
+        result.update(market_data)
+
+        # Risk-on: ES + RTY + BTC all up
+        es_up = result.get("es", {}).get("change_1h_pct", 0) > 0
+        rty_up = result.get("rty", {}).get("change_1h_pct", 0) > 0
+        btc_up = result.get("btc", {}).get("change_1h_pct", 0) > 0
+        result["risk_on"] = es_up and rty_up and btc_up
+
+        # Risk-off: gold up + DXY up (use cached DXY if available)
+        gold_up = result.get("gold", {}).get("change_1h_pct", 0) > 0
+        dxy_data = _cache.get("dxy", 300)
+        dxy_up = dxy_data.get("trend", "") == "UP" if dxy_data else False
+        bonds_data = _cache.get("bonds", 300)
+        yields_down = bonds_data.get("daily_change_bps", 0) < 0 if bonds_data else False
+        result["risk_off"] = gold_up and (dxy_up or yields_down)
+
+        logger.info(f"Intermarket: risk_on={result['risk_on']}, risk_off={result['risk_off']}")
+
+    except Exception as e:
+        logger.debug(f"Intermarket fetch failed: {e}")
+
+    _cache.put("intermarket", result)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Master Intelligence Function
 # ---------------------------------------------------------------------------
 async def get_full_intel() -> dict:
@@ -696,9 +1162,19 @@ async def get_full_intel() -> dict:
     trump_task = asyncio.create_task(_safe_call(get_trump_sentiment, "trump"))
     reddit_task = asyncio.create_task(_safe_call(get_reddit_momentum, "reddit"))
     fred_task = asyncio.create_task(_safe_call(get_fred_macro, "fred"))
+    crypto_fg_task = asyncio.create_task(_safe_call(get_crypto_fear_greed, "crypto_fg"))
+    dxy_task = asyncio.create_task(_safe_call(get_dxy, "dxy"))
+    bonds_task = asyncio.create_task(_safe_call(get_bond_yields, "bonds"))
+    putcall_task = asyncio.create_task(_safe_call(get_put_call_ratio, "putcall"))
+    cnn_fg_task = asyncio.create_task(_safe_call(get_cnn_fear_greed, "cnn_fg"))
+    congress_task = asyncio.create_task(_safe_call(get_congress_trades, "congress"))
+    intermarket_task = asyncio.create_task(_safe_call(get_intermarket, "intermarket"))
 
-    vix, news, calendar, context, trump, reddit, fred = await asyncio.gather(
-        vix_task, news_task, cal_task, ctx_task, trump_task, reddit_task, fred_task
+    (vix, news, calendar, context, trump, reddit, fred,
+     crypto_fg, dxy, bonds, putcall, cnn_fg, congress, intermarket) = await asyncio.gather(
+        vix_task, news_task, cal_task, ctx_task, trump_task, reddit_task, fred_task,
+        crypto_fg_task, dxy_task, bonds_task, putcall_task, cnn_fg_task,
+        congress_task, intermarket_task,
     )
 
     elapsed = round(time.time() - start, 2)
@@ -727,6 +1203,13 @@ async def get_full_intel() -> dict:
         "trump": trump,
         "reddit": reddit,
         "fred": fred,
+        "crypto_fear_greed": crypto_fg,
+        "dxy": dxy,
+        "bond_yields": bonds,
+        "put_call_ratio": putcall,
+        "cnn_fear_greed": cnn_fg,
+        "congress_trades": congress,
+        "intermarket": intermarket,
         "trade_ok": trade_ok,
         "restriction_reason": restriction_reason,
         "trump_warning": trump_warning,
@@ -799,12 +1282,59 @@ async def _test():
     print(f"  CPI YoY: {fred.get('cpi_yoy', 'N/A')}%")
     print(f"  Unemployment: {fred.get('unemployment', 'N/A')}%")
 
+    print("\n--- Crypto Fear & Greed ---")
+    cfg = await get_crypto_fear_greed()
+    print(f"  Score: {cfg.get('score', 'N/A')}")
+    print(f"  Classification: {cfg.get('classification', 'N/A')}")
+    print(f"  Source: {cfg.get('source', 'N/A')}")
+
+    print("\n--- Dollar Index (DXY) ---")
+    dxy = await get_dxy()
+    print(f"  Price: {dxy.get('price', 'N/A')}")
+    print(f"  1h Change: {dxy.get('change_1h_pct', 'N/A')}%")
+    print(f"  Trend: {dxy.get('trend', 'N/A')}")
+
+    print("\n--- Bond Yields (10Y) ---")
+    bonds = await get_bond_yields()
+    print(f"  Yield: {bonds.get('yield_10y', 'N/A')}%")
+    print(f"  Daily Change: {bonds.get('daily_change_bps', 'N/A')} bps")
+    print(f"  Trend: {bonds.get('trend', 'N/A')}")
+
+    print("\n--- Put/Call Ratio ---")
+    pcr = await get_put_call_ratio()
+    print(f"  Ratio: {pcr.get('ratio', 'N/A')}")
+    print(f"  Signal: {pcr.get('signal', 'N/A')}")
+    print(f"  Source: {pcr.get('source', 'N/A')}")
+
+    print("\n--- CNN Fear & Greed ---")
+    cnn = await get_cnn_fear_greed()
+    print(f"  Score: {cnn.get('score', 'N/A')}")
+    print(f"  Rating: {cnn.get('rating', 'N/A')}")
+    print(f"  Source: {cnn.get('source', 'N/A')}")
+
+    print("\n--- Congressional Trades ---")
+    congress = await get_congress_trades()
+    print(f"  Source: {congress.get('source', 'N/A')}")
+    print(f"  Total trades: {len(congress.get('recent_trades', []))}")
+    print(f"  NQ relevant: {len(congress.get('nq_relevant', []))}")
+    for t in congress.get("nq_relevant", [])[:3]:
+        print(f"    {t.get('politician', 'N/A')} - {t['ticker']} {t.get('type', '')} {t.get('date', '')}")
+
+    print("\n--- Intermarket Snapshot ---")
+    im = await get_intermarket()
+    for key in ["es", "rty", "gold", "oil", "btc"]:
+        d = im.get(key, {})
+        print(f"  {key.upper()}: {d.get('price', 'N/A')} ({d.get('change_1h_pct', 'N/A')}% 1h)")
+    print(f"  Risk-On: {im.get('risk_on', 'N/A')}")
+    print(f"  Risk-Off: {im.get('risk_off', 'N/A')}")
+
     print("\n--- Full Intel ---")
     intel = await get_full_intel()
     print(f"  Trade OK: {intel['trade_ok']}")
     print(f"  Restriction: {intel['restriction_reason']}")
     print(f"  Trump warning: {intel.get('trump_warning', 'None')}")
-    print(f"  Sources: VIX + News + Calendar + Context + Trump + Reddit + FRED")
+    print(f"  Sources: VIX + News + Calendar + Context + Trump + Reddit + FRED"
+          f" + CryptoFG + DXY + Bonds + PutCall + CNN_FG + Congress + Intermarket")
     print(f"  Fetch time: {intel['fetch_time_s']}s")
 
     print("\n" + "=" * 60)

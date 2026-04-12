@@ -125,6 +125,18 @@ News Tier: {news_tier} ({news_summary})
 Economic Calendar: {econ_events}
 Overnight Range: {overnight_range}
 
+## Macro & Intermarket
+DXY (Dollar): {dxy} | 10Y Yield: {bond_yield}
+Crypto Fear/Greed: {crypto_fg} | CNN Fear/Greed: {cnn_fg}
+Put/Call Ratio: {put_call}
+Trump Sentiment: {trump_sentiment}
+Reddit/WSB Hot Tickers: {reddit_hot}
+Intermarket: {intermarket}
+Macro: Fed Funds={fed_rate}%, CPI={cpi}% YoY, Unemployment={unemployment}%
+
+## Expert Assessment
+{expert_assessment}
+
 ## Strategy Performance (backtest + live history)
 {strategy_performance}
 
@@ -148,6 +160,40 @@ async def _run_voter(config: dict, market: dict, recent_trades_str: str) -> Vote
         strat_perf = market.get("strategy_performance", {})
         strat_perf_str = json.dumps(strat_perf, indent=1, default=str)[:500] if strat_perf else "No history yet"
 
+        # Extract nested intel data safely
+        news_data = intel.get("news", intel) if isinstance(intel.get("news"), dict) else intel
+        cal_data = intel.get("calendar", {})
+        ctx_data = intel.get("market_context", {})
+        trump_data = intel.get("trump", {})
+        reddit_data = intel.get("reddit", {})
+        fred_data = intel.get("fred", {})
+        crypto_data = intel.get("crypto_fear_greed", {})
+        cnn_data = intel.get("cnn_fear_greed", {})
+        dxy_data = intel.get("dxy", {})
+        bond_data = intel.get("bond_yields", {})
+        pc_data = intel.get("put_call", {})
+        im_data = intel.get("intermarket", {})
+
+        # Build expert assessment if available
+        expert_str = "N/A"
+        try:
+            from agents.expert_knowledge import interpret_market_conditions
+            expert_str = interpret_market_conditions(intel)
+        except Exception:
+            pass
+
+        # Reddit hot tickers
+        reddit_hot = ", ".join(
+            [t["ticker"] for t in reddit_data.get("nq_relevant", [])[:5]]
+        ) or "N/A"
+
+        # Intermarket summary
+        im_summary = "N/A"
+        if im_data.get("risk_on") is not None:
+            im_summary = "RISK-ON" if im_data.get("risk_on") else (
+                "RISK-OFF" if im_data.get("risk_off") else "MIXED"
+            )
+
         prompt = VOTER_PROMPT_TEMPLATE.format(
             price=market.get("price", 0),
             vwap=market.get("vwap", 0),
@@ -170,11 +216,23 @@ async def _run_voter(config: dict, market: dict, recent_trades_str: str) -> Vote
             regime=market.get("regime", "UNKNOWN"),
             bars_1m=market.get("bars_1m", 0),
             bars_5m=market.get("bars_5m", 0),
-            vix=intel.get("vix", "N/A"),
-            news_tier=intel.get("highest_tier", "N/A"),
-            news_summary=intel.get("summary", "No news data")[:100],
-            econ_events=intel.get("next_event", "No upcoming events"),
-            overnight_range=intel.get("overnight_range", "N/A"),
+            vix=intel.get("vix", {}).get("vix", "N/A"),
+            news_tier=news_data.get("highest_tier", "N/A"),
+            news_summary=news_data.get("summary", "No news")[:100],
+            econ_events=cal_data.get("next_event", "No upcoming events"),
+            overnight_range=ctx_data.get("overnight_range", "N/A"),
+            dxy=f"{dxy_data.get('price', 'N/A')} ({dxy_data.get('trend', '?')})",
+            bond_yield=f"{bond_data.get('yield_10y', 'N/A')}% ({bond_data.get('trend', '?')})",
+            crypto_fg=f"{crypto_data.get('score', 'N/A')} ({crypto_data.get('classification', '?')})",
+            cnn_fg=f"{cnn_data.get('score', 'N/A')} ({cnn_data.get('rating', '?')})",
+            put_call=f"{pc_data.get('ratio', 'N/A')} ({pc_data.get('signal', '?')})",
+            trump_sentiment=f"{trump_data.get('score', 0):.2f} keywords={trump_data.get('market_keywords', [])}",
+            reddit_hot=reddit_hot,
+            intermarket=im_summary,
+            fed_rate=fred_data.get("fed_funds_rate", "N/A"),
+            cpi=fred_data.get("cpi_yoy", "N/A"),
+            unemployment=fred_data.get("unemployment", "N/A"),
+            expert_assessment=expert_str,
             strategy_performance=strat_perf_str,
             recent_trades=recent_trades_str,
         )
