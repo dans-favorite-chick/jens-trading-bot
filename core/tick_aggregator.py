@@ -12,6 +12,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from core.dom_analyzer import DOMAnalyzer
+
 
 @dataclass
 class Bar:
@@ -116,6 +118,9 @@ class TickAggregator:
         self.bar_buy_vol: float = 0.0
         self.bar_sell_vol: float = 0.0
         self.bar_delta: float = 0.0   # bar_buy_vol - bar_sell_vol
+
+        # DOM analyzer (iceberg + absorption detection)
+        self.dom_analyzer = DOMAnalyzer()
 
         # DOM depth state (updated via process_dom() from bridge)
         self.dom_bid_stack: float = 0.0
@@ -235,6 +240,9 @@ class TickAggregator:
         self.dom_ask_heavy = self.dom_imbalance < 0.40
         self.dom_last_update = time.time()
 
+        # Feed DOM data to the analyzer for iceberg/absorption detection
+        self.dom_analyzer.process_dom(dom, self.last_price, 0)
+
     def _on_bar_complete(self, tf: str, bar: Bar):
         """Update indicators when a bar completes."""
         # ── ATR ─────────────────────────────────────────────────────
@@ -332,5 +340,7 @@ class TickAggregator:
             "dom_bid_heavy": self.dom_bid_heavy,
             "dom_ask_heavy": self.dom_ask_heavy,
             "dom_depth":     round(self.dom_bid_stack, 0),   # backward compat
+            # ── DOM analyzer (iceberg/absorption) ────────────────────
+            "dom_signal": self.dom_analyzer.get_dom_signal(),
             "regime":        None,   # set by session_manager, placeholder here
         }

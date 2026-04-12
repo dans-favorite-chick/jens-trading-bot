@@ -96,4 +96,13 @@ STRATEGIES = {
         "min_tf_votes": 3,
         "max_hold_min": 8,
     },
+    "ib_breakout": {
+        "enabled": True,
+        "validated": True,    # Runs in prod bot — 96.2% IB break rate, 74.56% WR
+        "ib_minutes": 30,
+        "target_extension": 1.5,
+        "max_ib_width_atr_mult": 1.5,
+        "stop_at_ib_midpoint": False,  # False = stop at full IB opposite, True = tighter stop at midpoint
+        "max_hold_min": 60,
+    },
 }

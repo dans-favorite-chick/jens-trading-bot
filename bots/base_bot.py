@@ -123,12 +123,14 @@ class BaseBot:
         from strategies.spring_setup import SpringSetup
         from strategies.vwap_pullback import VWAPPullback
         from strategies.high_precision import HighPrecisionOnly
+        from strategies.ib_breakout import IBBreakout
 
         strategy_classes = {
             "bias_momentum": BiasMomentumFollow,
             "spring_setup": SpringSetup,
             "vwap_pullback": VWAPPullback,
             "high_precision_only": HighPrecisionOnly,
+            "ib_breakout": IBBreakout,
         }
 
         for name, config in STRATEGIES.items():

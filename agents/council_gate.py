@@ -132,6 +132,7 @@ Put/Call Ratio: {put_call}
 Trump Sentiment: {trump_sentiment}
 Reddit/WSB Hot Tickers: {reddit_hot}
 Intermarket: {intermarket}
+NQ/ES Relative Strength: {nq_es_strength}
 Macro: Fed Funds={fed_rate}%, CPI={cpi}% YoY, Unemployment={unemployment}%
 
 ## Expert Assessment
@@ -173,6 +174,7 @@ async def _run_voter(config: dict, market: dict, recent_trades_str: str) -> Vote
         bond_data = intel.get("bond_yields", {})
         pc_data = intel.get("put_call", {})
         im_data = intel.get("intermarket", {})
+        nq_es_data = intel.get("nq_es_relative_strength", {})
 
         # Build expert assessment if available
         expert_str = "N/A"
@@ -229,6 +231,12 @@ async def _run_voter(config: dict, market: dict, recent_trades_str: str) -> Vote
             trump_sentiment=f"{trump_data.get('score', 0):.2f} keywords={trump_data.get('market_keywords', [])}",
             reddit_hot=reddit_hot,
             intermarket=im_summary,
+            nq_es_strength=(
+                f"{nq_es_data.get('signal', 'N/A')} "
+                f"(NQ {nq_es_data.get('nq_change_30m', 0):+.3f}% vs ES {nq_es_data.get('es_change_30m', 0):+.3f}%, "
+                f"RS={nq_es_data.get('relative_strength', 0):+.3f}%, "
+                f"spread {nq_es_data.get('spread_trend', 'N/A')})"
+            ),
             fed_rate=fred_data.get("fed_funds_rate", "N/A"),
             cpi=fred_data.get("cpi_yoy", "N/A"),
             unemployment=fred_data.get("unemployment", "N/A"),

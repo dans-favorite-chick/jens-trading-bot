@@ -108,6 +108,17 @@ class BiasMomentumFollow(BaseStrategy):
             momentum_score += 10
             confluences.append(f"ATR={atr:.1f}")
 
+        # ── Opening Range first-candle boost ────────────────────────
+        # First completed 5m candle after open predicts day direction ~65%
+        if regime in ("OPEN_MOMENTUM",) and len(bars_5m) >= 1:
+            first_bar = bars_5m[0]  # First 5m bar of the session
+            if direction == "LONG" and first_bar.close > first_bar.open:
+                momentum_score += 20
+                confluences.append("First 5m candle bullish (opening range signal)")
+            elif direction == "SHORT" and first_bar.close < first_bar.open:
+                momentum_score += 20
+                confluences.append("First 5m candle bearish (opening range signal)")
+
         if momentum_score < min_momentum:
             return None
 

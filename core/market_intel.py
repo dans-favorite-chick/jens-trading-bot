@@ -1144,6 +1144,116 @@ async def get_intermarket() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# NQ/ES Relative Strength Tracker
+# ---------------------------------------------------------------------------
+async def get_nq_es_relative_strength() -> dict:
+    """
+    Compare NQ vs ES performance over last 30 min and today.
+    Cache: 60 seconds.
+
+    Uses yfinance to pull latest NQ=F and ES=F bars.
+
+    Calculate:
+    - nq_change_30m: NQ % change last 30 min
+    - es_change_30m: ES % change last 30 min
+    - relative_strength: nq_change - es_change (positive = NQ leading)
+    - signal: "NQ_LEADING" | "ES_LEADING" | "NEUTRAL" (if diff < 0.05%)
+    - nq_today_pct: NQ change from today's open
+    - es_today_pct: ES change from today's open
+    - spread_trend: "WIDENING" | "NARROWING" | "STABLE"
+
+    Returns: {
+        nq_change_30m, es_change_30m, relative_strength,
+        signal, nq_today_pct, es_today_pct, spread_trend, source
+    }
+    """
+    cached = _cache.get("nq_es_rs", 60)
+    if cached is not None:
+        cached["age_s"] = round(time.time() - _cache._store["nq_es_rs"][0], 1)
+        return cached
+
+    result = {
+        "nq_change_30m": 0.0, "es_change_30m": 0.0,
+        "relative_strength": 0.0, "signal": "NEUTRAL",
+        "nq_today_pct": 0.0, "es_today_pct": 0.0,
+        "spread_trend": "STABLE", "source": "unavailable", "age_s": 0,
+    }
+
+    try:
+        def _yf_nq_es():
+            nq = yf.Ticker("NQ=F")
+            es = yf.Ticker("ES=F")
+            # 1-day of 5-min bars gives us 30-min lookback and today's open
+            nq_hist = nq.history(period="1d", interval="5m")
+            es_hist = es.history(period="1d", interval="5m")
+            return nq_hist, es_hist
+
+        nq_hist, es_hist = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(None, _yf_nq_es),
+            timeout=5.0,
+        )
+
+        if nq_hist is not None and es_hist is not None and len(nq_hist) >= 6 and len(es_hist) >= 6:
+            # 30-min change: last 6 bars of 5-min data
+            nq_now = float(nq_hist["Close"].iloc[-1])
+            nq_30m_ago = float(nq_hist["Close"].iloc[-7]) if len(nq_hist) >= 7 else float(nq_hist["Close"].iloc[0])
+            es_now = float(es_hist["Close"].iloc[-1])
+            es_30m_ago = float(es_hist["Close"].iloc[-7]) if len(es_hist) >= 7 else float(es_hist["Close"].iloc[0])
+
+            nq_change_30m = ((nq_now - nq_30m_ago) / nq_30m_ago) * 100 if nq_30m_ago else 0
+            es_change_30m = ((es_now - es_30m_ago) / es_30m_ago) * 100 if es_30m_ago else 0
+            relative_strength = nq_change_30m - es_change_30m
+
+            # Signal determination
+            if relative_strength > 0.05:
+                signal = "NQ_LEADING"
+            elif relative_strength < -0.05:
+                signal = "ES_LEADING"
+            else:
+                signal = "NEUTRAL"
+
+            # Today's change from open
+            nq_open = float(nq_hist["Open"].iloc[0])
+            es_open = float(es_hist["Open"].iloc[0])
+            nq_today_pct = ((nq_now - nq_open) / nq_open) * 100 if nq_open else 0
+            es_today_pct = ((es_now - es_open) / es_open) * 100 if es_open else 0
+
+            # Spread trend: compare relative strength now vs 15 min ago
+            spread_trend = "STABLE"
+            if len(nq_hist) >= 4 and len(es_hist) >= 4:
+                nq_15m_ago = float(nq_hist["Close"].iloc[-4])
+                es_15m_ago = float(es_hist["Close"].iloc[-4])
+                nq_mid = ((nq_15m_ago - nq_30m_ago) / nq_30m_ago) * 100 if nq_30m_ago else 0
+                es_mid = ((es_15m_ago - es_30m_ago) / es_30m_ago) * 100 if es_30m_ago else 0
+                rs_mid = nq_mid - es_mid
+                if abs(relative_strength) > abs(rs_mid) + 0.02:
+                    spread_trend = "WIDENING"
+                elif abs(relative_strength) < abs(rs_mid) - 0.02:
+                    spread_trend = "NARROWING"
+
+            result = {
+                "nq_change_30m": round(nq_change_30m, 4),
+                "es_change_30m": round(es_change_30m, 4),
+                "relative_strength": round(relative_strength, 4),
+                "signal": signal,
+                "nq_today_pct": round(nq_today_pct, 4),
+                "es_today_pct": round(es_today_pct, 4),
+                "spread_trend": spread_trend,
+                "source": "yfinance",
+                "age_s": 0,
+            }
+
+            logger.info(f"NQ/ES RS: NQ {nq_change_30m:+.3f}% vs ES {es_change_30m:+.3f}% "
+                         f"(RS={relative_strength:+.3f}%, {signal}, spread {spread_trend})")
+
+    except Exception as e:
+        logger.warning(f"NQ/ES relative strength fetch failed: {e}")
+
+    _cache.put("nq_es_rs", result)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Master Intelligence Function
 # ---------------------------------------------------------------------------
 async def get_full_intel() -> dict:
@@ -1169,12 +1279,14 @@ async def get_full_intel() -> dict:
     cnn_fg_task = asyncio.create_task(_safe_call(get_cnn_fear_greed, "cnn_fg"))
     congress_task = asyncio.create_task(_safe_call(get_congress_trades, "congress"))
     intermarket_task = asyncio.create_task(_safe_call(get_intermarket, "intermarket"))
+    nq_es_rs_task = asyncio.create_task(_safe_call(get_nq_es_relative_strength, "nq_es_rs"))
 
     (vix, news, calendar, context, trump, reddit, fred,
-     crypto_fg, dxy, bonds, putcall, cnn_fg, congress, intermarket) = await asyncio.gather(
+     crypto_fg, dxy, bonds, putcall, cnn_fg, congress, intermarket,
+     nq_es_rs) = await asyncio.gather(
         vix_task, news_task, cal_task, ctx_task, trump_task, reddit_task, fred_task,
         crypto_fg_task, dxy_task, bonds_task, putcall_task, cnn_fg_task,
-        congress_task, intermarket_task,
+        congress_task, intermarket_task, nq_es_rs_task,
     )
 
     elapsed = round(time.time() - start, 2)
@@ -1210,6 +1322,7 @@ async def get_full_intel() -> dict:
         "cnn_fear_greed": cnn_fg,
         "congress_trades": congress,
         "intermarket": intermarket,
+        "nq_es_relative_strength": nq_es_rs,
         "trade_ok": trade_ok,
         "restriction_reason": restriction_reason,
         "trump_warning": trump_warning,
@@ -1328,13 +1441,23 @@ async def _test():
     print(f"  Risk-On: {im.get('risk_on', 'N/A')}")
     print(f"  Risk-Off: {im.get('risk_off', 'N/A')}")
 
+    print("\n--- NQ/ES Relative Strength ---")
+    nq_es = await get_nq_es_relative_strength()
+    print(f"  NQ 30m: {nq_es.get('nq_change_30m', 'N/A')}%")
+    print(f"  ES 30m: {nq_es.get('es_change_30m', 'N/A')}%")
+    print(f"  Relative Strength: {nq_es.get('relative_strength', 'N/A')}%")
+    print(f"  Signal: {nq_es.get('signal', 'N/A')}")
+    print(f"  NQ Today: {nq_es.get('nq_today_pct', 'N/A')}%")
+    print(f"  ES Today: {nq_es.get('es_today_pct', 'N/A')}%")
+    print(f"  Spread Trend: {nq_es.get('spread_trend', 'N/A')}")
+
     print("\n--- Full Intel ---")
     intel = await get_full_intel()
     print(f"  Trade OK: {intel['trade_ok']}")
     print(f"  Restriction: {intel['restriction_reason']}")
     print(f"  Trump warning: {intel.get('trump_warning', 'None')}")
     print(f"  Sources: VIX + News + Calendar + Context + Trump + Reddit + FRED"
-          f" + CryptoFG + DXY + Bonds + PutCall + CNN_FG + Congress + Intermarket")
+          f" + CryptoFG + DXY + Bonds + PutCall + CNN_FG + Congress + Intermarket + NQ/ES_RS")
     print(f"  Fetch time: {intel['fetch_time_s']}s")
 
     print("\n" + "=" * 60)
