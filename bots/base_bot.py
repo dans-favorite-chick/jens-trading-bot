@@ -132,6 +132,9 @@ class BaseBot:
         # Start dashboard state pusher in background
         asyncio.ensure_future(self._dashboard_loop())
 
+        # Start news/momentum scanner in background (Phase 4+)
+        asyncio.ensure_future(self._news_scanner_loop())
+
         while True:
             try:
                 await self._connect_and_listen()
@@ -245,6 +248,19 @@ class BaseBot:
                             market_snap = self.aggregator.snapshot()
                             regime = self.session.get_current_regime()
                             recent = self.trade_memory.recent(5)
+
+                            # Quick news check — block trades during Tier 1 events
+                            try:
+                                from core.market_intel import get_economic_calendar
+                                cal = await get_economic_calendar()
+                                if cal.get("trade_restricted"):
+                                    logger.warning(f"[NEWS GATE] Trade blocked: "
+                                                    f"{cal.get('next_event', {}).get('name', 'event')} imminent")
+                                    self.last_rejection = f"News gate: {cal.get('next_event', {}).get('name')}"
+                                    self._pending_signal = None
+                                    continue
+                            except Exception:
+                                pass  # News check failure never blocks trading
                             verdict = await pretrade_filter.check(
                                 signal=signal.to_dict() if hasattr(signal, 'to_dict') else {
                                     "direction": signal.direction,
@@ -556,14 +572,46 @@ class BaseBot:
 
             logger.info(f"[EXIT] P&L=${trade['pnl_dollars']:.2f} reason={reason}")
 
+    # ─── News Scanner Background Loop ─────────────────────────────────
+    async def _news_scanner_loop(self):
+        """Poll for news alerts every 2 minutes. Non-blocking."""
+        while True:
+            try:
+                from core.news_scanner import NewsScanner
+                if not hasattr(self, '_news_scanner'):
+                    self._news_scanner = NewsScanner()
+                alerts = await self._news_scanner.scan()
+                if alerts:
+                    for alert in alerts[:3]:  # Top 3 alerts
+                        logger.info(f"[NEWS] {alert.get('type', '?')}: {alert.get('summary', '')[:80]}")
+                    self._latest_news_alerts = alerts
+            except ImportError:
+                pass  # Module not yet available
+            except Exception as e:
+                logger.debug(f"[NEWS] Scanner error: {e}")
+            await asyncio.sleep(120)  # Every 2 minutes
+
     # ─── Phase 4: AI Agent Runners ────────────────────────────────────
     async def _run_council(self, market: dict):
         """Run council gate in background. Non-blocking — errors logged only."""
         try:
             logger.info("[COUNCIL] Running 7-voter session bias vote...")
             recent = self.trade_memory.recent(10)
-            # Enrich recent trades with strategy performance for smarter voting
+
+            # Enrich market with strategy performance for smarter voting
             market["strategy_performance"] = self.tracker.get_all_summaries()
+
+            # Fetch live market intelligence (VIX, news, economic calendar)
+            try:
+                from core.market_intel import get_full_intel
+                intel = await get_full_intel()
+                market["intel"] = intel
+                logger.info(f"[COUNCIL] Intel loaded: VIX={intel.get('vix', 'N/A')}, "
+                             f"news_tier={intel.get('highest_tier', 'N/A')}")
+            except Exception as e:
+                logger.warning(f"[COUNCIL] Market intel unavailable: {e}")
+                market["intel"] = {}
+
             result = await council_gate.run_council(market, recent)
             self._council_result = council_to_dict(result)
             logger.info(f"[COUNCIL] Result: {result.bias} ({result.vote_count}) "

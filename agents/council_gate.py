@@ -119,6 +119,15 @@ TF Votes: {tf_bullish}/4 bullish, {tf_bearish}/4 bearish
 Current Regime: {regime}
 Bars Completed: {bars_1m} (1m), {bars_5m} (5m)
 
+## Market Intelligence
+VIX: {vix}
+News Tier: {news_tier} ({news_summary})
+Economic Calendar: {econ_events}
+Overnight Range: {overnight_range}
+
+## Strategy Performance (backtest + live history)
+{strategy_performance}
+
 ## Recent Trade Performance
 {recent_trades}
 
@@ -135,6 +144,10 @@ async def _run_voter(config: dict, market: dict, recent_trades_str: str) -> Vote
 
     try:
         tf_bias = market.get("tf_bias", {})
+        intel = market.get("intel", {})
+        strat_perf = market.get("strategy_performance", {})
+        strat_perf_str = json.dumps(strat_perf, indent=1, default=str)[:500] if strat_perf else "No history yet"
+
         prompt = VOTER_PROMPT_TEMPLATE.format(
             price=market.get("price", 0),
             vwap=market.get("vwap", 0),
@@ -157,6 +170,12 @@ async def _run_voter(config: dict, market: dict, recent_trades_str: str) -> Vote
             regime=market.get("regime", "UNKNOWN"),
             bars_1m=market.get("bars_1m", 0),
             bars_5m=market.get("bars_5m", 0),
+            vix=intel.get("vix", "N/A"),
+            news_tier=intel.get("highest_tier", "N/A"),
+            news_summary=intel.get("summary", "No news data")[:100],
+            econ_events=intel.get("next_event", "No upcoming events"),
+            overnight_range=intel.get("overnight_range", "N/A"),
+            strategy_performance=strat_perf_str,
             recent_trades=recent_trades_str,
         )
 
