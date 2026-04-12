@@ -38,6 +38,11 @@ from core.trade_memory import TradeMemory
 from core.history_logger import HistoryLogger
 from core.strategy_tracker import StrategyTracker
 from core import telegram_notifier as tg
+from core.cockpit import Cockpit
+from core.equity_tracker import EquityTracker
+from core.trade_clustering import TradeClustering
+from core.telegram_commands import TelegramCommands
+from core.position_scaler import PositionScaler
 from strategies.base_strategy import BaseStrategy, Signal
 
 # Phase 4: AI Agents (optional — failures never block trading)
@@ -76,6 +81,13 @@ class BaseBot:
         self.tracker = StrategyTracker()
         self.strategies: list[BaseStrategy] = []
 
+        # Phase 5: Cockpit, Equity, Clustering, Telegram Commands, Scaler
+        self.cockpit = Cockpit()
+        self.equity_tracker = EquityTracker()
+        self.trade_clustering = TradeClustering()
+        self.telegram_commands = TelegramCommands()
+        self.position_scaler = PositionScaler(base_account=1000.0)
+
         # State for dashboard
         self.status = "IDLE"
         self.last_signal: dict | None = None
@@ -91,6 +103,13 @@ class BaseBot:
         self._last_regime = None            # Track regime transitions
         self._filter_verdict = None         # Latest pre-trade filter verdict
         self._debrief_ran_today = False     # Only run once per session day
+
+        # Phase 5: Additional state
+        self._cockpit_result = None         # Latest cockpit grading
+        self._latest_intel = None           # Latest market intel (for TG commands)
+        self._clustering_result = None      # Latest clustering analysis
+        self._trades_since_cluster = 0      # Counter for clustering trigger
+        self._equity_recorded_today = False # Only record equity once per day
 
         # Register bar callback
         self.aggregator.on_bar(self._on_bar)
@@ -135,6 +154,9 @@ class BaseBot:
 
         # Start news/momentum scanner in background (Phase 4+)
         asyncio.ensure_future(self._news_scanner_loop())
+
+        # Phase 5: Start Telegram command listener
+        asyncio.ensure_future(self.telegram_commands.poll_commands(self))
 
         while True:
             try:
@@ -512,7 +534,7 @@ class BaseBot:
                      f"SL={stop_price:.2f} TP={target_price:.2f} "
                      f"risk=${risk_dollars} tier={tier} strat={signal.strategy}")
 
-        # Send trade command to bridge (bridge writes OIF)
+        # Send trade command to bridge (bridge writes OIF with OCO brackets)
         action = "ENTER_LONG" if signal.direction == "LONG" else "ENTER_SHORT"
         try:
             await ws.send(json.dumps({
@@ -520,6 +542,8 @@ class BaseBot:
                 "trade_id": tid,
                 "action": action,
                 "qty": contracts,
+                "stop_price": round(stop_price, 2),
+                "target_price": round(target_price, 2),
                 "reason": signal.reason,
             }))
         except Exception as e:
@@ -603,8 +627,21 @@ class BaseBot:
                 ))
             self.status = "SCANNING"
 
+            # Cancel OCO bracket orders before exit (NT8 needs clean state)
+            try:
+                await ws.send(json.dumps({
+                    "type": "trade",
+                    "trade_id": trade.get("trade_id", ""),
+                    "action": "CANCEL_ALL",
+                    "qty": 0,
+                    "reason": "cancel_oco_before_exit",
+                }))
+            except Exception:
+                pass  # Best effort — exit is more important
+
             await ws.send(json.dumps({
                 "type": "trade",
+                "trade_id": trade.get("trade_id", ""),
                 "action": "EXIT",
                 "qty": trade["contracts"],
                 "reason": reason,

@@ -95,6 +95,17 @@ class BridgeServer:
         self.ticks_forwarded = 0
         self.trades_executed = 0
 
+        # Live activity metrics
+        self.recent_tick_times: collections.deque = collections.deque(maxlen=100)
+        self.last_trade_time: float = 0.0
+        self.last_trade_action: str = ""
+
+        # DOM depth state (updated by TickStreamer dom messages)
+        self.dom_bid_stack: float = 0.0
+        self.dom_ask_stack: float = 0.0
+        self.dom_imbalance: float = 0.5
+        self.dom_last_update: float = 0.0
+
     # ─── Connection Events ──────────────────────────────────────────
     def _log_event(self, level: str, message: str):
         event = {
@@ -128,6 +139,13 @@ class BridgeServer:
                 if not message:
                     continue
 
+                # Detect stale WebSocket client sending HTTP upgrade headers
+                # (old MarketDataBroadcaster indicators still loaded on a chart)
+                if message.startswith(("GET ", "POST ", "HTTP/", "Host:", "Upgrade:",
+                                       "Connection:", "Sec-WebSocket")):
+                    logger.debug(f"WebSocket handshake on TCP port — old indicator still loaded? Ignoring.")
+                    continue
+
                 try:
                     data = json.loads(message)
                 except json.JSONDecodeError:
@@ -146,18 +164,29 @@ class BridgeServer:
                 elif msg_type == "tick":
                     self.nt8_last_tick_time = time.time()
                     self.ticks_received += 1
+                    self.recent_tick_times.append(time.time())
 
                     # Buffer for late-connecting bots
                     self.tick_buffer.append(data)
 
-                    # Fan out to all connected bots (still WebSocket)
+                    # Fan out to all connected bots
                     await self._broadcast_to_bots(json.dumps(data))
 
-                    # Log every 100th tick to avoid spam
-                    if self.ticks_received % 100 == 0:
-                        price = data.get("price", "?")
+                    # Log every 1000th tick to avoid spam
+                    if self.ticks_received % 1000 == 0:
+                        price  = data.get("price", "?")
                         n_bots = len(self.bot_connections)
-                        logger.info(f"[TICK #{self.ticks_received}] price={price} bots={n_bots}")
+                        logger.info(f"[TICK #{self.ticks_received:,}] price={price} bots={n_bots}")
+
+                elif msg_type == "dom":
+                    # DOM depth snapshot from TickStreamer (throttled ~500ms)
+                    self.dom_bid_stack = float(data.get("bid_stack", 0))
+                    self.dom_ask_stack = float(data.get("ask_stack", 0))
+                    total = self.dom_bid_stack + self.dom_ask_stack
+                    self.dom_imbalance = (self.dom_bid_stack / total) if total > 0 else 0.5
+                    self.dom_last_update = time.time()
+                    # Forward to bots so aggregator can track it
+                    await self._broadcast_to_bots(json.dumps(data))
 
         except asyncio.IncompleteReadError:
             pass
@@ -250,13 +279,16 @@ class BridgeServer:
         qty = data.get("qty", 1)
         stop_price = data.get("stop_price")
         target_price = data.get("target_price")
+        trade_id = data.get("trade_id", "")
         reason = data.get("reason", "")
 
-        trade_log.info(f"[TRADE CMD] bot={bot_name} action={action} qty={qty} "
+        trade_log.info(f"[TRADE CMD:{trade_id}] bot={bot_name} action={action} qty={qty} "
                        f"stop={stop_price} target={target_price} reason={reason}")
 
-        paths = write_oif(action, qty, stop_price, target_price)
+        paths = write_oif(action, qty, stop_price, target_price, trade_id=trade_id)
         self.trades_executed += 1
+        self.last_trade_time = time.time()
+        self.last_trade_action = action
 
         # Wait for fill confirmation
         await asyncio.sleep(1.5)
@@ -278,6 +310,10 @@ class BridgeServer:
             pass
 
     # ─── Health Check ───────────────────────────────────────────────
+    def _tick_rate_10s(self) -> float:
+        now = time.time()
+        return sum(1 for t in self.recent_tick_times if now - t <= 10) / 10.0
+
     def get_health(self) -> dict:
         now = time.time()
         nt8_age = now - self.nt8_last_tick_time if self.nt8_last_tick_time > 0 else -1
@@ -300,6 +336,13 @@ class BridgeServer:
             "ticks_forwarded": self.ticks_forwarded,
             "trades_executed": self.trades_executed,
             "uptime_s": round(now - self.start_time, 0),
+            "tick_rate_10s": round(self._tick_rate_10s(), 1),
+            "last_trade_ago_s": round(now - self.last_trade_time, 0) if self.last_trade_time else None,
+            "last_trade_action": self.last_trade_action,
+            "dom_bid_stack": self.dom_bid_stack,
+            "dom_ask_stack": self.dom_ask_stack,
+            "dom_imbalance": round(self.dom_imbalance, 3),
+            "dom_age_s": round(now - self.dom_last_update, 1) if self.dom_last_update else None,
             "connection_events": self.connection_events[-20:],
         }
 
