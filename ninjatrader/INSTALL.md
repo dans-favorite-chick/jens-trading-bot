@@ -27,8 +27,14 @@ In the Python bridge terminal, you should see:
 
 In NinjaTrader's Output window (Tools > Output Window):
 ```
-TickStreamer: Connected to Python bridge at ws://127.0.0.1:8765
+TickStreamer: Connected to Python bridge at 127.0.0.1:8765 (TCP)
 ```
+
+## Connection Protocol
+- **TCP** (raw socket, NOT WebSocket) on port 8765
+- Newline-delimited JSON messages
+- Heartbeat every 3 seconds
+- Python bridge is the SERVER, NT8 indicator connects OUT as client
 
 ## Troubleshooting
 
@@ -46,6 +52,12 @@ TickStreamer: Connected to Python bridge at ws://127.0.0.1:8765
 4. Start bot(s): `python bots/prod_bot.py`
 
 ## File-Based Fallback (Plan B)
-If WebSocket is unreliable, also install `MarketDataExporter.cs` as a second indicator.
-It writes ticks to `C:\temp\mnq_data.json`. The bridge auto-switches to file polling
-if WebSocket goes stale for >10 seconds.
+TickStreamer writes to `C:\temp\mnq_data.json` every 1 second as a backup.
+The bridge auto-switches to file polling if TCP goes stale for >30 seconds
+(configurable via `DISCONNECT_THRESHOLD_S` in `config/settings.py`).
+
+## Historical Data Export (for Backtesting)
+Also install `HistoricalExporter.cs` to export 1-min bar data to CSV:
+1. Same install process as TickStreamer (New Indicator, paste, F5)
+2. Add to a MNQM6 1-min chart with 90+ days of data loaded
+3. CSV writes automatically to `C:\temp\mnq_historical.csv`
