@@ -235,13 +235,13 @@ def api_set_profile():
     """Set aggression profile (Safe/Balanced/Aggressive)."""
     data = request.get_json(silent=True) or {}
     profile = data.get("profile", "balanced")
-    # Store for bots to pick up
     with _state_lock:
-        _state.setdefault("_commands", []).append({
-            "type": "set_profile",
-            "profile": profile,
-            "ts": time.time(),
-        })
+        for _bn in ("prod", "lab"):
+            _state.setdefault(f"_commands_{_bn}", []).append({
+                "type": "set_profile",
+                "profile": profile,
+                "ts": time.time(),
+            })
     logger.info(f"Profile set: {profile}")
     return jsonify({"ok": True, "profile": profile})
 
@@ -252,12 +252,13 @@ def api_toggle_strategy():
     name = data.get("name", "")
     enabled = data.get("enabled", True)
     with _state_lock:
-        _state.setdefault("_commands", []).append({
-            "type": "toggle_strategy",
-            "name": name,
-            "enabled": enabled,
-            "ts": time.time(),
-        })
+        for _bn in ("prod", "lab"):
+            _state.setdefault(f"_commands_{_bn}", []).append({
+                "type": "toggle_strategy",
+                "name": name,
+                "enabled": enabled,
+                "ts": time.time(),
+            })
     return jsonify({"ok": True})
 
 
@@ -265,11 +266,12 @@ def api_toggle_strategy():
 def api_update_params():
     data = request.get_json(silent=True) or {}
     with _state_lock:
-        _state.setdefault("_commands", []).append({
-            "type": "update_params",
-            "params": data,
-            "ts": time.time(),
-        })
+        for _bn in ("prod", "lab"):
+            _state.setdefault(f"_commands_{_bn}", []).append({
+                "type": "update_params",
+                "params": data,
+                "ts": time.time(),
+            })
     return jsonify({"ok": True})
 
 
@@ -284,19 +286,27 @@ def api_save_config():
 def api_test_trade():
     data = request.get_json(silent=True) or {}
     with _state_lock:
-        _state.setdefault("_commands", []).append({
-            "type": "test_trade",
-            "action": data.get("action", "ENTER_LONG"),
-            "ts": time.time(),
-        })
+        for _bn in ("prod", "lab"):
+            _state.setdefault(f"_commands_{_bn}", []).append({
+                "type": "test_trade",
+                "action": data.get("action", "ENTER_LONG"),
+                "ts": time.time(),
+            })
     return jsonify({"ok": True})
 
 
 @app.route("/api/commands")
 def api_get_commands():
-    """Bots poll this to get pending commands from dashboard."""
+    """Bots poll this to get pending commands. Per-bot queues prevent race conditions."""
+    bot_name = request.args.get("bot", "")
     with _state_lock:
-        cmds = _state.pop("_commands", [])
+        if bot_name:
+            # Per-bot queue: each bot gets its own copy
+            key = f"_commands_{bot_name}"
+            cmds = _state.pop(key, [])
+        else:
+            # Legacy fallback: drain shared queue
+            cmds = _state.pop("_commands", [])
     return jsonify(cmds)
 
 

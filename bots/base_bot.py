@@ -172,7 +172,7 @@ class BaseBot:
     async def _dashboard_loop(self):
         """Push bot state to dashboard every 2s and poll for commands."""
         url_state = f"http://127.0.0.1:{DASHBOARD_PORT}/api/bot-state"
-        url_cmds = f"http://127.0.0.1:{DASHBOARD_PORT}/api/commands"
+        url_cmds = f"http://127.0.0.1:{DASHBOARD_PORT}/api/commands?bot={self.bot_name}"
 
         while True:
             try:
@@ -494,6 +494,17 @@ class BaseBot:
             try:
                 signal = strat.evaluate(market, bars_5m, bars_1m, session_info)
                 if signal:
+                    # Enforce session min_confluence_override
+                    conf_override = self.session.get_confluence_override()
+                    if conf_override and signal.confidence < conf_override * 10:
+                        logger.info(f"  [{strat.name}] BLOCKED by regime confluence override "
+                                     f"({signal.confidence:.0f} < {conf_override * 10:.0f})")
+                        self._last_eval["strategies"].append({
+                            "name": strat.name, "result": "BLOCKED_REGIME_CONF",
+                            "reason": f"confluence {signal.confidence:.0f} < regime min {conf_override * 10:.0f}",
+                        })
+                        continue
+
                     logger.info(f"  [{strat.name}] SIGNAL: {signal.direction} conf={signal.confidence:.0f} "
                                  f"score={signal.entry_score:.0f} — {signal.reason}")
                     self._last_eval["strategies"].append({
@@ -516,12 +527,12 @@ class BaseBot:
         if best_signal:
             logger.info(f"[TRADE QUEUED:{best_signal.trade_id}] {best_signal.direction} "
                          f"via {best_signal.strategy} conf={best_signal.confidence:.0f}")
-            # Track signal for AI learning
+            # Track signal as GENERATED (not taken yet — fill may fail or filter may block)
             self.tracker.record_signal(
                 strategy=best_signal.strategy,
                 direction=best_signal.direction,
                 confidence=best_signal.confidence,
-                taken=True,
+                taken=False,  # Will be updated to True only after confirmed fill
                 regime=session_info.get("regime", "UNKNOWN"),
                 trade_id=best_signal.trade_id,
             )
@@ -563,6 +574,12 @@ class BaseBot:
             self.last_rejection = f"Risk tier SKIP (score={signal.entry_score})"
             return
 
+        # Apply session regime size_multiplier
+        size_mult = self.session.get_size_multiplier()
+        if size_mult < 1.0:
+            risk_dollars *= size_mult
+            logger.info(f"[{tid}] Regime size_mult={size_mult:.1f}x → risk=${risk_dollars:.2f}")
+
         # Phase 4: CAUTION verdict = 50% size reduction
         if (self._filter_verdict and self._filter_verdict.get("action") == "CAUTION"):
             risk_dollars *= 0.5
@@ -580,6 +597,13 @@ class BaseBot:
             regime=regime,
         )
         contracts = min(contracts, max_contracts)
+
+        # Reject 0-contract entries — never send to bridge
+        if contracts < 1:
+            logger.warning(f"[{tid}] Computed 0 contracts (risk=${risk_dollars:.2f}, "
+                            f"stop={stop_ticks}t) — skipping entry")
+            self.last_rejection = f"0 contracts computed (risk too low for stop distance)"
+            return
 
         # Calculate prices
         tick_value = TICK_SIZE
@@ -622,11 +646,18 @@ class BaseBot:
             return
 
         if fill_result["status"] == "TIMEOUT":
-            # In sim mode, assume filled (NT8 sim doesn't always write fill files)
             if not LIVE_TRADING:
+                # Sim mode: assume filled (NT8 sim doesn't always write fill files)
                 logger.info(f"[{tid}] No fill file (sim mode) — assuming filled")
             else:
-                logger.warning(f"[{tid}] Fill timeout in LIVE mode — proceeding cautiously")
+                # LIVE mode: DO NOT proceed without fill confirmation
+                logger.error(f"[{tid}] Fill timeout in LIVE mode — ABORTING entry. "
+                              f"Check NT8 manually for order status.")
+                self.last_rejection = f"Fill timeout in LIVE mode — entry aborted"
+                return
+
+        # Inject regime into market snapshot for proper analytics tracking
+        market["regime"] = self.session.get_current_regime()
 
         # NOW open position locally (after fill confirmation)
         self.positions.open_position(
@@ -644,6 +675,13 @@ class BaseBot:
 
         logger.info(f"[FILLED:{tid}] {signal.direction} {contracts}x @ {price:.2f} "
                      f"fill_latency={fill_result.get('latency_ms', 0):.0f}ms")
+
+        # NOW mark signal as actually taken (after confirmed fill)
+        self.tracker.record_signal(
+            strategy=signal.strategy, direction=signal.direction,
+            confidence=signal.confidence, taken=True,
+            regime=self.session.get_current_regime(), trade_id=tid,
+        )
 
         self.history.log_entry(signal, price, contracts, stop_price,
                                target_price, risk_dollars, tier, market)

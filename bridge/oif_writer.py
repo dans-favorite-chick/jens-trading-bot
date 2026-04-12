@@ -39,7 +39,13 @@ def write_oif(action: str, qty: int = 1, stop_price: float = None,
     """
     global _oif_counter
     action = action.upper().strip()
-    qty = max(1, int(qty))
+    qty = int(qty)
+    # Don't silently coerce 0 → 1. Caller must validate qty >= 1 for entries.
+    # For CANCEL_ALL and EXIT, qty doesn't matter.
+    if qty < 1 and action not in ("CANCEL_ALL", "CANCELALLORDERS", "EXIT",
+                                   "EXIT_ALL", "CLOSE", "CLOSEPOSITION"):
+        logger.error(f"[OIF:{trade_id or 'N/A'}] Refusing to write entry with qty={qty}")
+        return []
     written = []
 
     cmds = []
@@ -72,7 +78,9 @@ def write_oif(action: str, qty: int = 1, stop_price: float = None,
 
     for cmd in cmds:
         _oif_counter += 1
-        filepath = os.path.join(OIF_INCOMING, f"oif{_oif_counter}.txt")
+        # Include trade_id in filename for fill correlation
+        tag = f"_{trade_id}" if trade_id else ""
+        filepath = os.path.join(OIF_INCOMING, f"oif{_oif_counter}{tag}.txt")
         try:
             with open(filepath, "w") as f:
                 f.write(cmd)
@@ -138,11 +146,22 @@ async def wait_for_fill(trade_id: str, timeout_s: float = 5.0,
         fills = check_fills(since_time=check_start - 1)  # 1s buffer
         for fill in fills:
             content = fill["content"].upper()
+            filename = fill.get("file", "")
+
+            # Correlate: only match fills for THIS trade_id if possible
+            if trade_id and trade_id in filename:
+                # Exact match on trade_id in filename
+                pass  # proceed to check content
+            elif trade_id and trade_id not in filename:
+                # Check if this is a NEW file (within our time window) as fallback
+                if fill.get("mtime", 0) < check_start:
+                    continue  # Skip old fills from previous trades
+
             if "REJECT" in content or "ERROR" in content:
                 logger.error(f"[OIF:{trade_id}] ORDER REJECTED: {fill['content']}")
                 return {"status": "REJECTED", "content": fill["content"],
                         "latency_ms": (time.time() - start) * 1000}
-            if "FILLED" in content or "PLACE" in content:
+            if "FILLED" in content:
                 latency = (time.time() - start) * 1000
                 logger.info(f"[OIF:{trade_id}] Fill confirmed in {latency:.0f}ms: {fill['content']}")
                 return {"status": "FILLED", "content": fill["content"],
