@@ -103,6 +103,8 @@ class BaseBot:
         self._last_regime = None            # Track regime transitions
         self._filter_verdict = None         # Latest pre-trade filter verdict
         self._debrief_ran_today = False     # Only run once per session day
+        self._pending_exit_reason = None    # Market close auto-exit
+        self._current_date = None           # For daily reset detection
 
         # Phase 5: Additional state
         self._cockpit_result = None         # Latest cockpit grading
@@ -256,7 +258,15 @@ class BaseBot:
                         self._pending_exit_reason = None
                         await self._exit_trade(ws, price, reason)
                         continue
-                    exit_reason = self.positions.check_exits(price)
+                    # Get max hold time from the active strategy's config
+                    _max_hold = None
+                    if self.positions.position:
+                        _strat_name = self.positions.position.strategy
+                        for _s in self.strategies:
+                            if _s.name == _strat_name:
+                                _max_hold = _s.config.get("max_hold_min")
+                                break
+                    exit_reason = self.positions.check_exits(price, max_hold_min=_max_hold)
                     if exit_reason:
                         await self._exit_trade(ws, price, exit_reason)
 
@@ -327,6 +337,15 @@ class BaseBot:
         # Evaluate on 1m AND 5m bar completions
         if timeframe not in ("1m", "5m"):
             return
+
+        # Daily reset detection — reset all daily state at midnight
+        today = datetime.now().strftime("%Y-%m-%d")
+        if self._current_date and today != self._current_date:
+            logger.info(f"[DAILY RESET] New day: {today}")
+            self.risk.reset_daily()
+            self._council_ran_today = False
+            self._debrief_ran_today = False
+        self._current_date = today
 
         # Update session regime
         regime = self.session.get_current_regime()
@@ -428,19 +447,18 @@ class BaseBot:
             logger.info(f"[WARMUP] {reason}")
             return
 
+        # Get market state FIRST (needed by risk gate and everything below)
+        market = self.aggregator.snapshot()
+
         # Risk gate (pass ATR as volatility proxy since VIX requires external feed)
-        # ATR > 200 maps to VIX_EXTREME behavior via volatility regime
         atr_5m = market.get("atr_5m", 0)
-        vix_proxy = min(50, atr_5m / 4) if atr_5m > 0 else 0  # ATR→VIX approximation
+        vix_proxy = min(50, atr_5m / 4) if atr_5m > 0 else 0
         can_trade, reason = self.risk.can_trade(vix=vix_proxy)
         if not can_trade:
             self.last_rejection = reason
             self._last_eval["risk_blocked"] = reason
             logger.debug(f"[RISK GATE] Blocked: {reason}")
             return
-
-        # Get market state
-        market = self.aggregator.snapshot()
 
         logger.info(f"[EVAL] price={market.get('price',0):.2f} "
                      f"vwap={market.get('vwap',0):.2f} ema9={market.get('ema9',0):.2f} "
@@ -695,13 +713,23 @@ class BaseBot:
             except Exception:
                 pass  # Best effort — exit is more important
 
-            await ws.send(json.dumps({
-                "type": "trade",
-                "trade_id": trade.get("trade_id", ""),
-                "action": "EXIT",
-                "qty": trade["contracts"],
-                "reason": reason,
-            }))
+            try:
+                await ws.send(json.dumps({
+                    "type": "trade",
+                    "trade_id": trade.get("trade_id", ""),
+                    "action": "EXIT",
+                    "qty": trade["contracts"],
+                    "reason": reason,
+                }))
+            except Exception as e:
+                # CRITICAL: WS send failed but position is closed in Python.
+                # Write OIF directly as fallback to ensure NT8 exits too.
+                logger.error(f"[EXIT] WS send failed: {e} — writing OIF fallback")
+                try:
+                    from bridge.oif_writer import write_oif
+                    write_oif("EXIT", trade["contracts"], trade_id=trade.get("trade_id", ""))
+                except Exception as e2:
+                    logger.error(f"[EXIT] OIF fallback ALSO failed: {e2} — MANUAL EXIT NEEDED")
 
             logger.info(f"[EXIT] P&L=${trade['pnl_dollars']:.2f} reason={reason}")
 

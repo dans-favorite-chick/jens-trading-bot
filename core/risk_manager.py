@@ -72,10 +72,10 @@ class RiskManager:
         if self.state.killed:
             return False, f"Kill switch: {self.state.kill_reason}"
 
-        if abs(self.state.daily_pnl) >= self._daily_limit:
+        if self.state.daily_pnl <= -self._daily_limit:
             return False, f"Daily loss limit hit (${self.state.daily_pnl:.2f} / -${self._daily_limit:.2f})"
 
-        if abs(self.state.weekly_pnl) >= WEEKLY_LOSS_LIMIT:
+        if self.state.weekly_pnl <= -WEEKLY_LOSS_LIMIT:
             return False, f"Weekly loss limit hit (${self.state.weekly_pnl:.2f} / -${WEEKLY_LOSS_LIMIT:.2f})"
 
         if self.state.trades_today >= self._max_trades:

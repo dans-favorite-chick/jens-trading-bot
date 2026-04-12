@@ -18,7 +18,8 @@ from config.settings import OIF_INCOMING, OIF_OUTGOING, ACCOUNT, INSTRUMENT
 
 logger = logging.getLogger("OIF")
 
-_oif_counter = 0
+import uuid as _uuid
+_oif_counter = int(time.time() * 1000) % 1000000  # Start from timestamp to avoid restart collisions
 
 
 def write_oif(action: str, qty: int = 1, stop_price: float = None,
@@ -45,15 +46,16 @@ def write_oif(action: str, qty: int = 1, stop_price: float = None,
 
     if action in ("ENTER_LONG", "BUY"):
         cmds.append(f"PLACE;{ACCOUNT};{INSTRUMENT};BUY;{qty};MARKET;0;0;DAY;;;;\n")
-        # Phase 2: OCO bracket orders
+        # OCO bracket orders: stop + target protect position in NT8
+        # OIF format: PLACE;Acct;Inst;Action;Qty;Type;LimitPrice;StopPrice;TIF
         if stop_price and target_price:
-            cmds.append(f"PLACE;{ACCOUNT};{INSTRUMENT};SELL;{qty};STOP;{stop_price:.2f};0;DAY;;;;\n")
+            cmds.append(f"PLACE;{ACCOUNT};{INSTRUMENT};SELL;{qty};STOP;0;{stop_price:.2f};DAY;;;;\n")
             cmds.append(f"PLACE;{ACCOUNT};{INSTRUMENT};SELL;{qty};LIMIT;{target_price:.2f};0;DAY;;;;\n")
 
     elif action in ("ENTER_SHORT", "SELL"):
         cmds.append(f"PLACE;{ACCOUNT};{INSTRUMENT};SELL;{qty};MARKET;0;0;DAY;;;;\n")
         if stop_price and target_price:
-            cmds.append(f"PLACE;{ACCOUNT};{INSTRUMENT};BUY;{qty};STOP;{stop_price:.2f};0;DAY;;;;\n")
+            cmds.append(f"PLACE;{ACCOUNT};{INSTRUMENT};BUY;{qty};STOP;0;{stop_price:.2f};DAY;;;;\n")
             cmds.append(f"PLACE;{ACCOUNT};{INSTRUMENT};BUY;{qty};LIMIT;{target_price:.2f};0;DAY;;;;\n")
 
     elif action in ("EXIT", "EXIT_ALL", "CLOSE", "CLOSEPOSITION"):

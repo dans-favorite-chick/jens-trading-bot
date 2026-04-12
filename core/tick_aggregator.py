@@ -104,10 +104,26 @@ class TickAggregator:
         self._vwap_day = None
         self.vwap = 0.0
 
-        # CVD (Cumulative Volume Delta)
-        self._last_price = None
+        # CVD (Cumulative Volume Delta) — real ask/bid classification
+        # Each tick: price >= ask → buy aggressor, price <= bid → sell aggressor, else split
         self._cvd_session = 0.0
         self.cvd = 0.0
+
+        # Per-5m-bar tick delta accumulators (reset on each 5m bar close)
+        self._bar_buy_vol: float = 0.0
+        self._bar_sell_vol: float = 0.0
+        # Completed bar values (available after each 5m close)
+        self.bar_buy_vol: float = 0.0
+        self.bar_sell_vol: float = 0.0
+        self.bar_delta: float = 0.0   # bar_buy_vol - bar_sell_vol
+
+        # DOM depth state (updated via process_dom() from bridge)
+        self.dom_bid_stack: float = 0.0
+        self.dom_ask_stack: float = 0.0
+        self.dom_imbalance: float = 0.5   # bid/(bid+ask)
+        self.dom_bid_heavy: bool = False   # imbalance > 0.60
+        self.dom_ask_heavy: bool = False   # imbalance < 0.40
+        self.dom_last_update: float = 0.0
 
         # Multi-TF bias votes
         self.tf_bias = {"1m": "NEUTRAL", "5m": "NEUTRAL", "15m": "NEUTRAL", "60m": "NEUTRAL"}
@@ -151,27 +167,46 @@ class TickAggregator:
         except (ValueError, TypeError):
             ts = time.time()
 
+        prev_price = self.last_price  # Save BEFORE updating for CVD fallback
         self.last_price = price
         self.last_bid = bid
         self.last_ask = ask
         self.tick_count += 1
 
-        # ── CVD ─────────────────────────────────────────────────────
-        if self._last_price is not None:
-            if price > self._last_price:
-                self._cvd_session += vol  # uptick = buying
-            elif price < self._last_price:
-                self._cvd_session -= vol  # downtick = selling
-        self._last_price = price
+        # ── CVD — real ask/bid tick classification ───────────────────
+        # TickStreamer sends bid/ask on every tick so we can classify precisely:
+        #   price >= ask  → buy aggressor (lifted the offer)
+        #   price <= bid  → sell aggressor (hit the bid)
+        #   else          → mid-market, split 50/50
+        if bid > 0 and ask > 0:
+            if price >= ask:
+                buy_vol, sell_vol = vol, 0
+            elif price <= bid:
+                buy_vol, sell_vol = 0, vol
+            else:
+                buy_vol = vol * 0.5
+                sell_vol = vol * 0.5
+        else:
+            # Fallback when bid/ask not available: use price direction vs PREVIOUS price
+            buy_vol = vol if prev_price and price > prev_price else 0
+            sell_vol = vol if prev_price and price < prev_price else 0
+
+        self._cvd_session += buy_vol - sell_vol
         self.cvd = self._cvd_session
+
+        # Accumulate into current 5m bar delta
+        self._bar_buy_vol  += buy_vol
+        self._bar_sell_vol += sell_vol
 
         # ── VWAP ────────────────────────────────────────────────────
         today = datetime.fromtimestamp(ts).date()
         if self._vwap_day != today:
-            self._vwap_cum_pv = 0.0
+            self._vwap_cum_pv  = 0.0
             self._vwap_cum_vol = 0
-            self._cvd_session = 0.0
-            self._vwap_day = today
+            self._cvd_session  = 0.0
+            self._bar_buy_vol  = 0.0
+            self._bar_sell_vol = 0.0
+            self._vwap_day     = today
 
         typical = (price + (bid if bid > 0 else price) + (ask if ask > 0 else price)) / 3.0
         self._vwap_cum_pv += typical * vol
@@ -190,6 +225,16 @@ class TickAggregator:
 
         return self.snapshot()
 
+    def process_dom(self, dom: dict):
+        """Update DOM depth state from a bridge dom message."""
+        self.dom_bid_stack = float(dom.get("bid_stack", 0))
+        self.dom_ask_stack = float(dom.get("ask_stack", 0))
+        total = self.dom_bid_stack + self.dom_ask_stack
+        self.dom_imbalance = (self.dom_bid_stack / total) if total > 0 else 0.5
+        self.dom_bid_heavy = self.dom_imbalance > 0.60
+        self.dom_ask_heavy = self.dom_imbalance < 0.40
+        self.dom_last_update = time.time()
+
     def _on_bar_complete(self, tf: str, bar: Bar):
         """Update indicators when a bar completes."""
         # ── ATR ─────────────────────────────────────────────────────
@@ -197,6 +242,14 @@ class TickAggregator:
         self._tr_history[tf].append(tr)
         if len(self._tr_history[tf]) >= 2:
             self.atr[tf] = sum(self._tr_history[tf]) / len(self._tr_history[tf])
+
+        # ── Per-bar tick delta (5m only) ─────────────────────────────
+        if tf == "5m":
+            self.bar_buy_vol  = self._bar_buy_vol
+            self.bar_sell_vol = self._bar_sell_vol
+            self.bar_delta    = self._bar_buy_vol - self._bar_sell_vol
+            self._bar_buy_vol  = 0.0
+            self._bar_sell_vol = 0.0
 
         # ── EMA 9/21 (5m only) ──────────────────────────────────────
         if tf == "5m":
@@ -233,7 +286,9 @@ class TickAggregator:
             try:
                 cb(tf, bar)
             except Exception as e:
-                pass
+                import logging as _logging
+                _logging.getLogger("TickAggregator").error(
+                    f"Bar callback error on {tf} bar: {e}", exc_info=True)
 
     def _get_builder(self, tf: str) -> BarBuilder:
         return {"1m": self.bars_1m, "5m": self.bars_5m,
@@ -265,4 +320,17 @@ class TickAggregator:
             "bars_5m": self.bars_5m.bar_count,
             "bars_15m": self.bars_15m.bar_count,
             "bars_60m": self.bars_60m.bar_count,
+            # ── Real tick CVD fields ─────────────────────────────────
+            "bar_buy_vol":  round(self.bar_buy_vol, 0),
+            "bar_sell_vol": round(self.bar_sell_vol, 0),
+            "bar_delta":    round(self.bar_delta, 0),
+            "cvd_method":   "tick",
+            # ── DOM depth fields ─────────────────────────────────────
+            "dom_bid_stack": round(self.dom_bid_stack, 0),
+            "dom_ask_stack": round(self.dom_ask_stack, 0),
+            "dom_imbalance": round(self.dom_imbalance, 3),
+            "dom_bid_heavy": self.dom_bid_heavy,
+            "dom_ask_heavy": self.dom_ask_heavy,
+            "dom_depth":     round(self.dom_bid_stack, 0),   # backward compat
+            "regime":        None,   # set by session_manager, placeholder here
         }
