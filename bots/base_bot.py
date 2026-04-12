@@ -43,6 +43,13 @@ from core.equity_tracker import EquityTracker
 from core.trade_clustering import TradeClustering
 from core.telegram_commands import TelegramCommands
 from core.position_scaler import PositionScaler
+from core.expectancy_engine import ExpectancyEngine
+from core.no_trade_fingerprint import NoTradeFingerprint
+from core.regime_transitions import RegimeTransitionDetector
+from core.microstructure_filter import MicrostructureFilter
+from core.crowding_detector import CrowdingDetector
+from core.counter_edge import CounterEdgeEngine
+from core.execution_quality import ExecutionQuality
 from strategies.base_strategy import BaseStrategy, Signal
 
 # Phase 4: AI Agents (optional — failures never block trading)
@@ -87,6 +94,11 @@ class BaseBot:
         self.trade_clustering = TradeClustering()
         self.telegram_commands = TelegramCommands()
         self.position_scaler = PositionScaler(base_account=1000.0)
+
+        # Phase 6: Deep learning modules
+        self.expectancy = ExpectancyEngine()
+        self.no_trade_fp = NoTradeFingerprint()
+        self.regime_transitions = RegimeTransitionDetector()
 
         # State for dashboard
         self.status = "IDLE"
@@ -267,6 +279,8 @@ class BaseBot:
                 # Check position exits on every tick
                 if not self.positions.is_flat:
                     price = snapshot.get("price", 0)
+                    # Phase 6: Track MAE/MFE on every tick
+                    self.expectancy.update_tick(price)
                     # Market close auto-exit
                     if hasattr(self, '_pending_exit_reason') and self._pending_exit_reason:
                         reason = self._pending_exit_reason
@@ -422,6 +436,12 @@ class BaseBot:
                 logger.warning(f"[MARKET CLOSE] Auto-exiting position before session end")
                 self._pending_exit_reason = "market_close_auto"
 
+        # Phase 6: Check regime transitions
+        transition = self.regime_transitions.check_transition(regime)
+        if transition:
+            logger.info(f"[REGIME SHIFT] {transition['from']} -> {transition['to']} "
+                         f"high_value={transition.get('is_high_value', False)}")
+
         self._last_regime = regime
 
         # Run strategy pipeline (async-safe: store signal for main loop)
@@ -539,6 +559,29 @@ class BaseBot:
                 self._last_eval["strategies"].append({"name": strat.name, "result": "ERROR", "reason": str(e)})
 
         if best_signal:
+            # Phase 6: Apply regime transition bonus to best signal's confidence
+            regime = session_info.get("regime", "UNKNOWN")
+            transition_bonus = self.regime_transitions.get_transition_bonus(regime)
+            if transition_bonus.get("active"):
+                bonus = transition_bonus["bonus_score"]
+                best_signal.confidence = min(100, best_signal.confidence + bonus)
+                logger.info(f"[TRANSITION BONUS] +{bonus} confidence -> {best_signal.confidence:.0f} "
+                             f"({transition_bonus['description']})")
+                self._last_eval["transition_bonus"] = transition_bonus
+
+            # Phase 6: No-trade fingerprint risk check (advisory only)
+            fp_result = self.no_trade_fp.get_risk_score(
+                market=market,
+                session_info=session_info,
+                signal=best_signal,
+                trade_count_today=self.risk.state.trades_today,
+            )
+            self._last_eval["fingerprint"] = fp_result
+            if fp_result["risk_score"] > 0:
+                logger.info(f"[FINGERPRINT] Risk={fp_result['risk_score']} "
+                             f"({fp_result['recommendation']}) "
+                             f"matches={len(fp_result['matching_fingerprints'])}")
+
             logger.info(f"[TRADE QUEUED:{best_signal.trade_id}] {best_signal.direction} "
                          f"via {best_signal.strategy} conf={best_signal.confidence:.0f}")
             # Track signal as GENERATED (not taken yet — fill may fail or filter may block)
@@ -593,6 +636,15 @@ class BaseBot:
         if size_mult < 1.0:
             risk_dollars *= size_mult
             logger.info(f"[{tid}] Regime size_mult={size_mult:.1f}x → risk=${risk_dollars:.2f}")
+
+        # Phase 6: Apply regime transition size boost
+        transition_bonus = self.regime_transitions.get_transition_bonus(regime)
+        if transition_bonus.get("active") and transition_bonus["size_boost"] != 1.0:
+            old_risk = risk_dollars
+            risk_dollars *= transition_bonus["size_boost"]
+            logger.info(f"[{tid}:TRANSITION] size_boost={transition_bonus['size_boost']:.1f}x "
+                         f"→ risk ${old_risk:.2f} → ${risk_dollars:.2f} "
+                         f"({transition_bonus['description']})")
 
         # Phase 4: CAUTION verdict = 50% size reduction
         if (self._filter_verdict and self._filter_verdict.get("action") == "CAUTION"):
@@ -687,6 +739,21 @@ class BaseBot:
         )
         self.status = "IN_TRADE"
 
+        # Phase 6: Start expectancy tracking
+        self.expectancy.start_tracking(
+            trade_id=tid,
+            direction=signal.direction,
+            entry_price=price,
+            signal_price=market.get("price", price),  # Price at signal time
+            stop_price=stop_price,
+            target_price=target_price,
+            strategy=signal.strategy,
+            regime=self.session.get_current_regime(),
+        )
+
+        # Phase 6: Consume transition bonus if active
+        self.regime_transitions.mark_signal_used()
+
         logger.info(f"[FILLED:{tid}] {signal.direction} {contracts}x @ {price:.2f} "
                      f"fill_latency={fill_result.get('latency_ms', 0):.0f}ms")
 
@@ -756,6 +823,17 @@ class BaseBot:
             self.trade_memory.record(trade)
             self.tracker.record_trade(trade)
             self.history.log_exit(trade, self.aggregator.snapshot())
+
+            # Phase 6: Close expectancy tracking
+            exp_analysis = self.expectancy.close_trade(
+                exit_price=price,
+                pnl_ticks=trade["pnl_ticks"],
+                result=trade["result"],
+            )
+
+            # Phase 6: Learn fingerprint from losses
+            if trade["result"] == "LOSS":
+                self.no_trade_fp.learn_from_trade(trade, self.aggregator.snapshot())
 
             asyncio.ensure_future(tg.notify_exit(
                 trade_id=trade.get("trade_id", ""),
@@ -877,6 +955,10 @@ class BaseBot:
             "cockpit": self.cockpit.to_dict(self._cockpit_result),
             "equity": self.equity_tracker.to_dict(),
             "clustering": self._clustering_result,
+            # Phase 6
+            "expectancy": self.expectancy.to_dict(),
+            "no_trade_fingerprints": self.no_trade_fp.to_dict(),
+            "regime_transitions": self.regime_transitions.to_dict(),
         }
 
     # ─── Runtime Control ────────────────────────────────────────────
