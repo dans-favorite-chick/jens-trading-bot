@@ -24,22 +24,22 @@ REGIME_CONFIG = {
         "notes": "Thin volume, fade extremes only",
     },
     "PREMARKET_DRIFT": {
-        "min_confluence_override": 4.2,   # Tightened: backtest showed 37.5% WR, -$13 P&L
-        "size_multiplier": 0.3,           # Reduced from 0.5: protect capital here
+        "min_confluence_override": 4.5,   # TIGHT: backtest showed 31-37% WR, bleeds capital
+        "size_multiplier": 0.3,           # Minimal size — protect capital here
         "allowed_strategies": ["bias_momentum"],
-        "notes": "Tightened after backtest — bleeding regime, minimal size only",
+        "notes": "RESTRICTED: 31% WR in backtest. Lab bot only, prod should avoid.",
     },
     "OPEN_MOMENTUM": {
-        "min_confluence_override": 2.8,   # Loosened: 50% WR, +$58 — room to generate more
+        "min_confluence_override": None,  # No override — let strategies use own thresholds
         "size_multiplier": 1.0,
-        "allowed_strategies": None,  # All strategies allowed
-        "notes": "BEST window — highest edge, full size, lowered gates for more signals",
+        "allowed_strategies": None,  # All strategies allowed — BE AGGRESSIVE HERE
+        "notes": "HIGH EDGE window — full size, all strategies, GO mode",
     },
     "MID_MORNING": {
         "min_confluence_override": 2.5,   # Loosened: 100% WR, +$120 — our BEST regime
         "size_multiplier": 1.0,
-        "allowed_strategies": None,       # All strategies: was restrictive, now wide open
-        "notes": "GOLD REGIME — backtest 100% WR, maximize signal generation here",
+        "allowed_strategies": None,       # All strategies — BE AGGRESSIVE HERE
+        "notes": "GOLD REGIME — backtest 100% WR, maximize signal generation, GO BIG",
     },
     "AFTERNOON_CHOP": {
         "min_confluence_override": 4.0,

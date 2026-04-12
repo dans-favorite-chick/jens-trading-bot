@@ -53,7 +53,7 @@ STRATEGIES = {
         "validated": True,    # Runs in prod bot
         "stop_ticks": 9,
         "target_rr": 2.0,
-        "min_confluence": 3.0,
+        "min_confluence": 3.5,  # Tightened: was 3.0, too many low-quality signals
         "min_tf_votes": 3,
         "max_hold_min": 25,
         "min_momentum": 55,
@@ -79,12 +79,12 @@ STRATEGIES = {
     },
     "high_precision_only": {
         "enabled": True,
-        "validated": False,   # Lab only
-        "stop_ticks": 8,
+        "validated": False,   # Lab only — Research Bot found promise (64% WR solo)
+        "stop_ticks": 8,      # but needs more live data before prod promotion
         "target_rr": 1.5,
         "min_confluence": 3.5,
-        "min_tf_votes": 4,
-        "min_precision": 55,
+        "min_tf_votes": 3,    # Loosened from 4 (Research Bot recommendation)
+        "min_precision": 50,  # Loosened from 55 (Research Bot recommendation)
         "max_hold_min": 15,
     },
     "tick_scalp": {
