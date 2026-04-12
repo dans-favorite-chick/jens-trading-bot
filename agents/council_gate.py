@@ -28,7 +28,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-from agents.ai_client import ask_gemini, extract_json
+from agents.ai_client import ask, ask_gemini, extract_json
 
 logger = logging.getLogger("CouncilGate")
 
@@ -245,13 +245,12 @@ async def _run_voter(config: dict, market: dict, recent_trades_str: str) -> Vote
             recent_trades=recent_trades_str,
         )
 
-        response = await ask_gemini(
+        response = await ask(
             prompt=prompt,
             system=config["system"],
-            model_name=VOTER_MODEL,
+            tier="fast",
             max_tokens=200,
             temperature=0.2,
-            timeout_s=VOTER_TIMEOUT_S,
         )
 
         latency = (time.time() - start) * 1000
@@ -322,13 +321,12 @@ Be concise — this goes on the dashboard."""
     system = ("You are the chief strategist synthesizing your council's votes. "
               "Be concise, clear, and decisive. Dashboard space is limited.")
 
-    result = await ask_gemini(
+    result = await ask(
         prompt=prompt,
         system=system,
-        model_name=ORCHESTRATOR_MODEL,
+        tier="deep",
         max_tokens=300,
         temperature=0.3,
-        timeout_s=10.0,
     )
 
     return result or "Council vote complete. See individual votes for details."

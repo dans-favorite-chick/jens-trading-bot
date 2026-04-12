@@ -25,7 +25,7 @@ import os
 from datetime import datetime, date
 from typing import Optional
 
-from agents.ai_client import ask_gemini
+from agents.ai_client import ask, ask_gemini
 
 logger = logging.getLogger("SessionDebriefer")
 
@@ -351,13 +351,12 @@ async def run_debrief(
     prompt = build_debrief_prompt(summary, target_date)
     logger.info(f"Prompt built ({len(prompt)} chars), calling Claude...")
 
-    debrief_text = await ask_gemini(
+    debrief_text = await ask(
         prompt=prompt,
         system=SYSTEM_PROMPT,
-        model_name=model,
+        tier="deep",          # Complex analysis — Gemini primary, Grok fallback
         max_tokens=4096,
-        temperature=0.4,  # Slightly creative for coaching tone
-        timeout_s=90.0,   # Debrief can take a moment
+        temperature=0.4,      # Slightly creative for coaching tone
     )
 
     if not debrief_text:

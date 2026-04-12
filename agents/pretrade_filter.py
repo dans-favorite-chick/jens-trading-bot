@@ -33,7 +33,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-from agents.ai_client import ask_gemini, extract_json
+from agents.ai_client import ask, ask_gemini, extract_json
 
 logger = logging.getLogger("PreTradeFilter")
 
@@ -165,13 +165,12 @@ async def check(
     try:
         prompt = build_filter_prompt(signal, market, recent_trades, regime)
 
-        response = await ask_gemini(
+        response = await ask(
             prompt=prompt,
             system=SYSTEM_PROMPT,
-            model_name=model,
+            tier="instant",       # Groq for sub-second decisions
             max_tokens=256,       # Keep response short
             temperature=0.1,      # Deterministic
-            timeout_s=FILTER_TIMEOUT_S,
         )
 
         latency = (time.time() - start) * 1000
