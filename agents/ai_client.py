@@ -55,7 +55,7 @@ AI_TIERS = {
         "timeout_s": 10.0,
     },
     "free": {
-        "primary": "ollama",
+        "primary": "groq",       # Groq pricing is near-free, no local Ollama needed
         "fallback": "gemini",
         "timeout_s": 30.0,
     },
