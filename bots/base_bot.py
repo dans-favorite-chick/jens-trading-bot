@@ -356,6 +356,25 @@ class BaseBot:
             self._debrief_ran_today = True
             asyncio.ensure_future(self._run_debrief())
 
+        # Phase 5: Record daily equity at AFTERHOURS transition
+        if (regime == "AFTERHOURS"
+                and self._last_regime != "AFTERHOURS"
+                and not self._equity_recorded_today):
+            self._equity_recorded_today = True
+            try:
+                risk = self.risk.state
+                tracker_data = self.tracker.get_all_summaries() if hasattr(self.tracker, 'get_all_summaries') else {}
+                self.equity_tracker.record_day(
+                    date_str=datetime.now().strftime("%Y-%m-%d"),
+                    daily_pnl=risk.daily_pnl,
+                    trades=risk.trades_today,
+                    wins=risk.wins_today,
+                    losses=risk.losses_today,
+                    strategy_breakdown=tracker_data,
+                )
+            except Exception as e:
+                logger.debug(f"[EQUITY] Record error (non-blocking): {e}")
+
         # Market close auto-exit: close open positions before session end
         # CLOSE_CHOP starts at 15:00, give 1 min warning before 16:15 close
         if (regime == "CLOSE_CHOP" and not self.positions.is_flat):
@@ -397,11 +416,13 @@ class BaseBot:
             "best_signal": None,
         }
 
-        # Minimum bars guard — prevent signals on startup/reconnect with no history
+        # Minimum bars guard — 3 min max warmup after connect/reconnect
+        # Only require 3 x 1-min bars (3 min). No 5-min bar requirement —
+        # we don't want to sit out 5+ min and miss the golden window
         bars_5m = list(self.aggregator.bars_5m.completed)
         bars_1m = list(self.aggregator.bars_1m.completed)
-        if len(bars_5m) < 5 or len(bars_1m) < 5:
-            reason = f"Warming up ({len(bars_5m)} 5m bars, {len(bars_1m)} 1m bars — need 5 each)"
+        if len(bars_1m) < 3:
+            reason = f"Warming up ({len(bars_1m)} 1m bars — need 3, ~3 min)"
             self.last_rejection = reason
             self._last_eval["risk_blocked"] = reason
             logger.info(f"[WARMUP] {reason}")
@@ -427,6 +448,19 @@ class BaseBot:
                      f"tf_bull={market.get('tf_votes_bullish',0)} tf_bear={market.get('tf_votes_bearish',0)} "
                      f"bars_1m={len(bars_1m)} bars_5m={len(bars_5m)} "
                      f"regime={session_info.get('regime','?')}")
+
+        # Phase 5: Cockpit 12-layer grading (observation only -- never blocks)
+        try:
+            intel = self._latest_intel or {}
+            self._cockpit_result = self.cockpit.grade(
+                market=market,
+                session_info=session_info,
+                intel=intel,
+                council_result=self._council_result,
+            )
+            self._last_eval["cockpit"] = self._cockpit_result.get("score", "?")
+        except Exception as e:
+            logger.debug(f"[COCKPIT] Grading error (non-blocking): {e}")
 
         best_signal = None
         for strat in self.strategies:
@@ -519,6 +553,15 @@ class BaseBot:
         # Adjust stop for volatility
         stop_ticks = self.risk.calculate_stop_ticks(signal.stop_ticks, atr_5m)
         contracts = self.risk.calculate_contracts(risk_dollars, stop_ticks)
+
+        # Phase 5: Position scaler — cap contracts by account equity and conditions
+        regime = self.session.get_current_regime()
+        max_contracts = self.position_scaler.get_max_contracts(
+            account_equity=self.risk._risk_per_trade * 50,  # Approximate equity from risk setting
+            entry_score=signal.entry_score,
+            regime=regime,
+        )
+        contracts = min(contracts, max_contracts)
 
         # Calculate prices
         tick_value = TICK_SIZE
@@ -618,6 +661,19 @@ class BaseBot:
                 hold_time_s=trade["hold_time_s"],
             ))
 
+            # Phase 5: Trigger clustering analysis every 10 trades
+            self._trades_since_cluster += 1
+            if self._trades_since_cluster >= 10:
+                self._trades_since_cluster = 0
+                try:
+                    all_trades = self.trade_memory.recent(200)
+                    self._clustering_result = self.trade_clustering.analyze(all_trades)
+                    if self._clustering_result.get("recommendations"):
+                        for rec in self._clustering_result["recommendations"][:3]:
+                            logger.info(f"[CLUSTERING] {rec}")
+                except Exception as e:
+                    logger.debug(f"[CLUSTERING] Analysis error (non-blocking): {e}")
+
             # Alert on recovery mode or cooloff
             if self.risk.state.recovery_mode and trade["result"] == "LOSS":
                 asyncio.ensure_future(tg.notify_alert(
@@ -683,6 +739,7 @@ class BaseBot:
                 from core.market_intel import get_full_intel
                 intel = await get_full_intel()
                 market["intel"] = intel
+                self._latest_intel = intel  # Phase 5: store for cockpit + TG commands
                 logger.info(f"[COUNCIL] Intel loaded: VIX={intel.get('vix', 'N/A')}, "
                              f"news_tier={intel.get('highest_tier', 'N/A')}")
             except Exception as e:
@@ -732,6 +789,10 @@ class BaseBot:
             "council": self._council_result,
             "filter_verdict": self._filter_verdict,
             "strategy_performance": self.tracker.to_dict(),
+            # Phase 5
+            "cockpit": self.cockpit.to_dict(self._cockpit_result),
+            "equity": self.equity_tracker.to_dict(),
+            "clustering": self._clustering_result,
         }
 
     # ─── Runtime Control ────────────────────────────────────────────

@@ -254,7 +254,7 @@ class Backtester:
         # Minimum bars guard
         bars_5m = list(self.aggregator.bars_5m.completed)
         bars_1m = list(self.aggregator.bars_1m.completed)
-        if len(bars_5m) < 5 or len(bars_1m) < 5:
+        if len(bars_1m) < 3:
             return
 
         # Risk gate
