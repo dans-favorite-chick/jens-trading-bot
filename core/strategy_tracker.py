@@ -165,7 +165,21 @@ class StrategyTracker:
     def record_signal(self, strategy: str, direction: str, confidence: float,
                       taken: bool, filter_action: str = "CLEAR",
                       regime: str = "UNKNOWN", trade_id: str = ""):
-        """Record every signal (taken or filtered) for signal quality analysis."""
+        """
+        Record or update a signal by trade_id.
+        First call (taken=False) creates the record as 'generated'.
+        Second call (taken=True) updates it to 'filled' — no duplication.
+        """
+        # Try to update existing record by trade_id
+        if trade_id:
+            for sig in reversed(self.signal_log):
+                if sig.get("trade_id") == trade_id:
+                    sig["taken"] = taken
+                    sig["filter_action"] = filter_action
+                    sig["updated_at"] = datetime.now().isoformat()
+                    return  # Updated, not duplicated
+
+        # New signal record
         self.signal_log.append({
             "ts": datetime.now().isoformat(),
             "trade_id": trade_id,

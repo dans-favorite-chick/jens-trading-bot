@@ -286,24 +286,32 @@ class BridgeServer:
                        f"stop={stop_price} target={target_price} reason={reason}")
 
         paths = write_oif(action, qty, stop_price, target_price, trade_id=trade_id)
-        self.trades_executed += 1
-        self.last_trade_time = time.time()
-        self.last_trade_action = action
 
-        # Wait for fill confirmation
-        await asyncio.sleep(1.5)
-        fill = check_latest_fill()
-        if fill:
-            trade_log.info(f"[NT8 FILL] {fill}")
+        if not paths and action not in ("CANCEL_ALL", "CANCELALLORDERS"):
+            trade_log.error(f"[OIF FAIL:{trade_id}] write_oif returned 0 files for {action}!")
+        else:
+            self.trades_executed += 1
+            self.last_trade_time = time.time()
+            self.last_trade_action = action
 
-        # Acknowledge back to bot
+        # Brief wait for fill (non-blocking for cancel/exit)
+        fill = None
+        if action not in ("CANCEL_ALL", "CANCELALLORDERS"):
+            await asyncio.sleep(1.0)
+            fill = check_latest_fill(since_time=time.time() - 3)
+            if fill:
+                trade_log.info(f"[NT8 FILL:{trade_id}] {fill}")
+
+        # Acknowledge back to bot — bot now checks this
         try:
             ws = self.bot_connections.get(bot_name)
             if ws:
                 await ws.send(json.dumps({
                     "type": "trade_ack",
+                    "trade_id": trade_id,
                     "action": action,
                     "files": [os.path.basename(p) for p in paths],
+                    "oif_ok": len(paths) > 0,
                     "fill": fill,
                 }))
         except Exception:

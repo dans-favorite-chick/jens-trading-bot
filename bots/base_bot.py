@@ -105,6 +105,7 @@ class BaseBot:
         self._debrief_ran_today = False     # Only run once per session day
         self._pending_exit_reason = None    # Market close auto-exit
         self._current_date = None           # For daily reset detection
+        self._last_bridge_ack_ok = True     # Bridge OIF write confirmation
 
         # Phase 5: Additional state
         self._cockpit_result = None         # Latest cockpit grading
@@ -241,6 +242,18 @@ class BaseBot:
 
                 if msg_type == "dom":
                     self.aggregator.process_dom(tick)
+                    continue
+
+                if msg_type == "trade_ack":
+                    # Bridge confirms it wrote OIF files (or didn't)
+                    ack_files = tick.get("files", [])
+                    ack_action = tick.get("action", "")
+                    if not ack_files and ack_action not in ("CANCEL_ALL", "CANCELALLORDERS"):
+                        logger.error(f"[BRIDGE ACK] Bridge wrote 0 OIF files for {ack_action}! "
+                                      f"NT8 will NOT see this order.")
+                        self._last_bridge_ack_ok = False
+                    else:
+                        self._last_bridge_ack_ok = True
                     continue
 
                 if msg_type != "tick":
@@ -417,6 +430,10 @@ class BaseBot:
         if not self.positions.is_flat:
             return  # Already in a trade
 
+        # Enforce prod trading window — prod bot only trades during defined session
+        if self.bot_name == "prod" and not self.session.is_prod_trading_window():
+            return  # Prod bot: outside trading window, skip evaluation
+
         # Apply runtime profile overrides to strategy configs
         # (Safe/Balanced/Aggressive buttons on dashboard)
         profile_keys = ("min_confluence", "min_momentum", "min_momentum_confidence",
@@ -497,17 +514,9 @@ class BaseBot:
             try:
                 signal = strat.evaluate(market, bars_5m, bars_1m, session_info)
                 if signal:
-                    # Enforce session min_confluence_override
-                    conf_override = self.session.get_confluence_override()
-                    if conf_override and signal.confidence < conf_override * 10:
-                        logger.info(f"  [{strat.name}] BLOCKED by regime confluence override "
-                                     f"({signal.confidence:.0f} < {conf_override * 10:.0f})")
-                        self._last_eval["strategies"].append({
-                            "name": strat.name, "result": "BLOCKED_REGIME_CONF",
-                            "reason": f"confluence {signal.confidence:.0f} < regime min {conf_override * 10:.0f}",
-                        })
-                        continue
-
+                    # Strategies are now regime-aware internally (bias_momentum uses
+                    # _REGIME_OVERRIDES to loosen/tighten per regime). No external
+                    # confluence override needed — that was comparing wrong dimensions.
                     logger.info(f"  [{strat.name}] SIGNAL: {signal.direction} conf={signal.confidence:.0f} "
                                  f"score={signal.entry_score:.0f} — {signal.reason}")
                     self._last_eval["strategies"].append({
@@ -698,7 +707,47 @@ class BaseBot:
         ))
 
     async def _exit_trade(self, ws, price: float, reason: str):
-        """Execute exit via bridge → OIF."""
+        """Execute exit: send to NT8 FIRST, then close Python state."""
+        if self.positions.is_flat:
+            return
+
+        pos = self.positions.position
+        tid = pos.trade_id
+        self.status = "EXIT_PENDING"
+        logger.info(f"[EXIT_PENDING:{tid}] Sending exit for {pos.direction} @ {price:.2f}, reason={reason}")
+
+        # STEP 1: Send CANCEL_ALL + EXIT to NT8 BEFORE touching Python state
+        exit_sent = False
+        try:
+            await ws.send(json.dumps({
+                "type": "trade", "trade_id": tid,
+                "action": "CANCEL_ALL", "qty": 0,
+                "reason": "cancel_oco_before_exit",
+            }))
+        except Exception:
+            pass  # Best effort on bracket cancel
+
+        try:
+            await ws.send(json.dumps({
+                "type": "trade", "trade_id": tid,
+                "action": "EXIT", "qty": pos.contracts,
+                "reason": reason,
+            }))
+            exit_sent = True
+        except Exception as e:
+            logger.error(f"[EXIT:{tid}] WS send failed: {e} — writing OIF fallback")
+            try:
+                from bridge.oif_writer import write_oif
+                write_oif("EXIT", pos.contracts, trade_id=tid)
+                exit_sent = True
+            except Exception as e2:
+                logger.error(f"[EXIT:{tid}] OIF fallback ALSO failed: {e2} — MANUAL EXIT NEEDED")
+                asyncio.ensure_future(tg.notify_alert(
+                    "CRITICAL: EXIT FAILED",
+                    f"Trade {tid} exit failed. Position may still be open in NT8.\n"
+                    f"MANUAL EXIT REQUIRED."))
+
+        # STEP 2: NOW close Python position (after NT8 command sent)
         trade = self.positions.close_position(price, reason)
         if trade:
             self.risk.record_trade(trade["pnl_dollars"])
@@ -706,73 +755,37 @@ class BaseBot:
             self.tracker.record_trade(trade)
             self.history.log_exit(trade, self.aggregator.snapshot())
 
-            # Telegram notification
             asyncio.ensure_future(tg.notify_exit(
                 trade_id=trade.get("trade_id", ""),
-                direction=trade["direction"],
-                strategy=trade["strategy"],
-                entry_price=trade["entry_price"],
-                exit_price=trade["exit_price"],
-                pnl_dollars=trade["pnl_dollars"],
-                pnl_ticks=trade["pnl_ticks"],
-                result=trade["result"],
-                exit_reason=trade["exit_reason"],
+                direction=trade["direction"], strategy=trade["strategy"],
+                entry_price=trade["entry_price"], exit_price=trade["exit_price"],
+                pnl_dollars=trade["pnl_dollars"], pnl_ticks=trade["pnl_ticks"],
+                result=trade["result"], exit_reason=trade["exit_reason"],
                 hold_time_s=trade["hold_time_s"],
             ))
 
-            # Phase 5: Trigger clustering analysis every 10 trades
+            # Clustering every 10 trades
             self._trades_since_cluster += 1
             if self._trades_since_cluster >= 10:
                 self._trades_since_cluster = 0
                 try:
-                    all_trades = self.trade_memory.recent(200)
-                    self._clustering_result = self.trade_clustering.analyze(all_trades)
-                    if self._clustering_result.get("recommendations"):
-                        for rec in self._clustering_result["recommendations"][:3]:
-                            logger.info(f"[CLUSTERING] {rec}")
-                except Exception as e:
-                    logger.debug(f"[CLUSTERING] Analysis error (non-blocking): {e}")
+                    self._clustering_result = self.trade_clustering.analyze(
+                        self.trade_memory.recent(200))
+                    for rec in (self._clustering_result.get("recommendations") or [])[:3]:
+                        logger.info(f"[CLUSTERING] {rec}")
+                except Exception:
+                    pass
 
-            # Alert on recovery mode or cooloff
             if self.risk.state.recovery_mode and trade["result"] == "LOSS":
                 asyncio.ensure_future(tg.notify_alert(
                     "RECOVERY MODE",
                     f"Daily P&L: ${self.risk.state.daily_pnl:.2f}\n"
-                    f"Size reduced 50% until daily reset",
-                ))
-            self.status = "SCANNING"
+                    f"Size reduced 50% until daily reset"))
 
-            # Cancel OCO bracket orders before exit (NT8 needs clean state)
-            try:
-                await ws.send(json.dumps({
-                    "type": "trade",
-                    "trade_id": trade.get("trade_id", ""),
-                    "action": "CANCEL_ALL",
-                    "qty": 0,
-                    "reason": "cancel_oco_before_exit",
-                }))
-            except Exception:
-                pass  # Best effort — exit is more important
+            logger.info(f"[EXIT:{tid}] P&L=${trade['pnl_dollars']:.2f} reason={reason} "
+                         f"exit_sent={'OK' if exit_sent else 'FAILED'}")
 
-            try:
-                await ws.send(json.dumps({
-                    "type": "trade",
-                    "trade_id": trade.get("trade_id", ""),
-                    "action": "EXIT",
-                    "qty": trade["contracts"],
-                    "reason": reason,
-                }))
-            except Exception as e:
-                # CRITICAL: WS send failed but position is closed in Python.
-                # Write OIF directly as fallback to ensure NT8 exits too.
-                logger.error(f"[EXIT] WS send failed: {e} — writing OIF fallback")
-                try:
-                    from bridge.oif_writer import write_oif
-                    write_oif("EXIT", trade["contracts"], trade_id=trade.get("trade_id", ""))
-                except Exception as e2:
-                    logger.error(f"[EXIT] OIF fallback ALSO failed: {e2} — MANUAL EXIT NEEDED")
-
-            logger.info(f"[EXIT] P&L=${trade['pnl_dollars']:.2f} reason={reason}")
+        self.status = "SCANNING"
 
     # ─── News Scanner Background Loop ─────────────────────────────────
     async def _news_scanner_loop(self):
