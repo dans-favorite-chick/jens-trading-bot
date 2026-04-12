@@ -210,11 +210,13 @@ class TestRegimeAwareStrategies:
         assert _REGIME_OVERRIDES["MID_MORNING"]["min_tf_votes"] == 2
         assert _REGIME_OVERRIDES["MID_MORNING"]["min_momentum"] == 35
 
-    def test_non_golden_regime_uses_defaults(self):
+    def test_non_golden_regime_has_tighter_gates(self):
         from strategies.bias_momentum import _REGIME_OVERRIDES
-        # Non-golden regimes should NOT be in overrides (use config defaults)
-        assert "PREMARKET_DRIFT" not in _REGIME_OVERRIDES
-        assert "AFTERNOON_CHOP" not in _REGIME_OVERRIDES
+        # Non-golden regimes ARE in overrides but with tighter thresholds
+        # Golden = momentum 35, Non-golden = momentum 40-45
+        assert _REGIME_OVERRIDES["OPEN_MOMENTUM"]["min_momentum"] == 35
+        assert _REGIME_OVERRIDES["AFTERHOURS"]["min_momentum"] >= 40
+        assert _REGIME_OVERRIDES["AFTERNOON_CHOP"]["min_momentum"] >= 45
 
 
 # ─── Test 7: Daily Reset ─────────────────────────────────────────

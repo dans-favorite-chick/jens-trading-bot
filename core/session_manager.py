@@ -16,36 +16,37 @@ logger = logging.getLogger("SessionManager")
 
 
 # ─── Market Regimes ─────────────────────────────────────────────────
+# ─── PROD Regime Config (conservative, proven windows only) ─────────
 REGIME_CONFIG = {
     "OVERNIGHT_RANGE": {
-        "min_confluence_override": None,  # Use strategy default
+        "min_confluence_override": None,
         "size_multiplier": 0.5,
         "allowed_strategies": ["spring_setup"],
         "notes": "Thin volume, fade extremes only",
     },
     "PREMARKET_DRIFT": {
         "min_confluence_override": None,
-        "size_multiplier": 0.3,           # Reduced size — lower confidence regime
+        "size_multiplier": 0.3,
         "allowed_strategies": ["bias_momentum"],
-        "notes": "Regime-aware strategies handle their own gating. Size reduced.",
+        "notes": "Reduced size — lower confidence regime",
     },
     "OPEN_MOMENTUM": {
-        "min_confluence_override": None,  # No override — let strategies use own thresholds
+        "min_confluence_override": None,
         "size_multiplier": 1.0,
-        "allowed_strategies": None,  # All strategies allowed — BE AGGRESSIVE HERE
+        "allowed_strategies": None,
         "notes": "HIGH EDGE window — full size, all strategies, GO mode",
     },
     "MID_MORNING": {
-        "min_confluence_override": 2.5,   # Loosened: 100% WR, +$120 — our BEST regime
+        "min_confluence_override": 2.5,
         "size_multiplier": 1.0,
-        "allowed_strategies": None,       # All strategies — BE AGGRESSIVE HERE
-        "notes": "GOLD REGIME — backtest 100% WR, maximize signal generation, GO BIG",
+        "allowed_strategies": None,
+        "notes": "GOLD REGIME — backtest 100% WR, maximize signal generation",
     },
     "AFTERNOON_CHOP": {
         "min_confluence_override": 4.0,
         "size_multiplier": 0.5,
-        "allowed_strategies": None,  # Lab bot needs to trade here too for data
-        "notes": "DEATH ZONE — lunch lull, very selective (lab still trades)",
+        "allowed_strategies": None,
+        "notes": "DEATH ZONE — lunch lull, very selective",
     },
     "LATE_AFTERNOON": {
         "min_confluence_override": None,
@@ -56,14 +57,68 @@ REGIME_CONFIG = {
     "CLOSE_CHOP": {
         "min_confluence_override": 4.0,
         "size_multiplier": 0.3,
-        "allowed_strategies": None,  # Lab trades here for data
-        "notes": "Avoid in prod — directionless, tight stops",
+        "allowed_strategies": None,
+        "notes": "Avoid in prod — directionless",
     },
     "AFTERHOURS": {
         "min_confluence_override": None,
         "size_multiplier": 0.3,
         "allowed_strategies": ["spring_setup"],
         "notes": "Very selective, mean reversion only",
+    },
+}
+
+# ─── LAB Regime Config (AGGRESSIVE — all strategies, all regimes) ───
+# Lab bot is for PRACTICE. It should try everything, everywhere, always.
+# Every regime is a learning opportunity. Every tick is training data.
+LAB_REGIME_CONFIG = {
+    "OVERNIGHT_RANGE": {
+        "min_confluence_override": None,
+        "size_multiplier": 0.8,
+        "allowed_strategies": None,  # ALL strategies — practice everything
+        "notes": "LAB: full strategy access, learn overnight patterns",
+    },
+    "PREMARKET_DRIFT": {
+        "min_confluence_override": None,
+        "size_multiplier": 0.8,
+        "allowed_strategies": None,  # ALL strategies
+        "notes": "LAB: practice all strategies, collect premarket data",
+    },
+    "OPEN_MOMENTUM": {
+        "min_confluence_override": None,
+        "size_multiplier": 1.0,
+        "allowed_strategies": None,
+        "notes": "LAB: GO mode — max aggression, all strategies",
+    },
+    "MID_MORNING": {
+        "min_confluence_override": None,
+        "size_multiplier": 1.0,
+        "allowed_strategies": None,
+        "notes": "LAB: GO mode — max aggression, all strategies",
+    },
+    "AFTERNOON_CHOP": {
+        "min_confluence_override": None,
+        "size_multiplier": 0.8,
+        "allowed_strategies": None,  # ALL — learn the chop patterns
+        "notes": "LAB: practice in the death zone, learn what fails here",
+    },
+    "LATE_AFTERNOON": {
+        "min_confluence_override": None,
+        "size_multiplier": 1.0,
+        "allowed_strategies": None,
+        "notes": "LAB: institutional flow window — practice all strategies",
+    },
+    "CLOSE_CHOP": {
+        "min_confluence_override": None,
+        "size_multiplier": 0.8,
+        "allowed_strategies": None,
+        "notes": "LAB: practice everything, learn close behavior",
+    },
+    "AFTERHOURS": {
+        "min_confluence_override": None,
+        "size_multiplier": 0.8,
+        "allowed_strategies": None,  # ALL — try IB patterns, momentum, everything
+        "notes": "LAB: AGGRESSIVE practice — try all strategies after hours",
     },
 }
 
@@ -74,9 +129,12 @@ def _parse_time(t: str) -> dtime:
 
 
 class SessionManager:
-    def __init__(self):
+    def __init__(self, bot_name: str = "prod"):
         self.current_regime = "UNKNOWN"
         self._last_regime = None
+        self.bot_name = bot_name
+        # Lab bot uses aggressive config, prod uses conservative
+        self._config = LAB_REGIME_CONFIG if bot_name == "lab" else REGIME_CONFIG
 
     def get_current_regime(self, now: datetime = None) -> str:
         """Determine current market regime based on time (CST)."""
@@ -111,7 +169,7 @@ class SessionManager:
     def get_regime_config(self, regime: str = None) -> dict:
         """Get config for the current (or specified) regime."""
         r = regime or self.current_regime
-        return REGIME_CONFIG.get(r, REGIME_CONFIG["AFTERHOURS"])
+        return self._config.get(r, self._config.get("AFTERHOURS", {}))
 
     def is_strategy_allowed(self, strategy_name: str, regime: str = None) -> bool:
         """Check if a strategy is allowed in the current regime."""

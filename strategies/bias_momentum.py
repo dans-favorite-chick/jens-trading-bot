@@ -12,11 +12,17 @@ from strategies.base_strategy import BaseStrategy, Signal
 from core.candlestick_patterns import CandlestickAnalyzer, get_pattern_confluence
 
 # Regime-specific overrides — BE AGGRESSIVE in golden windows
+# Non-golden regimes use strategy config defaults (tighter gates)
 _REGIME_OVERRIDES = {
     "OPEN_MOMENTUM": {"min_tf_votes": 2, "min_momentum": 35, "min_confluence": 2.0},
     "MID_MORNING":   {"min_tf_votes": 2, "min_momentum": 35, "min_confluence": 2.0},
     "LATE_AFTERNOON": {"min_tf_votes": 2, "min_momentum": 45, "min_confluence": 2.5},
-    # All other regimes use strategy config defaults
+    # Lab bot regimes — still need TF alignment but lower thresholds to practice
+    "OVERNIGHT_RANGE": {"min_tf_votes": 2, "min_momentum": 40, "min_confluence": 2.5},
+    "AFTERHOURS":      {"min_tf_votes": 2, "min_momentum": 40, "min_confluence": 2.5},
+    "PREMARKET_DRIFT":  {"min_tf_votes": 2, "min_momentum": 40, "min_confluence": 2.5},
+    "AFTERNOON_CHOP":   {"min_tf_votes": 2, "min_momentum": 45, "min_confluence": 2.5},
+    "CLOSE_CHOP":       {"min_tf_votes": 2, "min_momentum": 45, "min_confluence": 2.5},
 }
 
 

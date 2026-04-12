@@ -81,7 +81,7 @@ class BaseBot:
     def __init__(self):
         self.aggregator = TickAggregator()
         self.risk = RiskManager()
-        self.session = SessionManager()
+        self.session = SessionManager(bot_name=self.bot_name)
         self.positions = PositionManager()
         self.trade_memory = TradeMemory()
         self.history = HistoryLogger(bot_name=self.bot_name)
