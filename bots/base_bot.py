@@ -37,6 +37,7 @@ from core.position_manager import PositionManager
 from core.trade_memory import TradeMemory
 from core.history_logger import HistoryLogger
 from core.strategy_tracker import StrategyTracker
+from core import telegram_notifier as tg
 from strategies.base_strategy import BaseStrategy, Signal
 
 # Phase 4: AI Agents (optional — failures never block trading)
@@ -353,6 +354,15 @@ class BaseBot:
         if not self.positions.is_flat:
             return  # Already in a trade
 
+        # Apply runtime profile overrides to strategy configs
+        # (Safe/Balanced/Aggressive buttons on dashboard)
+        profile_keys = ("min_confluence", "min_momentum", "min_momentum_confidence",
+                        "min_precision", "risk_per_trade", "max_daily_loss")
+        for strat in self.strategies:
+            for key in profile_keys:
+                if key in self._runtime_params:
+                    strat.config[key] = self._runtime_params[key]
+
         # Session check
         session_info = self.session.to_dict()
 
@@ -553,6 +563,14 @@ class BaseBot:
         self.history.log_entry(signal, price, contracts, stop_price,
                                target_price, risk_dollars, tier, market)
 
+        # Telegram notification
+        asyncio.ensure_future(tg.notify_entry(
+            trade_id=tid, direction=signal.direction, strategy=signal.strategy,
+            price=price, stop=stop_price, target=target_price,
+            contracts=contracts, risk_dollars=risk_dollars, tier=tier,
+            regime=self.session.get_current_regime(),
+        ))
+
     async def _exit_trade(self, ws, price: float, reason: str):
         """Execute exit via bridge → OIF."""
         trade = self.positions.close_position(price, reason)
@@ -561,6 +579,28 @@ class BaseBot:
             self.trade_memory.record(trade)
             self.tracker.record_trade(trade)
             self.history.log_exit(trade, self.aggregator.snapshot())
+
+            # Telegram notification
+            asyncio.ensure_future(tg.notify_exit(
+                trade_id=trade.get("trade_id", ""),
+                direction=trade["direction"],
+                strategy=trade["strategy"],
+                entry_price=trade["entry_price"],
+                exit_price=trade["exit_price"],
+                pnl_dollars=trade["pnl_dollars"],
+                pnl_ticks=trade["pnl_ticks"],
+                result=trade["result"],
+                exit_reason=trade["exit_reason"],
+                hold_time_s=trade["hold_time_s"],
+            ))
+
+            # Alert on recovery mode or cooloff
+            if self.risk.state.recovery_mode and trade["result"] == "LOSS":
+                asyncio.ensure_future(tg.notify_alert(
+                    "RECOVERY MODE",
+                    f"Daily P&L: ${self.risk.state.daily_pnl:.2f}\n"
+                    f"Size reduced 50% until daily reset",
+                ))
             self.status = "SCANNING"
 
             await ws.send(json.dumps({
@@ -616,6 +656,8 @@ class BaseBot:
             self._council_result = council_to_dict(result)
             logger.info(f"[COUNCIL] Result: {result.bias} ({result.vote_count}) "
                         f"in {result.total_latency_ms:.0f}ms")
+            asyncio.ensure_future(tg.notify_council(
+                result.bias, result.vote_count, result.summary))
         except Exception as e:
             logger.error(f"[COUNCIL] Failed (non-blocking): {e}")
 
@@ -657,12 +699,19 @@ class BaseBot:
 
     # ─── Runtime Control ────────────────────────────────────────────
     def set_profile(self, profile_name: str):
-        """Apply an aggression profile from config."""
+        """Apply an aggression profile from config. Updates strategies on next bar."""
         from config.strategies import STRATEGY_DEFAULTS
         profiles = STRATEGY_DEFAULTS.get("profiles", {})
         if profile_name in profiles:
+            old = {k: self._runtime_params.get(k) for k in profiles[profile_name]}
             self._runtime_params.update(profiles[profile_name])
-            logger.info(f"Profile set: {profile_name}")
+            # Also push risk params immediately
+            p = profiles[profile_name]
+            if "risk_per_trade" in p:
+                self.risk.set_risk_per_trade(p["risk_per_trade"])
+            if "max_daily_loss" in p:
+                self.risk.set_daily_limit(p["max_daily_loss"])
+            logger.info(f"[PROFILE] Switched to {profile_name.upper()}: {profiles[profile_name]}")
 
     def toggle_strategy(self, strategy_name: str, enabled: bool):
         for s in self.strategies:
