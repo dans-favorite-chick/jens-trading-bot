@@ -9,6 +9,7 @@ to maximize signal generation when edge is highest.
 """
 
 from strategies.base_strategy import BaseStrategy, Signal
+from core.candlestick_patterns import CandlestickAnalyzer, get_pattern_confluence
 
 # Regime-specific overrides — BE AGGRESSIVE in golden windows
 _REGIME_OVERRIDES = {
@@ -118,6 +119,20 @@ class BiasMomentumFollow(BaseStrategy):
             elif direction == "SHORT" and first_bar.close < first_bar.open:
                 momentum_score += 20
                 confluences.append("First 5m candle bearish (opening range signal)")
+
+        # ── Candlestick pattern confluence ────────────────────────────
+        analyzer = CandlestickAnalyzer()
+        candle_bars = bars_1m[-20:] if len(bars_1m) >= 20 else bars_1m
+        patterns = analyzer.analyze(candle_bars)
+        pattern_conf = get_pattern_confluence(patterns, direction)
+        if pattern_conf["net_score"] > 30:
+            momentum_score += 15
+            confluences.append(f"Candle pattern: {pattern_conf['description']}")
+        elif pattern_conf["net_score"] < -30:
+            momentum_score -= 10  # Opposing pattern reduces confidence
+            opposed = pattern_conf["strongest_opposed"]
+            opposed_name = opposed["pattern"] if opposed else "unknown"
+            confluences.append(f"Warning: opposing pattern {opposed_name}")
 
         if momentum_score < min_momentum:
             return None

@@ -13,6 +13,7 @@ REGIME-AWARE: Only trades during OPEN_MOMENTUM and MID_MORNING.
 from datetime import datetime, timezone
 from strategies.base_strategy import BaseStrategy, Signal
 from config.settings import TICK_SIZE
+from core.candlestick_patterns import CandlestickAnalyzer, get_pattern_confluence
 
 # Regime-specific overrides — only fire in morning windows
 _REGIME_OVERRIDES = {
@@ -187,6 +188,20 @@ class IBBreakout(BaseStrategy):
         elif direction == "SHORT" and cvd < 0:
             confidence += 10
             confluences.append("CVD negative")
+
+        # ── Candlestick pattern confluence ────────────────────────────
+        analyzer = CandlestickAnalyzer()
+        candle_bars = bars_1m[-20:] if len(bars_1m) >= 20 else bars_1m
+        patterns = analyzer.analyze(candle_bars, tick_size=TICK_SIZE)
+        pattern_conf = get_pattern_confluence(patterns, direction)
+        if pattern_conf["net_score"] > 30:
+            confidence += 15
+            confluences.append(f"Candle pattern: {pattern_conf['description']}")
+        elif pattern_conf["net_score"] < -30:
+            confidence -= 10
+            opposed = pattern_conf["strongest_opposed"]
+            opposed_name = opposed["pattern"] if opposed else "unknown"
+            confluences.append(f"Warning: opposing pattern {opposed_name}")
 
         confluences.append(f"IB: {self._ib_low:.2f} - {self._ib_high:.2f} (width={ib_width:.2f})")
         confluences.append(f"Stop: {stop_ticks} ticks, Target RR: {target_rr:.2f}")
