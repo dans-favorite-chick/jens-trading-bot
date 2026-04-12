@@ -34,6 +34,7 @@ from strategies.bias_momentum import BiasMomentumFollow
 from strategies.spring_setup import SpringSetup
 from strategies.vwap_pullback import VWAPPullback
 from strategies.high_precision import HighPrecisionOnly
+from strategies.ib_breakout import IBBreakout
 
 logger = logging.getLogger("Backtester")
 
@@ -41,6 +42,7 @@ STRATEGY_CLASSES = {
     "bias_momentum": BiasMomentumFollow,
     "spring_setup": SpringSetup,
     "vwap_pullback": VWAPPullback,
+    "ib_breakout": IBBreakout,
     "high_precision_only": HighPrecisionOnly,
 }
 
