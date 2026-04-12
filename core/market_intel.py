@@ -4,7 +4,10 @@ Market Intelligence Module for Phoenix Trading Bot.
 Provides real-time market context from multiple free data sources:
   - VIX monitoring (Alpaca -> yfinance -> cache fallback)
   - News scanning via Finnhub (headline classification)
+  - Trump Truth Social sentiment (CNN archive + VADER)
   - Economic calendar via Finnhub
+  - Reddit/WSB momentum via ApeWisdom API
+  - FRED macro data (Fed Funds Rate, CPI trend)
   - Market regime context via yfinance + Alpaca
 
 All calls are async with 5-second timeouts and safe defaults on failure.
@@ -17,8 +20,16 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import requests as _requests
+
 import finnhub
 import yfinance as yf
+
+try:
+    from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+    _vader = SentimentIntensityAnalyzer()
+except ImportError:
+    _vader = None
 
 logger = logging.getLogger("MarketIntel")
 
@@ -443,6 +454,230 @@ async def get_market_context() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Trump / Truth Social Sentiment (CNN Archive + VADER)
+# ---------------------------------------------------------------------------
+_TRUTH_ARCHIVE_URL = "https://ix.cnn.io/data/truth-social/truth_archive.json"
+
+
+async def get_trump_sentiment() -> dict:
+    """
+    Fetch Trump's recent Truth Social posts via CNN archive.
+    Run VADER sentiment analysis. Cache: 120 seconds.
+
+    Returns: {score: float [-1,1], posts: int, latest: str, source: str}
+    """
+    cached = _cache.get("trump", 120)
+    if cached is not None:
+        return cached
+
+    result = {"score": 0.0, "posts": 0, "latest": "", "source": "unavailable",
+              "tariff_mentioned": False, "market_keywords": []}
+
+    try:
+        def _fetch():
+            session = _requests.Session()
+            session.trust_env = False
+            resp = session.get(_TRUTH_ARCHIVE_URL, timeout=5)
+            resp.raise_for_status()
+            return resp.json()
+
+        data = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(None, _fetch),
+            timeout=5.0,
+        )
+
+        if isinstance(data, list) and data:
+            # Take last 5 posts
+            posts = data[:5]
+            texts = [str(p.get("content", "")) for p in posts]
+            combined = " ".join(texts).strip()
+
+            if combined and _vader:
+                sentiment = _vader.polarity_scores(combined)
+                result["score"] = round(sentiment["compound"], 3)
+
+            result["posts"] = len(posts)
+            result["latest"] = texts[0][:150] if texts else ""
+            result["source"] = "cnn_archive"
+
+            # Check for market-moving keywords
+            lower = combined.lower()
+            keywords_found = []
+            for kw in ["tariff", "trade deal", "china", "fed", "interest rate",
+                        "stock market", "economy", "tax", "sanction", "trade war",
+                        "nasdaq", "dow", "crash", "boom", "billion", "trillion"]:
+                if kw in lower:
+                    keywords_found.append(kw)
+
+            result["tariff_mentioned"] = "tariff" in lower or "trade war" in lower
+            result["market_keywords"] = keywords_found
+
+            if keywords_found:
+                logger.info(f"Trump sentiment: {result['score']:.2f}, "
+                             f"keywords: {keywords_found}")
+
+    except Exception as e:
+        logger.debug(f"Trump sentiment fetch failed: {e}")
+
+    _cache.put("trump", result)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Reddit / WSB Momentum via ApeWisdom API
+# ---------------------------------------------------------------------------
+_APEWISDOM_URL = "https://apewisdom.io/api/v1.0/filter/all-stocks/page/1"
+
+
+async def get_reddit_momentum() -> dict:
+    """
+    Fetch top mentioned tickers from Reddit (WSB, stocks, etc.)
+    via ApeWisdom free API. Cache: 300 seconds.
+
+    Returns: {top_mentions: [{ticker, mentions, rank}], nq_relevant: [...]}
+    """
+    cached = _cache.get("reddit", 300)
+    if cached is not None:
+        return cached
+
+    result = {"top_mentions": [], "nq_relevant": [], "source": "unavailable"}
+
+    # NQ-heavy tickers to watch
+    nq_tickers = {"NVDA", "AAPL", "MSFT", "GOOG", "GOOGL", "META", "AMZN",
+                   "TSLA", "NFLX", "AMD", "AVGO", "CRM", "COST", "ADBE",
+                   "QQQ", "TQQQ", "SQQQ"}
+
+    try:
+        def _fetch():
+            session = _requests.Session()
+            session.trust_env = False
+            resp = session.get(_APEWISDOM_URL, timeout=5)
+            resp.raise_for_status()
+            return resp.json()
+
+        data = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(None, _fetch),
+            timeout=5.0,
+        )
+
+        results_list = data.get("results", [])
+        top = []
+        nq_relevant = []
+
+        for i, item in enumerate(results_list[:30]):
+            ticker = item.get("ticker", "")
+            mentions = item.get("mentions", 0)
+            upvotes = item.get("upvotes", 0)
+            entry = {"ticker": ticker, "mentions": mentions,
+                     "upvotes": upvotes, "rank": i + 1}
+            top.append(entry)
+
+            if ticker in nq_tickers:
+                nq_relevant.append(entry)
+
+        result["top_mentions"] = top[:10]
+        result["nq_relevant"] = nq_relevant
+        result["source"] = "apewisdom"
+
+        if nq_relevant:
+            logger.info(f"Reddit NQ mentions: {[t['ticker'] for t in nq_relevant[:5]]}")
+
+    except Exception as e:
+        logger.debug(f"ApeWisdom fetch failed: {e}")
+
+    _cache.put("reddit", result)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# FRED Macro Data (Federal Reserve Economic Data)
+# ---------------------------------------------------------------------------
+
+async def get_fred_macro() -> dict:
+    """
+    Fetch key macro indicators from FRED API.
+    Cache: 3600 seconds (1 hour — macro data changes slowly).
+
+    Returns: {fed_funds_rate, cpi_yoy, unemployment, source}
+    """
+    cached = _cache.get("fred", 3600)
+    if cached is not None:
+        return cached
+
+    result = {"fed_funds_rate": None, "cpi_yoy": None,
+              "unemployment": None, "source": "unavailable"}
+
+    try:
+        # FRED API is free, no key needed for basic series
+        def _fetch_fred():
+            out = {}
+            base = "https://api.stlouisfed.org/fred/series/observations"
+            # Fed Funds Rate (DFF)
+            try:
+                resp = _requests.get(base, params={
+                    "series_id": "DFF", "sort_order": "desc",
+                    "limit": "1", "file_type": "json",
+                    "api_key": os.environ.get("FRED_API_KEY", ""),
+                }, timeout=5)
+                if resp.status_code == 200:
+                    obs = resp.json().get("observations", [])
+                    if obs:
+                        out["fed_funds_rate"] = float(obs[0]["value"])
+            except Exception:
+                pass
+
+            # CPI Year-over-Year (CPIAUCSL)
+            try:
+                resp = _requests.get(base, params={
+                    "series_id": "CPIAUCSL", "sort_order": "desc",
+                    "limit": "13", "file_type": "json",
+                    "api_key": os.environ.get("FRED_API_KEY", ""),
+                }, timeout=5)
+                if resp.status_code == 200:
+                    obs = resp.json().get("observations", [])
+                    if len(obs) >= 13:
+                        latest = float(obs[0]["value"])
+                        year_ago = float(obs[12]["value"])
+                        out["cpi_yoy"] = round((latest - year_ago) / year_ago * 100, 2)
+            except Exception:
+                pass
+
+            # Unemployment Rate (UNRATE)
+            try:
+                resp = _requests.get(base, params={
+                    "series_id": "UNRATE", "sort_order": "desc",
+                    "limit": "1", "file_type": "json",
+                    "api_key": os.environ.get("FRED_API_KEY", ""),
+                }, timeout=5)
+                if resp.status_code == 200:
+                    obs = resp.json().get("observations", [])
+                    if obs:
+                        out["unemployment"] = float(obs[0]["value"])
+            except Exception:
+                pass
+
+            return out
+
+        fred_data = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(None, _fetch_fred),
+            timeout=10.0,
+        )
+
+        result.update(fred_data)
+        if any(v is not None for k, v in fred_data.items()):
+            result["source"] = "fred"
+            logger.info(f"FRED macro: FFR={fred_data.get('fed_funds_rate')}, "
+                         f"CPI={fred_data.get('cpi_yoy')}%, "
+                         f"Unemp={fred_data.get('unemployment')}%")
+
+    except Exception as e:
+        logger.debug(f"FRED fetch failed: {e}")
+
+    _cache.put("fred", result)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Master Intelligence Function
 # ---------------------------------------------------------------------------
 async def get_full_intel() -> dict:
@@ -453,13 +688,17 @@ async def get_full_intel() -> dict:
     """
     start = time.time()
 
+    # Run ALL intelligence sources concurrently
     vix_task = asyncio.create_task(_safe_call(get_vix, "vix"))
     news_task = asyncio.create_task(_safe_call(get_market_news, "news"))
     cal_task = asyncio.create_task(_safe_call(get_economic_calendar, "calendar"))
     ctx_task = asyncio.create_task(_safe_call(get_market_context, "context"))
+    trump_task = asyncio.create_task(_safe_call(get_trump_sentiment, "trump"))
+    reddit_task = asyncio.create_task(_safe_call(get_reddit_momentum, "reddit"))
+    fred_task = asyncio.create_task(_safe_call(get_fred_macro, "fred"))
 
-    vix, news, calendar, context = await asyncio.gather(
-        vix_task, news_task, cal_task, ctx_task
+    vix, news, calendar, context, trump, reddit, fred = await asyncio.gather(
+        vix_task, news_task, cal_task, ctx_task, trump_task, reddit_task, fred_task
     )
 
     elapsed = round(time.time() - start, 2)
@@ -475,13 +714,22 @@ async def get_full_intel() -> dict:
         trade_ok = False
         restriction_reason = f"Tier-1 news active: {news.get('summary', '')[:100]}"
 
+    # Trump tariff warning (don't block, but flag)
+    trump_warning = None
+    if trump.get("tariff_mentioned") and abs(trump.get("score", 0)) > 0.3:
+        trump_warning = f"Trump tariff post detected (sentiment: {trump.get('score', 0):.2f})"
+
     return {
         "vix": vix,
         "news": news,
         "calendar": calendar,
         "market_context": context,
+        "trump": trump,
+        "reddit": reddit,
+        "fred": fred,
         "trade_ok": trade_ok,
         "restriction_reason": restriction_reason,
+        "trump_warning": trump_warning,
         "fetch_time_s": elapsed,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
@@ -530,10 +778,33 @@ async def _test():
     print(f"  Gap: {ctx['gap_pct']}%")
     print(f"  Trend (5m): {ctx['trend_5m']}")
 
+    print("\n--- Trump Sentiment ---")
+    trump = await get_trump_sentiment()
+    print(f"  Score: {trump.get('score', 'N/A')}")
+    print(f"  Posts: {trump.get('posts', 0)}")
+    print(f"  Keywords: {trump.get('market_keywords', [])}")
+    print(f"  Tariff: {trump.get('tariff_mentioned', False)}")
+    if trump.get("latest"):
+        print(f"  Latest: {trump['latest'][:100]}...")
+
+    print("\n--- Reddit / WSB Momentum ---")
+    reddit = await get_reddit_momentum()
+    print(f"  Source: {reddit.get('source', 'N/A')}")
+    print(f"  Top mentions: {[t['ticker'] for t in reddit.get('top_mentions', [])[:5]]}")
+    print(f"  NQ relevant: {[t['ticker'] for t in reddit.get('nq_relevant', [])[:5]]}")
+
+    print("\n--- FRED Macro ---")
+    fred = await get_fred_macro()
+    print(f"  Fed Funds Rate: {fred.get('fed_funds_rate', 'N/A')}%")
+    print(f"  CPI YoY: {fred.get('cpi_yoy', 'N/A')}%")
+    print(f"  Unemployment: {fred.get('unemployment', 'N/A')}%")
+
     print("\n--- Full Intel ---")
     intel = await get_full_intel()
     print(f"  Trade OK: {intel['trade_ok']}")
     print(f"  Restriction: {intel['restriction_reason']}")
+    print(f"  Trump warning: {intel.get('trump_warning', 'None')}")
+    print(f"  Sources: VIX + News + Calendar + Context + Trump + Reddit + FRED")
     print(f"  Fetch time: {intel['fetch_time_s']}s")
 
     print("\n" + "=" * 60)
