@@ -100,6 +100,12 @@ class BaseBot:
         self.no_trade_fp = NoTradeFingerprint()
         self.regime_transitions = RegimeTransitionDetector()
 
+        # Phase 6 secondary: Competitive edge arsenal
+        self.microstructure_filter = MicrostructureFilter()
+        self.crowding_detector = CrowdingDetector()
+        self.counter_edge = CounterEdgeEngine()
+        self.execution_quality = ExecutionQuality()
+
         # State for dashboard
         self.status = "IDLE"
         self.last_signal: dict | None = None
@@ -275,6 +281,9 @@ class BaseBot:
 
                 # Process tick through aggregator
                 snapshot = self.aggregator.process_tick(tick)
+
+                # Phase 6b: Feed microstructure filter on every tick
+                self.microstructure_filter.update_tick(snapshot.get("price", 0))
 
                 # Check position exits on every tick
                 if not self.positions.is_flat:
@@ -522,6 +531,13 @@ class BaseBot:
         except Exception as e:
             logger.debug(f"[COCKPIT] Grading error (non-blocking): {e}")
 
+        # Phase 6b: Update crowding detector with current levels
+        try:
+            bars_1m_objs = list(self.aggregator.bars_1m.completed)
+            self.crowding_detector.update_levels(market, bars_1m_objs)
+        except Exception as e:
+            logger.debug(f"[CROWDING] Update error (non-blocking): {e}")
+
         best_signal = None
         for strat in self.strategies:
             if not strat.enabled:
@@ -581,6 +597,31 @@ class BaseBot:
                 logger.info(f"[FINGERPRINT] Risk={fp_result['risk_score']} "
                              f"({fp_result['recommendation']}) "
                              f"matches={len(fp_result['matching_fingerprints'])}")
+
+            # Phase 6b: Crowding score (observation only)
+            try:
+                crowding = self.crowding_detector.get_crowding_score(
+                    entry_price=market.get("price", 0),
+                    direction=best_signal.direction,
+                    market=market,
+                )
+                self._last_eval["crowding"] = crowding
+            except Exception as e:
+                logger.debug(f"[CROWDING] Score error (non-blocking): {e}")
+
+            # Phase 6b: Counter-edge check (observation only)
+            try:
+                counter = self.counter_edge.check_counter_signal(
+                    strategy=best_signal.strategy,
+                    direction=best_signal.direction,
+                    regime=session_info.get("regime", "UNKNOWN"),
+                    market=market,
+                )
+                if counter:
+                    self._last_eval["counter_edge"] = counter
+                    logger.info(f"[COUNTER] Counter-edge detected: {counter['description']}")
+            except Exception as e:
+                logger.debug(f"[COUNTER] Check error (non-blocking): {e}")
 
             logger.info(f"[TRADE QUEUED:{best_signal.trade_id}] {best_signal.direction} "
                          f"via {best_signal.strategy} conf={best_signal.confidence:.0f}")
@@ -680,6 +721,16 @@ class BaseBot:
             stop_price = price + (stop_ticks * tick_value)
             target_price = price - (stop_ticks * tick_value * signal.target_rr)
 
+        # Phase 6b: Microstructure filter check (advisory only -- does NOT block)
+        try:
+            micro_result = self.microstructure_filter.check(market, signal.direction)
+            logger.info(f"[{tid}:MICRO] score={micro_result['score']} "
+                         f"rec={micro_result['recommendation']} "
+                         f"issues={micro_result['issues']}")
+        except Exception as e:
+            micro_result = {"score": 0, "recommendation": "N/A", "issues": [str(e)]}
+            logger.debug(f"[{tid}:MICRO] Error (non-blocking): {e}")
+
         # Log INTENT before execution
         logger.info(f"[INTENT:{tid}] {signal.direction} {contracts}x @ {price:.2f} "
                      f"SL={stop_price:.2f} TP={target_price:.2f} "
@@ -722,8 +773,11 @@ class BaseBot:
                 self.last_rejection = f"Fill timeout in LIVE mode — entry aborted"
                 return
 
-        # Inject regime into market snapshot for proper analytics tracking
+        # Inject regime and Phase 6b data into market snapshot for analytics
         market["regime"] = self.session.get_current_regime()
+        market["signal_price"] = price  # Price at signal generation time
+        market["microstructure"] = micro_result
+        market["fill_latency_ms"] = fill_result.get("latency_ms", 0)
 
         # NOW open position locally (after fill confirmation)
         self.positions.open_position(
@@ -834,6 +888,29 @@ class BaseBot:
             # Phase 6: Learn fingerprint from losses
             if trade["result"] == "LOSS":
                 self.no_trade_fp.learn_from_trade(trade, self.aggregator.snapshot())
+
+            # Phase 6b: Counter-edge learning from losses
+            if trade["result"] == "LOSS":
+                try:
+                    self.counter_edge.learn_from_loss(trade)
+                except Exception as e:
+                    logger.debug(f"[COUNTER] Learn error (non-blocking): {e}")
+
+            # Phase 6b: Execution quality tracking
+            try:
+                snapshot = trade.get("market_snapshot", {})
+                self.execution_quality.record(
+                    trade_id=trade.get("trade_id", ""),
+                    signal_price=snapshot.get("signal_price", trade["entry_price"]),
+                    entry_price=trade["entry_price"],
+                    exit_price=trade["exit_price"],
+                    pnl_ticks=trade["pnl_ticks"],
+                    fill_latency_ms=snapshot.get("fill_latency_ms", 0),
+                    strategy=trade["strategy"],
+                    regime=snapshot.get("regime", "UNKNOWN"),
+                )
+            except Exception as e:
+                logger.debug(f"[EXEC_Q] Record error (non-blocking): {e}")
 
             asyncio.ensure_future(tg.notify_exit(
                 trade_id=trade.get("trade_id", ""),
@@ -959,6 +1036,11 @@ class BaseBot:
             "expectancy": self.expectancy.to_dict(),
             "no_trade_fingerprints": self.no_trade_fp.to_dict(),
             "regime_transitions": self.regime_transitions.to_dict(),
+            # Phase 6b
+            "microstructure_filter": self.microstructure_filter.to_dict(),
+            "crowding_detector": self.crowding_detector.to_dict(),
+            "counter_edge": self.counter_edge.to_dict(),
+            "execution_quality": self.execution_quality.to_dict(),
         }
 
     # ─── Runtime Control ────────────────────────────────────────────
