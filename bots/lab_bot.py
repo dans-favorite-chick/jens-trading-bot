@@ -47,6 +47,7 @@ LAB_STRATEGY_OVERRIDES = {
         "min_confluence": 0.0,       # No confluence gate
         "min_tf_votes": 1,           # Just 1 TF agreeing is enough
         "min_momentum": 0,           # No momentum gate
+        "skip_regime_overrides": True, # Bypass hardcoded regime gates
         "stop_ticks": 8,
         "target_rr": 1.5,
     },
@@ -54,12 +55,14 @@ LAB_STRATEGY_OVERRIDES = {
         "min_wick_ticks": 3,         # Tiny wicks count
         "require_vwap_reclaim": False,  # No VWAP gate
         "require_delta_flip": False,    # No delta gate
+        "skip_regime_overrides": True,
         "stop_multiplier": 1.5,
         "target_rr": 1.5,
     },
     "vwap_pullback": {
         "min_confluence": 0.0,
         "min_tf_votes": 1,           # Just 1 TF
+        "skip_regime_overrides": True,
         "stop_ticks": 8,
         "target_rr": 1.5,
     },
@@ -67,12 +70,14 @@ LAB_STRATEGY_OVERRIDES = {
         "min_confluence": 0.0,
         "min_tf_votes": 1,           # Down from 4 to 1
         "min_precision": 0,          # No precision gate
+        "skip_regime_overrides": True,
         "stop_ticks": 8,
         "target_rr": 1.5,
     },
     "ib_breakout": {
         "min_confluence": 0.0,
         "min_tf_votes": 1,
+        "skip_regime_overrides": True,
         "stop_ticks": 10,
         "target_rr": 1.5,
         "ib_minutes": 15,            # Shorter IB window — faster signals
@@ -263,7 +268,9 @@ class LabBot(BaseBot):
                          f"conf={best_signal.confidence:.0f}")
         else:
             self.last_signal = None
-            self._pending_signal = None
+            # DON'T clear _pending_signal here — a prior eval may have set it
+            # and the tick loop hasn't consumed it yet. Clearing it causes a
+            # race condition where rapid 1m+5m bar evals wipe signals.
 
         self.history.log_eval(self._last_eval, market)
 

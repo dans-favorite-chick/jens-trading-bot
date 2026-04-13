@@ -36,7 +36,11 @@ class BiasMomentumFollow(BaseStrategy):
 
         # Get regime and apply overrides for golden windows
         regime = session_info.get("regime", "UNKNOWN")
-        overrides = _REGIME_OVERRIDES.get(regime, {})
+        # skip_regime_overrides: lab bot sets this to bypass hardcoded regime gates
+        if self.config.get("skip_regime_overrides", False):
+            overrides = {}
+        else:
+            overrides = _REGIME_OVERRIDES.get(regime, {})
 
         min_confluence = overrides.get("min_confluence", self.config.get("min_confluence", 3.0))
         min_tf_votes = overrides.get("min_tf_votes", self.config.get("min_tf_votes", 3))

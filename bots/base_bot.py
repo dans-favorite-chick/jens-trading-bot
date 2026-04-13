@@ -1009,7 +1009,9 @@ class BaseBot:
             self._pending_signal = best_signal
         else:
             self.last_signal = None
-            self._pending_signal = None
+            # DON'T clear _pending_signal here — a prior eval may have set it
+            # and the tick loop hasn't consumed it yet (race condition with
+            # rapid 1m+5m bar completions).
 
         # Persist full eval to history (every bar evaluation, signal or not)
         self.history.log_eval(self._last_eval, market)
