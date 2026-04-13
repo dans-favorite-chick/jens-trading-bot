@@ -50,8 +50,8 @@ class IBBreakout(BaseStrategy):
         regime = session_info.get("regime", "UNKNOWN")
         overrides = _REGIME_OVERRIDES.get(regime, {})
 
-        # Only trade in allowed regimes
-        if not overrides.get("allowed", False):
+        # Only trade in allowed regimes (unless all_regimes override is set)
+        if not self.config.get("all_regimes", False) and not overrides.get("allowed", False):
             return None
 
         # Need at least some bars

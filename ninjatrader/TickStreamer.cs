@@ -21,6 +21,7 @@ using System.IO;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
+using NinjaTrader.Data;
 using NinjaTrader.NinjaScript;
 using NinjaTrader.NinjaScript.Indicators;
 #endregion
@@ -30,11 +31,18 @@ namespace NinjaTrader.NinjaScript.Indicators
     public class TickStreamer : Indicator
     {
         // ── CONFIG ────────────────────────────────────────────────────────
-        private const string HOST           = "127.0.0.1";
-        private const int    PORT           = 8765;
-        private const int    HEARTBEAT_MS   = 3000;   // Heartbeat every 3 seconds
-        private const int    RECONNECT_MS   = 5000;   // Retry after 5 seconds
-        private const int    CONNECT_TIMEOUT = 3000;  // TCP connect timeout
+        private const string HOST            = "127.0.0.1";
+        private const int    PORT            = 8765;
+        private const int    HEARTBEAT_MS    = 3000;   // Heartbeat every 3 seconds
+        private const int    RECONNECT_MS    = 5000;   // Retry after 5 seconds
+        private const int    CONNECT_TIMEOUT = 3000;   // TCP connect timeout
+
+        // ── FILE FALLBACK ─────────────────────────────────────────────────
+        // Written every 1s regardless of TCP state. If TCP drops, the Python
+        // bridge detects stale data after 30s and reads this file instead.
+        private const string FALLBACK_FILE   = @"C:\temp\mnq_data.json";
+        private const int    FILE_WRITE_MS   = 1000;  // Write at most every 1 second
+        private DateTime     lastFileWrite   = DateTime.MinValue;
 
         // ── STATE ─────────────────────────────────────────────────────────
         private TcpClient client;
@@ -46,6 +54,15 @@ namespace NinjaTrader.NinjaScript.Indicators
         private string instrumentName = "";
         private readonly object sendLock = new object();
 
+        // ── DOM DEPTH STATE ────────────────────────────────────────────────
+        // NT8 delivers DOM updates one row at a time via OnMarketDepth events.
+        // We maintain local arrays for the top 5 bid/ask levels and sum them
+        // on each send. Throttled to 500ms — raise to 1000ms if CPU spikes.
+        private const int DOM_LEVELS = 5;
+        private double[] domBidVols  = new double[DOM_LEVELS];
+        private double[] domAskVols  = new double[DOM_LEVELS];
+        private DateTime lastDomSend = DateTime.MinValue;
+
         protected override void OnStateChange()
         {
             if (State == State.SetDefaults)
@@ -54,10 +71,13 @@ namespace NinjaTrader.NinjaScript.Indicators
                 Name = "TickStreamer";
                 Calculate = Calculate.OnEachTick;
                 IsOverlay = true;
+                // Note: OnMarketDepth fires automatically when chart has Level 2 data subscribed
             }
             else if (State == State.DataLoaded)
             {
                 instrumentName = Instrument.FullName;
+                // Ensure fallback directory exists
+                try { Directory.CreateDirectory(@"C:\temp"); } catch { }
                 TryConnect();
 
                 // Heartbeat timer — fires every 3s, handles heartbeat + reconnect
@@ -78,17 +98,87 @@ namespace NinjaTrader.NinjaScript.Indicators
         {
             if (State != State.Realtime) return;
 
+            double price = Close[0];
+            double bid   = GetCurrentBid();
+            double ask   = GetCurrentAsk();
+            long   vol   = (long)Volume[0];
+            string ts    = DateTime.UtcNow.ToString("o");
+
+            // ── Primary: send over TCP ───────────────────────────────
             if (isConnected)
             {
                 var sb = new StringBuilder(256);
                 sb.Append("{\"type\":\"tick\"");
-                sb.Append(",\"price\":").Append(Close[0]);
-                sb.Append(",\"bid\":").Append(GetCurrentBid());
-                sb.Append(",\"ask\":").Append(GetCurrentAsk());
-                sb.Append(",\"vol\":").Append(Volume[0]);
+                sb.Append(",\"price\":").Append(price);
+                sb.Append(",\"bid\":").Append(bid);
+                sb.Append(",\"ask\":").Append(ask);
+                sb.Append(",\"vol\":").Append(vol);
+                sb.Append(",\"ts\":\"").Append(ts).Append("\"");
+                sb.Append("}");
+                Send(sb.ToString());
+            }
+
+            // ── Backup: write file fallback (always, throttled 1s) ───
+            if ((DateTime.Now - lastFileWrite).TotalMilliseconds >= FILE_WRITE_MS)
+            {
+                lastFileWrite = DateTime.Now;
+                try
+                {
+                    var fb = new StringBuilder(256);
+                    fb.Append("{\"price\":").Append(price);
+                    fb.Append(",\"close\":").Append(price);
+                    fb.Append(",\"bid\":").Append(bid);
+                    fb.Append(",\"ask\":").Append(ask);
+                    fb.Append(",\"volume\":").Append(vol);
+                    fb.Append(",\"instrument\":\"").Append(instrumentName).Append("\"");
+                    fb.Append(",\"ts\":\"").Append(ts).Append("\"");
+                    fb.Append("}");
+                    File.WriteAllText(FALLBACK_FILE, fb.ToString());
+                }
+                catch { }  // Never let file I/O crash the indicator
+            }
+        }
+
+        // ── DOM DEPTH (Level 2) ────────────────────────────────────────
+        // NT8 calls this once per row update — we accumulate into local arrays
+        // and send a snapshot every 500ms.
+        protected override void OnMarketDepth(MarketDepthEventArgs e)
+        {
+            if (State != State.Realtime) return;
+            if (e.MarketDataType != MarketDataType.Ask &&
+                e.MarketDataType != MarketDataType.Bid) return;
+
+            int pos = e.Position;
+            if (pos < 0 || pos >= DOM_LEVELS) return;
+
+            // Update the appropriate side (NT8 sends Volume=0 on row removal)
+            if (e.MarketDataType == MarketDataType.Bid)
+                domBidVols[pos] = e.Volume;
+            else
+                domAskVols[pos] = e.Volume;
+
+            // Throttle sends to 500ms
+            if (!isConnected) return;
+            if ((DateTime.Now - lastDomSend).TotalMilliseconds < 500) return;
+            lastDomSend = DateTime.Now;
+
+            try
+            {
+                double bidTotal = 0.0, askTotal = 0.0;
+                for (int i = 0; i < DOM_LEVELS; i++) bidTotal += domBidVols[i];
+                for (int i = 0; i < DOM_LEVELS; i++) askTotal += domAskVols[i];
+
+                var sb = new StringBuilder(128);
+                sb.Append("{\"type\":\"dom\"");
+                sb.Append(",\"bid_stack\":").Append((long)bidTotal);
+                sb.Append(",\"ask_stack\":").Append((long)askTotal);
                 sb.Append(",\"ts\":\"").Append(DateTime.UtcNow.ToString("o")).Append("\"");
                 sb.Append("}");
                 Send(sb.ToString());
+            }
+            catch (Exception ex)
+            {
+                Print("TickStreamer OnMarketDepth error: " + ex.Message);
             }
         }
 

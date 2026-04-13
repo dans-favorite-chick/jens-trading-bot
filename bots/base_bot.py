@@ -50,6 +50,19 @@ from core.microstructure_filter import MicrostructureFilter
 from core.crowding_detector import CrowdingDetector
 from core.counter_edge import CounterEdgeEngine
 from core.execution_quality import ExecutionQuality
+from core.rsi_divergence import RSIDivergenceDetector
+from core.htf_pattern_scanner import HTFPatternScanner
+from core.hmm_regime import HMMRegimeDetector
+from core.smc_patterns import SMCDetector
+from core.trade_rag import TradeRAG
+from core.calendar_risk import CalendarRiskManager
+from core.regime_playbooks import PlaybookManager
+from core.intermarket_engine import IntermarketEngine
+from core.edge_miner import EdgeMiner
+from core.knowledge_rag import KnowledgeRAG
+from core.pandas_ta_detector import PandasTADetector
+from core.chart_patterns import ChartPatternDetector
+from data_feeds.cot_feed import COTFeed
 from strategies.base_strategy import BaseStrategy, Signal
 
 # Phase 4: AI Agents (optional — failures never block trading)
@@ -106,8 +119,41 @@ class BaseBot:
         self.counter_edge = CounterEdgeEngine()
         self.execution_quality = ExecutionQuality()
 
+        # Phase 6+: RSI divergence + HTF pattern confluence
+        self.rsi_divergence = RSIDivergenceDetector(rsi_length=14, pivot_left=5, pivot_right=5)
+        self.htf_scanner = HTFPatternScanner(tick_size=TICK_SIZE)
+
+        # Phase 7: AI Learning — HMM regime detection + trade similarity RAG
+        self.hmm_regime = HMMRegimeDetector(n_regimes=3, warmup_bars=50)
+        self.smc = SMCDetector(swing_lookback=5, tick_size=TICK_SIZE)
+        self.trade_rag = TradeRAG(
+            db_path=os.path.join(os.path.dirname(__file__), "..", "data", "trade_vectors")
+        )
+
+        # Phase 8: Knowledge Systems
+        self.calendar_risk = CalendarRiskManager(check_interval_min=5)
+        self.playbook_mgr = PlaybookManager()
+        self.intermarket = IntermarketEngine(window=20)
+        self.edge_miner = EdgeMiner(
+            logs_dir=os.path.join(os.path.dirname(__file__), "..", "logs")
+        )
+        self.knowledge_rag = KnowledgeRAG(
+            db_path=os.path.join(os.path.dirname(__file__), "..", "data", "knowledge_vectors")
+        )
+
+        # Phase 8: pandas-ta 62-pattern detector + COT institutional positioning
+        self.pandas_ta = PandasTADetector(max_bars=100)
+        self.chart_patterns = ChartPatternDetector(tick_size=TICK_SIZE, pivot_lookback=5)
+        self.cot_feed = COTFeed(
+            cache_dir=os.path.join(os.path.dirname(__file__), "..", "data")
+        )
+
+        self._last_rsi_divergence = None   # Latest divergence signal
+        self._last_htf_confluence = None   # Latest HTF pattern confluence
+
         # State for dashboard
         self.status = "IDLE"
+        self._ws = None  # Active websocket (for heartbeat sender)
         self.last_signal: dict | None = None
         self.last_rejection: str | None = None
         self._last_eval: dict = {}
@@ -175,6 +221,9 @@ class BaseBot:
         # Start dashboard state pusher in background
         asyncio.ensure_future(self._dashboard_loop())
 
+        # Start heartbeat sender (bridge detects hung bots)
+        asyncio.ensure_future(self._heartbeat_loop())
+
         # Start news/momentum scanner in background (Phase 4+)
         asyncio.ensure_future(self._news_scanner_loop())
 
@@ -191,35 +240,80 @@ class BaseBot:
 
     # ─── Dashboard State Pusher ─────────────────────────────────────
     async def _dashboard_loop(self):
-        """Push bot state to dashboard every 2s and poll for commands."""
+        """Push bot state to dashboard every 2s and poll for commands.
+        Uses async HTTP to avoid blocking the event loop (which starves
+        WebSocket keepalive pings and causes cascading disconnects).
+        """
         url_state = f"http://127.0.0.1:{DASHBOARD_PORT}/api/bot-state"
         url_cmds = f"http://127.0.0.1:{DASHBOARD_PORT}/api/commands?bot={self.bot_name}"
 
+        # Try aiohttp first (non-blocking), fall back to thread-pool urllib
+        try:
+            import aiohttp
+            _use_aiohttp = True
+        except ImportError:
+            _use_aiohttp = False
+
         while True:
             try:
-                # Push state
-                state_json = json.dumps(self.to_dict()).encode("utf-8")
-                req = urllib.request.Request(
-                    url_state,
-                    data=state_json,
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                urllib.request.urlopen(req, timeout=2)
+                if _use_aiohttp:
+                    async with aiohttp.ClientSession() as sess:
+                        # Push state
+                        state_json = json.dumps(self.to_dict())
+                        async with sess.post(url_state, data=state_json,
+                                             headers={"Content-Type": "application/json"},
+                                             timeout=aiohttp.ClientTimeout(total=2)):
+                            pass
 
-                # Poll for commands from dashboard
-                try:
-                    cmd_resp = urllib.request.urlopen(url_cmds, timeout=2)
-                    cmds = json.loads(cmd_resp.read().decode())
-                    for cmd in cmds:
-                        self._handle_dashboard_command(cmd)
-                except Exception:
-                    pass
+                        # Poll commands
+                        try:
+                            async with sess.get(url_cmds, timeout=aiohttp.ClientTimeout(total=2)) as resp:
+                                cmds = await resp.json()
+                                for cmd in cmds:
+                                    self._handle_dashboard_command(cmd)
+                        except Exception:
+                            pass
+                else:
+                    # Fallback: run blocking urllib in thread pool so it doesn't
+                    # starve the event loop
+                    loop = asyncio.get_event_loop()
+                    state_json = json.dumps(self.to_dict()).encode("utf-8")
+                    req = urllib.request.Request(
+                        url_state, data=state_json,
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    await loop.run_in_executor(None, lambda: urllib.request.urlopen(req, timeout=2))
+
+                    # Poll commands
+                    try:
+                        resp = await loop.run_in_executor(
+                            None, lambda: urllib.request.urlopen(url_cmds, timeout=2))
+                        cmds = json.loads(resp.read().decode())
+                        for cmd in cmds:
+                            self._handle_dashboard_command(cmd)
+                    except Exception:
+                        pass
 
             except Exception as e:
-                logger.debug(f"Dashboard push failed: {e}")
+                logger.warning(f"Dashboard push failed: {e}")
 
             await asyncio.sleep(2)
+
+    async def _heartbeat_loop(self):
+        """Send periodic heartbeat to bridge so it can detect hung bots."""
+        while True:
+            try:
+                if self._ws and self._ws.open:
+                    await self._ws.send(json.dumps({
+                        "type": "heartbeat",
+                        "name": self.bot_name,
+                        "status": self.status,
+                        "ts": time.time(),
+                    }))
+            except Exception:
+                pass  # Best effort — reconnect loop handles real failures
+            await asyncio.sleep(10)
 
     def _handle_dashboard_command(self, cmd: dict):
         """Process a command from the dashboard."""
@@ -240,15 +334,17 @@ class BaseBot:
 
         async with websockets.connect(
             uri,
-            ping_interval=20,
-            ping_timeout=10,
+            ping_interval=None,
+            ping_timeout=None,
             close_timeout=5,
+            max_queue=1024,
         ) as ws:
             # Identify ourselves to the bridge
             await ws.send(json.dumps({
                 "type": "identify",
                 "name": self.bot_name,
             }))
+            self._ws = ws
             logger.info(f"Connected to bridge as '{self.bot_name}'")
             self.status = "SCANNING"
 
@@ -278,6 +374,10 @@ class BaseBot:
 
                 if msg_type != "tick":
                     continue
+
+                # Yield to event loop — lets websockets handle ping/pong
+                # Without this, rapid tick processing starves keepalive
+                await asyncio.sleep(0)
 
                 # Process tick through aggregator
                 snapshot = self.aggregator.process_tick(tick)
@@ -364,6 +464,17 @@ class BaseBot:
                             if verdict.action == "SIT_OUT":
                                 logger.info(f"[FILTER] SIT_OUT — skipping trade")
                                 self.last_rejection = f"AI filter: {verdict.reason}"
+                                # Phase 7: Log near-miss for AI learning
+                                try:
+                                    sig_dict = {
+                                        "direction": signal.direction, "strategy": signal.strategy,
+                                        "confidence": signal.confidence, "entry_score": signal.entry_score,
+                                        "reason": signal.reason,
+                                    }
+                                    self.history.log_near_miss(sig_dict, market_snap, f"filter_sit_out: {verdict.reason}")
+                                    self.trade_rag.add_near_miss(sig_dict, market_snap)
+                                except Exception:
+                                    pass
                                 continue
                             # CAUTION handled in _enter_trade via self._filter_verdict
                         except Exception as e:
@@ -375,6 +486,67 @@ class BaseBot:
     # ─── Bar Event Handler ──────────────────────────────────────────
     def _on_bar(self, timeframe: str, bar):
         """Called by tick_aggregator when a bar completes."""
+        # Feed SMC pattern detector on 1m and 5m bars
+        if timeframe in ("1m", "5m"):
+            try:
+                smc_signals = self.smc.update(bar)
+                for s in smc_signals:
+                    logger.info(f"[SMC {timeframe}] {s.pattern} {s.direction} "
+                                f"str={s.strength:.0f} — {s.description}")
+            except Exception as e:
+                logger.debug(f"[SMC] Update error (non-blocking): {e}")
+
+            # Phase 8: Feed chart pattern detector on 1m and 5m bars
+            try:
+                chart_pats = self.chart_patterns.update(timeframe, bar)
+                for cp in chart_pats:
+                    logger.info(f"[CHART {timeframe}] {cp.pattern} {cp.direction} "
+                                f"str={cp.strength:.0f} tgt={cp.target_price:.2f}")
+            except Exception as e:
+                logger.debug(f"[CHART PATTERNS] Update error (non-blocking): {e}")
+
+        # Feed RSI divergence detector on every 1m bar close
+        if timeframe == "1m":
+            div = self.rsi_divergence.update(bar.close)
+            if div:
+                self._last_rsi_divergence = div
+                logger.info(f"[RSI DIV] {div['type'].upper()} divergence "
+                            f"strength={div['strength']:.0f} "
+                            f"RSI={div['rsi_current']:.1f} "
+                            f"bars_apart={div['bars_apart']}")
+
+        # Phase 7: Feed HMM regime detector on 5m bar completions
+        if timeframe == "5m":
+            try:
+                hmm_result = self.hmm_regime.update(bar)
+                if hmm_result.get("change_point"):
+                    logger.info(f"[HMM] Change point detected! Regime={hmm_result['regime']} "
+                                f"conf={hmm_result['confidence']:.2f}")
+            except Exception as e:
+                logger.debug(f"[HMM] Update error (non-blocking): {e}")
+
+            # Phase 8: Feed intermarket engine with NQ price on 5m bars
+            try:
+                self.intermarket.update_nq(bar.close)
+            except Exception:
+                pass
+
+            # Phase 8: Feed pandas-ta detector on 5m bar completions
+            try:
+                self.pandas_ta.update(bar)
+            except Exception as e:
+                logger.debug(f"[PandasTA] Feed error (non-blocking): {e}")
+
+        # Feed HTF pattern scanner on 5m/15m/60m bar completions
+        if timeframe in ("5m", "15m", "60m"):
+            htf_patterns = self.htf_scanner.on_bar(timeframe, bar)
+            if htf_patterns:
+                for sig in htf_patterns:
+                    p = sig["pattern"]
+                    logger.info(f"[HTF PATTERN] {timeframe} {p['pattern']} "
+                                f"({p.get('direction','?')}) "
+                                f"strength={p.get('strength',0)}")
+
         # Evaluate on 1m AND 5m bar completions
         if timeframe not in ("1m", "5m"):
             return
@@ -415,6 +587,21 @@ class BaseBot:
                 and not self._debrief_ran_today):
             self._debrief_ran_today = True
             asyncio.ensure_future(self._run_debrief())
+
+        # Phase 8: Run edge miner at AFTERHOURS transition (once per day)
+        if (regime == "AFTERHOURS" and self._last_regime != "AFTERHOURS"):
+            try:
+                self.edge_miner.load_trades(bot_name=self.bot_name)
+                patterns = self.edge_miner.analyze()
+                if patterns:
+                    edges = [p for p in patterns if p.is_edge][:3]
+                    anti = [p for p in patterns if not p.is_edge][:2]
+                    for e in edges:
+                        logger.info(f"[EDGE MINER] Edge: {e.description}")
+                    for a in anti:
+                        logger.warning(f"[EDGE MINER] Anti-edge: {a.description}")
+            except Exception as e:
+                logger.debug(f"[EDGE MINER] Analysis error (non-blocking): {e}")
 
         # Phase 5: Record daily equity at AFTERHOURS transition
         if (regime == "AFTERHOURS"
@@ -486,13 +673,13 @@ class BaseBot:
             "best_signal": None,
         }
 
-        # Minimum bars guard — 3 min max warmup after connect/reconnect
-        # Only require 3 x 1-min bars (3 min). No 5-min bar requirement —
-        # we don't want to sit out 5+ min and miss the golden window
+        # Minimum bars guard — just 1 completed 1m bar (~60s after connect)
+        # Strategies have their own regime-aware gates; no need to double-gate here.
+        # The 100-tick buffer from the bridge means we often get bar #1 within seconds.
         bars_5m = list(self.aggregator.bars_5m.completed)
         bars_1m = list(self.aggregator.bars_1m.completed)
-        if len(bars_1m) < 3:
-            reason = f"Warming up ({len(bars_1m)} 1m bars — need 3, ~3 min)"
+        if len(bars_1m) < 1:
+            reason = f"Warming up ({len(bars_1m)} 1m bars — need 1, ~1 min)"
             self.last_rejection = reason
             self._last_eval["risk_blocked"] = reason
             logger.info(f"[WARMUP] {reason}")
@@ -500,6 +687,91 @@ class BaseBot:
 
         # Get market state FIRST (needed by risk gate and everything below)
         market = self.aggregator.snapshot()
+
+        # Enrich market snapshot with RSI + HTF pattern data for strategies
+        market["rsi"] = self.rsi_divergence.get_current_rsi()
+        market["rsi_divergence"] = self._last_rsi_divergence
+        market["htf_patterns"] = self.htf_scanner.get_state().get("active_patterns", [])
+
+        # Phase 7: Enrich with SMC pattern data
+        try:
+            smc_state = self.smc.get_state()
+            market["smc_structure"] = smc_state.get("structure")
+            market["smc_recent"] = smc_state.get("recent_signals", [])[-3:]
+        except Exception:
+            pass
+
+        # Phase 7: Enrich with HMM regime data
+        try:
+            hmm_state = self.hmm_regime.get_state()
+            market["hmm_regime"] = hmm_state.get("regime")
+            market["hmm_confidence"] = hmm_state.get("confidence", 0)
+            market["hmm_change_point"] = hmm_state.get("change_point", False)
+            market["hmm_regime_params"] = hmm_state.get("regime_params", {})
+        except Exception:
+            pass
+
+        # Phase 8: Enrich with intermarket risk signal
+        try:
+            market["intermarket"] = self.intermarket.get_risk_signal()
+        except Exception:
+            pass
+
+        # Phase 8: Enrich with pandas-ta pattern data
+        try:
+            active = self.pandas_ta.get_active_patterns()
+            if active:
+                market["candlestick_patterns"] = active
+                market["candlestick_confluence"] = self.pandas_ta.get_confluence_score(
+                    "LONG" if market.get("tf_votes_bullish", 0) > market.get("tf_votes_bearish", 0) else "SHORT"
+                )
+        except Exception:
+            pass
+
+        # Phase 8: Enrich with geometric chart patterns
+        try:
+            chart_active = self.chart_patterns.get_active_patterns()
+            if chart_active:
+                bias_dir = "LONG" if market.get("tf_votes_bullish", 0) > market.get("tf_votes_bearish", 0) else "SHORT"
+                market["chart_patterns"] = chart_active
+                market["chart_pattern_confluence"] = self.chart_patterns.get_confluence_score(bias_dir)
+        except Exception:
+            pass
+
+        # Phase 8: Enrich with COT institutional positioning
+        try:
+            cot = self.cot_feed.get_signal()
+            if cot.get("leveraged_fund_net", 0) != 0:
+                market["cot"] = cot
+        except Exception:
+            pass
+
+        # Phase 8: Enrich with calendar risk
+        try:
+            cal_adj = self.calendar_risk.get_risk_adjustment()
+            market["calendar_risk"] = {
+                "blocked": cal_adj.blocked,
+                "size_multiplier": cal_adj.size_multiplier,
+                "stop_multiplier": cal_adj.stop_multiplier,
+                "reason": cal_adj.reason,
+                "next_event": cal_adj.next_event,
+                "minutes_until": cal_adj.minutes_until,
+            }
+            if cal_adj.blocked:
+                self.last_rejection = f"Calendar: {cal_adj.reason}"
+                self._last_eval["risk_blocked"] = f"Calendar: {cal_adj.reason}"
+                logger.warning(f"[CALENDAR RISK] BLOCKED: {cal_adj.reason}")
+                return
+        except Exception:
+            pass
+
+        # Phase 8: Update playbook based on HMM regime
+        try:
+            hmm_regime = market.get("hmm_regime", "DEFAULT")
+            hmm_conf = market.get("hmm_confidence", 0)
+            self.playbook_mgr.update_regime(hmm_regime, hmm_conf)
+        except Exception:
+            pass
 
         # Risk gate (pass ATR as volatility proxy since VIX requires external feed)
         atr_5m = market.get("atr_5m", 0)
@@ -538,6 +810,15 @@ class BaseBot:
         except Exception as e:
             logger.debug(f"[CROWDING] Update error (non-blocking): {e}")
 
+        # Phase 8: Apply playbook strategy overrides based on HMM regime
+        try:
+            for strat in self.strategies:
+                pb_overrides = self.playbook_mgr.get_strategy_overrides(strat.name)
+                for k, v in pb_overrides.items():
+                    strat.config[k] = v
+        except Exception:
+            pass
+
         best_signal = None
         for strat in self.strategies:
             if not strat.enabled:
@@ -547,6 +828,11 @@ class BaseBot:
             if not self.session.is_strategy_allowed(strat.name):
                 logger.debug(f"  [{strat.name}] SKIP — not allowed in {session_info.get('regime')}")
                 self._last_eval["strategies"].append({"name": strat.name, "result": "SKIP_REGIME"})
+                continue
+            # Phase 8: Playbook suppression check
+            if self.playbook_mgr.is_strategy_suppressed(strat.name):
+                logger.info(f"  [{strat.name}] SKIP — suppressed by {self.playbook_mgr.get_current().name} playbook")
+                self._last_eval["strategies"].append({"name": strat.name, "result": "SKIP_PLAYBOOK"})
                 continue
 
             try:
@@ -568,8 +854,14 @@ class BaseBot:
                     if signal.confidence > (best_signal.confidence if best_signal else 0):
                         best_signal = signal
                 else:
-                    logger.info(f"  [{strat.name}] no signal")
-                    self._last_eval["strategies"].append({"name": strat.name, "result": "NO_SIGNAL"})
+                    reject = getattr(strat, '_last_reject', '')
+                    if reject:
+                        logger.info(f"  [{strat.name}] REJECTED: {reject}")
+                        self._last_eval["strategies"].append({"name": strat.name, "result": "REJECTED", "reason": reject})
+                        strat._last_reject = ''
+                    else:
+                        logger.info(f"  [{strat.name}] no signal")
+                        self._last_eval["strategies"].append({"name": strat.name, "result": "NO_SIGNAL"})
             except Exception as e:
                 logger.error(f"  [{strat.name}] ERROR: {e}")
                 self._last_eval["strategies"].append({"name": strat.name, "result": "ERROR", "reason": str(e)})
@@ -584,6 +876,71 @@ class BaseBot:
                 logger.info(f"[TRANSITION BONUS] +{bonus} confidence -> {best_signal.confidence:.0f} "
                              f"({transition_bonus['description']})")
                 self._last_eval["transition_bonus"] = transition_bonus
+
+            # Phase 6+: RSI divergence confluence boost
+            try:
+                rsi_div = self._last_rsi_divergence
+                if rsi_div and rsi_div["strength"] > 20:
+                    # Bullish div + LONG signal = boost, Bearish div + SHORT = boost
+                    # Opposing divergence = observation only (never blocks)
+                    div_aligned = ((rsi_div["type"] == "bullish" and best_signal.direction == "LONG") or
+                                   (rsi_div["type"] == "bearish" and best_signal.direction == "SHORT"))
+                    if div_aligned:
+                        div_boost = min(15, int(rsi_div["strength"] / 5))
+                        best_signal.confidence = min(100, best_signal.confidence + div_boost)
+                        best_signal.confluences.append(
+                            f"RSI {rsi_div['type']} div +{div_boost} "
+                            f"(RSI={rsi_div['rsi_current']:.0f}, str={rsi_div['strength']:.0f})")
+                        logger.info(f"[RSI DIV BOOST] +{div_boost} confidence -> "
+                                     f"{best_signal.confidence:.0f} ({rsi_div['type']})")
+                    else:
+                        # Opposing divergence — log but don't block
+                        best_signal.confluences.append(
+                            f"Warning: opposing RSI {rsi_div['type']} div "
+                            f"(RSI={rsi_div['rsi_current']:.0f})")
+                        logger.info(f"[RSI DIV] Opposing {rsi_div['type']} divergence "
+                                     f"(observation only, not blocking)")
+                    self._last_eval["rsi_divergence"] = rsi_div
+            except Exception as e:
+                logger.debug(f"[RSI DIV] Error (non-blocking): {e}")
+
+            # Phase 6+: HTF pattern confluence boost
+            try:
+                htf_conf = self.htf_scanner.get_confluence_score(best_signal.direction)
+                self._last_htf_confluence = htf_conf
+                if htf_conf["aligned_count"] > 0 and htf_conf["score"] > 10:
+                    htf_boost = min(15, int(htf_conf["score"] / 5))
+                    best_signal.confidence = min(100, best_signal.confidence + htf_boost)
+                    strongest = htf_conf["strongest"] or "pattern"
+                    strongest_tf = htf_conf["strongest_tf"] or "?"
+                    best_signal.confluences.append(
+                        f"HTF {strongest_tf} {strongest} +{htf_boost} "
+                        f"({htf_conf['aligned_count']} aligned, score={htf_conf['score']:.0f})")
+                    logger.info(f"[HTF BOOST] +{htf_boost} confidence -> "
+                                 f"{best_signal.confidence:.0f} "
+                                 f"({htf_conf['aligned_count']} aligned patterns, "
+                                 f"strongest: {strongest_tf} {strongest})")
+                elif htf_conf["opposing_count"] > 0:
+                    best_signal.confluences.append(
+                        f"Warning: {htf_conf['opposing_count']} opposing HTF patterns")
+                self._last_eval["htf_confluence"] = htf_conf
+            except Exception as e:
+                logger.debug(f"[HTF PATTERNS] Error (non-blocking): {e}")
+
+            # Phase 7: SMC pattern confluence boost
+            try:
+                smc_conf = self.smc.get_confluence_score(best_signal.direction)
+                if smc_conf["aligned_count"] > 0 and smc_conf["score"] > 30:
+                    smc_boost = min(20, int(smc_conf["score"] / 4))
+                    best_signal.confidence = min(100, best_signal.confidence + smc_boost)
+                    pat = smc_conf["strongest_pattern"] or "pattern"
+                    best_signal.confluences.append(
+                        f"SMC {pat} +{smc_boost} ({smc_conf['aligned_count']} aligned)")
+                    logger.info(f"[SMC BOOST] +{smc_boost} confidence -> {best_signal.confidence:.0f} "
+                                f"({smc_conf['strongest_description']})")
+                self._last_eval["smc"] = smc_conf
+            except Exception as e:
+                logger.debug(f"[SMC] Confluence error (non-blocking): {e}")
 
             # Phase 6: No-trade fingerprint risk check (advisory only)
             fp_result = self.no_trade_fp.get_risk_score(
@@ -670,7 +1027,50 @@ class BaseBot:
         risk_dollars, tier = self.risk.get_risk_for_entry(signal.entry_score, vix=vix_proxy)
         if risk_dollars <= 0:
             self.last_rejection = f"Risk tier SKIP (score={signal.entry_score})"
+            # Phase 7: Log near-miss
+            try:
+                sig_dict = {"direction": signal.direction, "strategy": signal.strategy,
+                            "confidence": signal.confidence, "entry_score": signal.entry_score,
+                            "reason": signal.reason}
+                self.history.log_near_miss(sig_dict, market, "risk_tier_skip")
+                self.trade_rag.add_near_miss(sig_dict, market)
+            except Exception:
+                pass
             return
+
+        # Phase 8: Calendar risk size adjustment
+        try:
+            cal_adj = self.calendar_risk.get_risk_adjustment()
+            if cal_adj.size_multiplier < 1.0:
+                risk_dollars *= cal_adj.size_multiplier
+                logger.info(f"[{tid}:CALENDAR] size={cal_adj.size_multiplier:.1f}x "
+                             f"→ risk=${risk_dollars:.2f} ({cal_adj.reason})")
+        except Exception:
+            pass
+
+        # Phase 8: Intermarket risk adjustment
+        try:
+            im_risk = self.intermarket.get_risk_signal()
+            if im_risk["risk_off_score"] > 70:
+                risk_dollars *= 0.5
+                logger.info(f"[{tid}:INTERMARKET] High risk-off ({im_risk['risk_off_score']:.0f}) "
+                             f"→ risk=${risk_dollars:.2f}")
+            elif im_risk["risk_off_score"] > 55:
+                risk_dollars *= 0.75
+                logger.info(f"[{tid}:INTERMARKET] Elevated risk ({im_risk['risk_off_score']:.0f}) "
+                             f"→ risk=${risk_dollars:.2f}")
+        except Exception:
+            pass
+
+        # Phase 8: Playbook risk adjustment
+        try:
+            pb_risk = self.playbook_mgr.get_risk_overrides()
+            pb_size = pb_risk.get("size_multiplier", 1.0)
+            if pb_size != 1.0:
+                risk_dollars *= pb_size
+                logger.info(f"[{tid}:PLAYBOOK] size={pb_size:.1f}x → risk=${risk_dollars:.2f}")
+        except Exception:
+            pass
 
         # Apply session regime size_multiplier
         size_mult = self.session.get_size_multiplier()
@@ -694,6 +1094,17 @@ class BaseBot:
 
         # Adjust stop for volatility
         stop_ticks = self.risk.calculate_stop_ticks(signal.stop_ticks, atr_5m)
+
+        # Phase 8: Calendar risk stop widening (post-event volatility expansion)
+        try:
+            cal_adj = self.calendar_risk.get_risk_adjustment()
+            if cal_adj.stop_multiplier > 1.0:
+                old_stop = stop_ticks
+                stop_ticks = int(stop_ticks * cal_adj.stop_multiplier)
+                logger.info(f"[{tid}:CALENDAR] stop widened {old_stop}→{stop_ticks}t ({cal_adj.reason})")
+        except Exception:
+            pass
+
         contracts = self.risk.calculate_contracts(risk_dollars, stop_ticks)
 
         # Phase 5: Position scaler — cap contracts by account equity and conditions
@@ -710,6 +1121,15 @@ class BaseBot:
             logger.warning(f"[{tid}] Computed 0 contracts (risk=${risk_dollars:.2f}, "
                             f"stop={stop_ticks}t) — skipping entry")
             self.last_rejection = f"0 contracts computed (risk too low for stop distance)"
+            # Phase 7: Log near-miss
+            try:
+                sig_dict = {"direction": signal.direction, "strategy": signal.strategy,
+                            "confidence": signal.confidence, "entry_score": signal.entry_score,
+                            "reason": signal.reason}
+                self.history.log_near_miss(sig_dict, market, "zero_contracts")
+                self.trade_rag.add_near_miss(sig_dict, market)
+            except Exception:
+                pass
             return
 
         # Calculate prices
@@ -876,14 +1296,37 @@ class BaseBot:
             self.risk.record_trade(trade["pnl_dollars"])
             self.trade_memory.record(trade)
             self.tracker.record_trade(trade)
-            self.history.log_exit(trade, self.aggregator.snapshot())
 
-            # Phase 6: Close expectancy tracking
+            # Phase 6: Close expectancy tracking BEFORE log_exit so MAE/MFE is included
             exp_analysis = self.expectancy.close_trade(
                 exit_price=price,
                 pnl_ticks=trade["pnl_ticks"],
                 result=trade["result"],
             )
+
+            # Log exit with MAE/MFE data from expectancy engine
+            market_snap = self.aggregator.snapshot()
+            if exp_analysis:
+                market_snap["mae_ticks"] = exp_analysis.get("mae_ticks")
+                market_snap["mfe_ticks"] = exp_analysis.get("mfe_ticks")
+                market_snap["capture_ratio"] = exp_analysis.get("edge_captured_pct")
+                market_snap["went_red_first"] = exp_analysis.get("went_red_first")
+                market_snap["mae_time_s"] = exp_analysis.get("mae_time_s")
+                market_snap["mfe_time_s"] = exp_analysis.get("mfe_time_s")
+            self.history.log_exit(trade, market_snap)
+
+            # Phase 7: Store trade in RAG vector DB for similarity search
+            try:
+                rag_outcome = {
+                    "mae_ticks": market_snap.get("mae_ticks", 0),
+                    "mfe_ticks": market_snap.get("mfe_ticks", 0),
+                    "capture_ratio": market_snap.get("capture_ratio", 0),
+                    "hold_seconds": trade.get("hold_time_s", 0),
+                    "exit_reason": trade.get("exit_reason", ""),
+                }
+                self.trade_rag.add_trade(trade, market_snap, rag_outcome)
+            except Exception as e:
+                logger.debug(f"[RAG] add_trade error (non-blocking): {e}")
 
             # Phase 6: Learn fingerprint from losses
             if trade["result"] == "LOSS":
@@ -946,7 +1389,7 @@ class BaseBot:
 
     # ─── News Scanner Background Loop ─────────────────────────────────
     async def _news_scanner_loop(self):
-        """Poll for news alerts every 2 minutes. Non-blocking."""
+        """Poll for news alerts + external data every 2 minutes. Non-blocking."""
         while True:
             try:
                 from core.news_scanner import NewsScanner
@@ -961,6 +1404,35 @@ class BaseBot:
                 pass  # Module not yet available
             except Exception as e:
                 logger.debug(f"[NEWS] Scanner error: {e}")
+
+            # Phase 8: Refresh calendar risk events
+            try:
+                await self.calendar_risk.refresh_calendar()
+            except Exception as e:
+                logger.debug(f"[CALENDAR] Refresh error: {e}")
+
+            # Phase 8: Refresh COT institutional positioning (daily)
+            try:
+                await self.cot_feed.refresh()
+            except Exception as e:
+                logger.debug(f"[COT] Refresh error: {e}")
+
+            # Phase 8: Feed intermarket engine with external data
+            try:
+                from core.market_intel import get_full_intel
+                intel = await get_full_intel()
+                if intel:
+                    im_data = {}
+                    if "vix" in intel and intel["vix"]:
+                        im_data["VIX"] = float(intel["vix"])
+                    if "dxy" in intel and intel["dxy"]:
+                        im_data["DXY"] = float(intel["dxy"])
+                    if im_data:
+                        self.intermarket.update_from_external(im_data)
+                        logger.debug(f"[INTERMARKET] Updated: {im_data}")
+            except Exception as e:
+                logger.debug(f"[INTERMARKET] Feed error: {e}")
+
             await asyncio.sleep(120)  # Every 2 minutes
 
     # ─── Phase 4: AI Agent Runners ────────────────────────────────────
@@ -1009,39 +1481,59 @@ class BaseBot:
     # ─── Dashboard State ────────────────────────────────────────────
     def to_dict(self) -> dict:
         market = self.aggregator.snapshot()
-        return {
+        # Core fields — must always succeed
+        result = {
             "bot_name": self.bot_name,
             "status": self.status,
             "live_trading": LIVE_TRADING,
-            "position": self.positions.to_dict(market.get("price", 0)),
-            "risk": self.risk.to_dict(),
-            "session": self.session.to_dict(),
             "market": market,
             "last_signal": self.last_signal,
             "last_rejection": self.last_rejection,
             "last_eval": self._last_eval,
-            "strategies": [
-                {"name": s.name, "enabled": s.enabled, "validated": s.validated, "params": s.params}
-                for s in self.strategies
-            ],
-            "trades": self.trade_memory.recent(20),
             "council": self._council_result,
             "filter_verdict": self._filter_verdict,
-            "strategy_performance": self.tracker.to_dict(),
-            # Phase 5
-            "cockpit": self.cockpit.to_dict(self._cockpit_result),
-            "equity": self.equity_tracker.to_dict(),
             "clustering": self._clustering_result,
-            # Phase 6
-            "expectancy": self.expectancy.to_dict(),
-            "no_trade_fingerprints": self.no_trade_fp.to_dict(),
-            "regime_transitions": self.regime_transitions.to_dict(),
-            # Phase 6b
-            "microstructure_filter": self.microstructure_filter.to_dict(),
-            "crowding_detector": self.crowding_detector.to_dict(),
-            "counter_edge": self.counter_edge.to_dict(),
-            "execution_quality": self.execution_quality.to_dict(),
+            "rsi_last_divergence": self._last_rsi_divergence,
+            "htf_last_confluence": self._last_htf_confluence,
         }
+        # Each sub-component wrapped so one failure doesn't kill the entire state push
+        _safe = {
+            "position":              lambda: self.positions.to_dict(market.get("price", 0)),
+            "risk":                  lambda: self.risk.to_dict(),
+            "session":               lambda: self.session.to_dict(),
+            "strategies":            lambda: [{"name": s.name, "enabled": s.enabled, "validated": s.validated, "params": s.params} for s in self.strategies],
+            "trades":                lambda: self.trade_memory.recent(20),
+            "strategy_performance":  lambda: self.tracker.to_dict(),
+            "cockpit":               lambda: self.cockpit.to_dict(self._cockpit_result),
+            "equity":                lambda: self.equity_tracker.to_dict(),
+            "expectancy":            lambda: self.expectancy.to_dict(),
+            "no_trade_fingerprints": lambda: self.no_trade_fp.to_dict(),
+            "regime_transitions":    lambda: self.regime_transitions.to_dict(),
+            "microstructure_filter": lambda: self.microstructure_filter.to_dict(),
+            "crowding_detector":     lambda: self.crowding_detector.to_dict(),
+            "counter_edge":          lambda: self.counter_edge.to_dict(),
+            "execution_quality":     lambda: self.execution_quality.to_dict(),
+            "rsi_divergence":        lambda: self.rsi_divergence.get_state(),
+            "htf_patterns":          lambda: self.htf_scanner.get_state(),
+            "hmm_regime":            lambda: self.hmm_regime.to_dict(),
+            "trade_rag":             lambda: self.trade_rag.to_dict(),
+            "smc_patterns":          lambda: self.smc.to_dict(),
+            "calendar_risk":         lambda: self.calendar_risk.to_dict(),
+            "playbook":              lambda: self.playbook_mgr.to_dict(),
+            "intermarket":           lambda: self.intermarket.to_dict(),
+            "edge_miner":            lambda: self.edge_miner.to_dict(),
+            "knowledge_rag":         lambda: self.knowledge_rag.to_dict(),
+            "pandas_ta":             lambda: self.pandas_ta.to_dict(),
+            "chart_patterns":        lambda: self.chart_patterns.to_dict(),
+            "cot_feed":              lambda: self.cot_feed.to_dict(),
+        }
+        for key, fn in _safe.items():
+            try:
+                result[key] = fn()
+            except Exception as e:
+                logger.debug(f"to_dict: {key} failed: {e}")
+                result[key] = None
+        return result
 
     # ─── Runtime Control ────────────────────────────────────────────
     def set_profile(self, profile_name: str):

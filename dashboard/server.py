@@ -7,6 +7,7 @@ Polls bridge health and bot state; serves to browser on :5000.
 
 import json
 import logging
+import math
 import os
 import signal
 import subprocess
@@ -22,6 +23,30 @@ from config.settings import DASHBOARD_PORT, HEALTH_HTTP_PORT
 app = Flask(__name__)
 logger = logging.getLogger("Dashboard")
 
+
+# ─── NaN-safe JSON ────────────────────────────────────────────────
+# Bot state can contain NaN floats (e.g. RSI before enough bars).
+# Python's json.dumps outputs "NaN" which is invalid JSON —
+# browsers reject it. Replace NaN/Inf with null before serializing.
+def _sanitize_nans(obj):
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_nans(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_nans(v) for v in obj]
+    return obj
+
+
+def safe_jsonify(data):
+    """jsonify that converts NaN/Inf to null for valid JSON."""
+    return app.response_class(
+        json.dumps(_sanitize_nans(data), default=str),
+        mimetype="application/json",
+    )
+
 # ─── Bot Process Manager ───────────────────────────────────────────
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 _bot_processes: dict[str, subprocess.Popen] = {}
@@ -30,8 +55,12 @@ _bot_proc_lock = threading.Lock()
 
 def _start_bot(name: str) -> dict:
     """Start a bot subprocess. name = 'prod' or 'lab'."""
+    # Check if already running externally (connected to bridge)
+    if _bot_status(name) == "running":
+        return {"ok": False, "error": f"{name} bot already running (started externally)"}
+
     with _bot_proc_lock:
-        # Check if already running
+        # Check if already running as subprocess
         proc = _bot_processes.get(name)
         if proc and proc.poll() is None:
             return {"ok": False, "error": f"{name} bot already running (pid {proc.pid})"}
@@ -80,12 +109,32 @@ def _stop_bot(name: str) -> dict:
 
 
 def _bot_status(name: str) -> str:
-    """Return 'running' or 'stopped'."""
+    """Return 'running' or 'stopped'.
+    Checks both dashboard-spawned subprocesses AND externally-started bots
+    (detected by recent state pushes or bridge connection).
+    NOTE: Do NOT acquire _state_lock here — callers (api_status) may already hold it.
+    """
+    # Check dashboard-spawned subprocess first
     with _bot_proc_lock:
         proc = _bot_processes.get(name)
         if proc and proc.poll() is None:
             return "running"
-        return "stopped"
+
+    # Check if bot is connected to bridge (most reliable)
+    bridge = _state.get("bridge_health", {})
+    bots_connected = bridge.get("bots_connected", [])
+    if name in bots_connected:
+        return "running"
+
+    # Check if bot is pushing state recently (externally started)
+    # State must be fresh (< 15s old) — bots push every 2s
+    bot_state = _state.get(name, {})
+    if bot_state and bot_state.get("status"):
+        last_push = bot_state.get("_received_ts", 0)
+        if time.time() - last_push < 15:
+            return "running"
+
+    return "stopped"
 
 # ─── Shared State ───────────────────────────────────────────────────
 # Bots push state here via POST /api/bot-state
@@ -108,7 +157,7 @@ def _poll_bridge_health():
     url = f"http://127.0.0.1:{HEALTH_HTTP_PORT}/health"
     while True:
         try:
-            req = urllib.request.urlopen(url, timeout=2)
+            req = urllib.request.urlopen(url, timeout=5)
             data = json.loads(req.read().decode())
             with _state_lock:
                 _state["bridge_health"] = data
@@ -119,14 +168,15 @@ def _poll_bridge_health():
                         _state["connection_log"].append(evt)
                 # Trim to 200
                 _state["connection_log"] = _state["connection_log"][-200:]
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Bridge health poll failed: {e}")
             with _state_lock:
                 _state["bridge_health"] = {
                     "nt8_status": "disconnected",
                     "nt8_connected": False,
                     "bots_connected": [],
                     "bots_count": 0,
-                    "error": "Bridge unreachable",
+                    "error": f"Bridge unreachable: {e}",
                 }
         time.sleep(2)
 
@@ -146,7 +196,7 @@ def index():
 @app.route("/api/status")
 def api_status():
     with _state_lock:
-        return jsonify({
+        return safe_jsonify({
             "prod": _state["prod"],
             "lab": _state["lab"],
             "bridge": _state["bridge_health"],
@@ -154,6 +204,7 @@ def api_status():
                 "prod": _bot_status("prod"),
                 "lab": _bot_status("lab"),
             },
+            "connection_log": _state["connection_log"][-200:],
             "ts": time.time(),
         })
 
@@ -174,6 +225,28 @@ def api_strategy_performance():
         prod_perf = _state.get("prod", {}).get("strategy_performance")
         lab_perf = _state.get("lab", {}).get("strategy_performance")
     return jsonify({"prod": prod_perf, "lab": lab_perf})
+
+
+@app.route("/api/debug")
+def api_debug():
+    """Raw diagnostic: shows exactly what's in _state for bridge health."""
+    with _state_lock:
+        bh = _state.get("bridge_health", {})
+    # Also try a direct fetch from bridge health endpoint
+    import urllib.request
+    direct = {}
+    try:
+        url = f"http://127.0.0.1:{HEALTH_HTTP_PORT}/health"
+        req = urllib.request.urlopen(url, timeout=3)
+        direct = json.loads(req.read().decode())
+    except Exception as e:
+        direct = {"error": str(e)}
+    return jsonify({
+        "cached_bridge_health": bh,
+        "direct_bridge_fetch": direct,
+        "cached_bots_connected": bh.get("bots_connected", "MISSING"),
+        "direct_bots_connected": direct.get("bots_connected", "MISSING"),
+    })
 
 
 @app.route("/api/debrief")
@@ -224,6 +297,9 @@ def api_bot_state():
     """Bots push their full state here."""
     data = request.get_json(silent=True) or {}
     bot_name = data.get("bot_name", "unknown")
+    data["_received_ts"] = time.time()
+    # Sanitize NaN/Inf on intake so _state never contains invalid floats
+    data = _sanitize_nans(data)
     with _state_lock:
         _state[bot_name] = data
         _state["last_update"] = time.time()
@@ -337,6 +413,38 @@ def api_bot_proc_status():
         "prod": _bot_status("prod"),
         "lab": _bot_status("lab"),
     })
+
+
+# ─── API: Watchdog Status ─────────────────────────────────────────
+@app.route("/api/watchdog")
+def api_watchdog():
+    """Proxy to watchdog API on :5001 for dashboard display."""
+    try:
+        import urllib.request
+        req = urllib.request.urlopen("http://127.0.0.1:5001/status", timeout=2)
+        data = json.loads(req.read().decode())
+        return jsonify(data)
+    except Exception:
+        return jsonify({"error": "Watchdog not running", "bots": {}})
+
+
+@app.route("/api/watchdog/forensics")
+def api_watchdog_forensics():
+    """Read disconnect forensics from the shared JSONL log."""
+    forensics_path = os.path.join(PROJECT_ROOT, "logs", "disconnect_forensics.jsonl")
+    events = []
+    if os.path.exists(forensics_path):
+        try:
+            with open(forensics_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        events.append(json.loads(line.strip()))
+                    except json.JSONDecodeError:
+                        continue
+        except Exception:
+            pass
+    # Return last 100 events, newest first
+    return jsonify(events[-100:][::-1])
 
 
 # ─── Main ───────────────────────────────────────────────────────────

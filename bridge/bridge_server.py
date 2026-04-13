@@ -15,8 +15,10 @@ import collections
 import json
 import logging
 import os
+import threading
 import time
 from datetime import datetime, timezone
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -81,6 +83,7 @@ class BridgeServer:
         # Bot connections
         self.bot_connections: dict[str, websockets.WebSocketServerProtocol] = {}
         self.bot_names: dict[int, str] = {}  # ws id -> name
+        self.bot_heartbeats: dict[str, dict] = {}  # name -> {ts, status}
 
         # Tick buffer (ring buffer for late-connecting bots)
         self.tick_buffer = collections.deque(maxlen=TICK_BUFFER_SIZE)
@@ -117,6 +120,30 @@ class BridgeServer:
         if len(self.connection_events) > self.max_events:
             self.connection_events.pop(0)
         conn_log.info(f"[{level.upper()}] {message}")
+
+    def _log_disconnect_forensic(self, bot_name: str, reason: str):
+        """Write a detailed forensic record when a bot disconnects."""
+        try:
+            now = time.time()
+            forensic = {
+                "ts": datetime.now().isoformat(),
+                "event": "bot_disconnect",
+                "bot": bot_name,
+                "reason": reason,
+                "bridge_uptime_s": round(now - self.start_time, 0),
+                "ticks_received": self.ticks_received,
+                "ticks_forwarded": self.ticks_forwarded,
+                "tick_rate_10s": round(self._tick_rate_10s(), 1),
+                "nt8_connected": self.nt8_connected,
+                "nt8_tick_age_s": round(now - self.nt8_last_tick_time, 1) if self.nt8_last_tick_time else None,
+                "bots_remaining": list(self.bot_connections.keys()),
+                "hour": datetime.now().hour,
+            }
+            log_path = os.path.join(os.path.dirname(__file__), "..", "logs", "disconnect_forensics.jsonl")
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(forensic, default=str) + "\n")
+        except Exception as e:
+            logger.debug(f"Forensic log write failed: {e}")
 
     # ─── NT8 TCP Handler (port 8765) ──────────────────────────────────
     # NT8 connects via raw TCP (not WebSocket) because .NET Framework 4.8's
@@ -169,11 +196,16 @@ class BridgeServer:
                     # Buffer for late-connecting bots
                     self.tick_buffer.append(data)
 
-                    # Fan out to all connected bots
-                    await self._broadcast_to_bots(json.dumps(data))
+                    # Send to bots (parallel with timeout)
+                    msg = json.dumps(data)
+                    await self._broadcast_to_bots(msg)
 
-                    # Log every 1000th tick to avoid spam
-                    if self.ticks_received % 1000 == 0:
+                    # Yield to event loop every tick — lets pong frames,
+                    # health HTTP requests, and bot handlers run
+                    await asyncio.sleep(0)
+
+                    # Log every 200th tick for visibility
+                    if self.ticks_received % 200 == 0:
                         price  = data.get("price", "?")
                         n_bots = len(self.bot_connections)
                         logger.info(f"[TICK #{self.ticks_received:,}] price={price} bots={n_bots}")
@@ -185,8 +217,8 @@ class BridgeServer:
                     total = self.dom_bid_stack + self.dom_ask_stack
                     self.dom_imbalance = (self.dom_bid_stack / total) if total > 0 else 0.5
                     self.dom_last_update = time.time()
-                    # Forward to bots so aggregator can track it
                     await self._broadcast_to_bots(json.dumps(data))
+                    await asyncio.sleep(0)
 
         except asyncio.IncompleteReadError:
             pass
@@ -243,35 +275,68 @@ class BridgeServer:
                 if msg_type == "trade":
                     await self._handle_trade_command(bot_name, data)
 
+                elif msg_type == "heartbeat":
+                    # Track bot liveness — watchdog reads this from health
+                    self.bot_heartbeats[bot_name] = {
+                        "ts": time.time(),
+                        "status": data.get("status", "unknown"),
+                    }
+
                 elif msg_type == "status":
                     # Bot status update (for dashboard)
                     pass
 
-        except websockets.exceptions.ConnectionClosed:
-            pass
+        except websockets.exceptions.ConnectionClosed as e:
+            disconnect_reason = f"WS closed: code={e.code} reason={e.reason or 'none'}"
+            self._log_event("warn", f"Bot '{bot_name}' {disconnect_reason}")
         except Exception as e:
-            logger.error(f"Bot handler error ({bot_name}): {e}")
+            err_type = type(e).__name__
+            disconnect_reason = f"{err_type}: {e}"
+            logger.error(f"Bot handler error ({bot_name}): {disconnect_reason}")
+        else:
+            disconnect_reason = "async_loop_ended"
         finally:
             self.bot_connections.pop(bot_name, None)
             self.bot_names.pop(bot_id, None)
-            self._log_event("warn", f"Bot '{bot_name}' disconnected")
+            self.bot_heartbeats.pop(bot_name, None)
+            self._log_event("warn", f"Bot '{bot_name}' disconnected ({disconnect_reason})")
+            self._log_disconnect_forensic(bot_name, disconnect_reason)
 
     # ─── Broadcast to Bots ──────────────────────────────────────────
     async def _broadcast_to_bots(self, message: str):
         if not self.bot_connections:
             return
 
-        dead = []
-        for name, ws in self.bot_connections.items():
+        # Parallel send with timeout — prevents one slow bot from blocking
+        # the event loop (which starves ping/pong and health endpoint).
+        items = list(self.bot_connections.items())
+        if len(items) == 1:
+            # Fast path: single bot, no gather overhead
+            name, ws = items[0]
             try:
-                await ws.send(message)
+                await asyncio.wait_for(ws.send(message), timeout=2)
                 self.ticks_forwarded += 1
-            except Exception:
-                dead.append(name)
+            except Exception as e:
+                err_type = type(e).__name__
+                err_msg = str(e) or "no message"
+                self.bot_connections.pop(name, None)
+                self._log_event("warn", f"Bot '{name}' removed ({err_type}: {err_msg})")
+            return
 
-        for name in dead:
-            self.bot_connections.pop(name, None)
-            self._log_event("warn", f"Bot '{name}' removed (send failed)")
+        tasks = []
+        names = []
+        for name, ws in items:
+            tasks.append(asyncio.wait_for(ws.send(message), timeout=2))
+            names.append(name)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for name, result in zip(names, results):
+            if isinstance(result, Exception):
+                err_type = type(result).__name__
+                err_msg = str(result) or "no message"
+                self.bot_connections.pop(name, None)
+                self._log_event("warn", f"Bot '{name}' removed ({err_type}: {err_msg})")
+            else:
+                self.ticks_forwarded += 1
 
     # ─── Trade Command Handler ──────────────────────────────────────
     async def _handle_trade_command(self, bot_name: str, data: dict):
@@ -320,9 +385,18 @@ class BridgeServer:
     # ─── Health Check ───────────────────────────────────────────────
     def _tick_rate_10s(self) -> float:
         now = time.time()
-        return sum(1 for t in self.recent_tick_times if now - t <= 10) / 10.0
+        # Snapshot the deque to avoid RuntimeError if event loop appends during iteration
+        try:
+            ticks = list(self.recent_tick_times)
+        except RuntimeError:
+            return 0.0
+        return sum(1 for t in ticks if now - t <= 10) / 10.0
 
     def get_health(self) -> dict:
+        """Build health snapshot. Thread-safe — called from the health HTTP
+        thread while the asyncio event loop mutates bot_connections, etc.
+        All collection reads use list() snapshots to avoid mutation errors.
+        """
         now = time.time()
         nt8_age = now - self.nt8_last_tick_time if self.nt8_last_tick_time > 0 else -1
 
@@ -333,13 +407,23 @@ class BridgeServer:
         else:
             nt8_status = "disconnected"
 
+        # Snapshot mutable collections (event loop may modify concurrently)
+        try:
+            bots = list(self.bot_connections.keys())
+        except RuntimeError:
+            bots = []
+        try:
+            events = list(self.connection_events[-20:])
+        except (RuntimeError, IndexError):
+            events = []
+
         return {
             "nt8_status": nt8_status,
             "nt8_connected": self.nt8_connected,
             "nt8_instrument": self.nt8_instrument,
             "nt8_last_tick_age_s": round(nt8_age, 1),
-            "bots_connected": list(self.bot_connections.keys()),
-            "bots_count": len(self.bot_connections),
+            "bots_connected": bots,
+            "bots_count": len(bots),
             "ticks_received": self.ticks_received,
             "ticks_forwarded": self.ticks_forwarded,
             "trades_executed": self.trades_executed,
@@ -351,7 +435,9 @@ class BridgeServer:
             "dom_ask_stack": self.dom_ask_stack,
             "dom_imbalance": round(self.dom_imbalance, 3),
             "dom_age_s": round(now - self.dom_last_update, 1) if self.dom_last_update else None,
-            "connection_events": self.connection_events[-20:],
+            "connection_events": events,
+            # Bot heartbeats — watchdog uses this to detect hung bots
+            "bot_heartbeats": dict(self.bot_heartbeats),
         }
 
     # ─── NT8 Stale Watcher ──────────────────────────────────────────
@@ -413,28 +499,34 @@ class BridgeServer:
                 if "No such file" not in str(e):
                     logger.debug(f"File fallback poll error: {e}")
 
-    # ─── Health HTTP Server ─────────────────────────────────────────
-    async def health_handler(self, reader, writer):
-        """Simple HTTP handler for /health endpoint."""
-        try:
-            request = await asyncio.wait_for(reader.read(1024), timeout=5)
-            request_line = request.decode("utf-8", errors="ignore").split("\r\n")[0]
+    # ─── Health HTTP Server (threaded — never blocked by event loop) ──
+    def start_health_server(self):
+        """Start health HTTP server on a background thread.
+        This MUST run on its own thread so the dashboard poller always
+        gets a response, even when the asyncio event loop is saturated
+        broadcasting ticks to bots.
+        """
+        bridge = self  # closure reference
 
-            body = json.dumps(self.get_health(), indent=2)
-            response = (
-                "HTTP/1.1 200 OK\r\n"
-                "Content-Type: application/json\r\n"
-                "Access-Control-Allow-Origin: *\r\n"
-                f"Content-Length: {len(body)}\r\n"
-                "\r\n"
-                + body
-            )
-            writer.write(response.encode())
-            await writer.drain()
-        except Exception:
-            pass
-        finally:
-            writer.close()
+        class HealthHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = json.dumps(bridge.get_health()).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, format, *args):
+                pass  # Suppress per-request logging
+
+        server = HTTPServer(("127.0.0.1", HEALTH_HTTP_PORT), HealthHandler)
+        server.timeout = 5
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        logger.info(f"[OK] Health HTTP : http://127.0.0.1:{HEALTH_HTTP_PORT}/health (threaded)")
 
     # ─── Main ───────────────────────────────────────────────────────
     async def run(self):
@@ -452,23 +544,22 @@ class BridgeServer:
         self._log_event("info", f"Bridge started — NT8 TCP server on :{NT8_WS_PORT}")
 
         # Start Bot WebSocket server
+        # Pings DISABLED on localhost — they cause false disconnects when the
+        # event loop is busy broadcasting ticks (can't process pong in time).
+        # On 127.0.0.1, dead connections are detected instantly by send() failure.
         bot_server = await websockets.serve(
             self.handle_bot,
             "127.0.0.1",
             BOT_WS_PORT,
-            ping_interval=20,
-            ping_timeout=10,
+            ping_interval=None,
+            ping_timeout=None,
+            max_queue=1024,
         )
         logger.info(f"[OK] Bot server  : ws://127.0.0.1:{BOT_WS_PORT}")
         self._log_event("info", f"Bot server on :{BOT_WS_PORT}")
 
-        # Start Health HTTP server
-        health_server = await asyncio.start_server(
-            self.health_handler,
-            "127.0.0.1",
-            HEALTH_HTTP_PORT,
-        )
-        logger.info(f"[OK] Health HTTP : http://127.0.0.1:{HEALTH_HTTP_PORT}/health")
+        # Start Health HTTP server (on separate thread — immune to event loop saturation)
+        self.start_health_server()
 
         logger.info("")
         logger.info("Waiting for NT8 to connect...")

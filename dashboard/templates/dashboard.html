@@ -143,6 +143,27 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
 .pill-bearish { background:#2d0000; color:var(--red); }
 .pill-neutral { background:#2d2d00; color:var(--yellow); }
 
+/* ===== SECTION: AI Insights ===== */
+.ai-insights { max-height:180px; overflow-y:auto; font-family:var(--mono); font-size:11px; }
+.insight { display:flex; align-items:flex-start; gap:8px; padding:4px 0; border-bottom:1px solid var(--border); }
+.insight:last-child { border-bottom:none; }
+.insight-icon { font-size:13px; min-width:18px; text-align:center; line-height:18px; }
+.insight-badge { display:inline-block; padding:1px 6px; border-radius:3px; font-size:10px; font-weight:700; white-space:nowrap; }
+.insight-badge.smc { background:#1a0d2e; color:var(--purple); }
+.insight-badge.regime { background:#0d2818; color:var(--green); }
+.insight-badge.hmm { background:#2d1f00; color:var(--yellow); }
+.insight-badge.dom { background:#0d1f2d; color:var(--blue); }
+.insight-badge.rsi { background:#2d0d1f; color:#ff6b9d; }
+.insight-badge.risk { background:#2d0000; color:var(--red); }
+.insight-badge.htf { background:#1a1a0d; color:#d4d46b; }
+.insight-badge.calendar { background:#0d2d2d; color:#6bd4d4; }
+.insight-badge.candle { background:#2d1a0d; color:#ffaa44; }
+.insight-badge.chart { background:#1a2d0d; color:#aaff44; }
+.insight-badge.cot { background:#0d2d1a; color:#44ffaa; }
+.insight-text { color:var(--text-dim); flex:1; line-height:1.4; }
+.insight-text b { color:var(--text); }
+.insight-ts { color:#555; font-size:9px; white-space:nowrap; }
+
 /* ===== SECTION: AI Council ===== */
 .council-banner { display:flex; align-items:center; gap:12px; padding:10px 16px; border-radius:8px; margin-bottom:12px; font-family:var(--mono); }
 .council-banner.bullish { background:#0d2818; border:1px solid var(--green); }
@@ -203,11 +224,11 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
 </div>
 <div id="council-voters" class="council-voters" style="margin-bottom:12px; display:none;"></div>
 
-<!-- ===== SECTION: Connection Log + Bridge Activity ===== -->
+<!-- ===== SECTION: AI Insights + Bridge Activity ===== -->
 <div class="grid-2" style="margin-bottom:12px;">
   <div class="card">
-    <h3>Connection Log</h3>
-    <div id="conn-log" class="conn-log"></div>
+    <h3>AI Insights <span style="font-size:10px;color:var(--purple);font-weight:400;">&mdash; LIVE</span></h3>
+    <div id="ai-insights" class="ai-insights"></div>
   </div>
   <div class="card">
     <h3>Bridge Activity</h3>
@@ -225,8 +246,8 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
 
 <!-- ===== SECTION: Bot Tabs ===== -->
 <div class="tab-bar">
-  <button class="tab-btn active" onclick="switchBot('prod')">Prod Bot</button>
-  <button class="tab-btn" onclick="switchBot('lab')">Lab Bot</button>
+  <button class="tab-btn active" id="tab-prod" onclick="switchBot('prod', this)">Prod Bot</button>
+  <button class="tab-btn" id="tab-lab" onclick="switchBot('lab', this)">Lab Bot</button>
   <div class="bot-controls">
     <span class="bot-proc-status" id="bot-proc-label">Prod: stopped</span>
     <button class="bot-btn bot-btn-start" id="bot-start-btn" onclick="startBot()">Start</button>
@@ -250,9 +271,9 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
 <div class="card">
   <h3>Strategy Controls</h3>
   <div class="profile-btns">
-    <button class="profile-btn" onclick="setProfile('safe')">Safe</button>
-    <button class="profile-btn active" onclick="setProfile('balanced')">Balanced</button>
-    <button class="profile-btn" onclick="setProfile('aggressive')">Aggressive</button>
+    <button class="profile-btn" onclick="setProfile('safe', this)">Safe</button>
+    <button class="profile-btn active" onclick="setProfile('balanced', this)">Balanced</button>
+    <button class="profile-btn" onclick="setProfile('aggressive', this)">Aggressive</button>
   </div>
   <div id="strategy-toggles"></div>
   <hr style="border-color:var(--border); margin:12px 0;">
@@ -365,32 +386,40 @@ function esc(s) {
 // ── Polling ────────────────────────────────────────────────────────
 async function poll() {
   try {
-    const [statusRes, healthRes, logRes] = await Promise.all([
-      fetch('/api/status'),
-      fetch('/api/system-health'),
-      fetch('/api/connection-log'),
-    ]);
-    const status = await statusRes.json();
-    const health = await healthRes.json();
-    const connLog = await logRes.json();
+    // Single API call — /api/status has bridge health + connection log + bot state
+    const res = await fetch('/api/status');
+    if (!res.ok) { console.error('API status:', res.status); }
+    const status = await res.json();
+    if (status._error) { console.warn('API error:', status._error); }
+    const health = status.bridge || {};
+    const connLog = status.connection_log || [];
+    const bot = status[activeBot] || {};
 
-    renderHealth(health);
-    renderConnLog(connLog);
-    renderBridgeActivity(health);
-    renderBot(status[activeBot] || {});
-    renderMarket(status[activeBot]?.market || {});
-    renderStats(status[activeBot]?.risk || {});
-    renderTrades(status[activeBot]?.trades || []);
-    renderStrategies(status[activeBot]?.strategies || []);
-    renderPosition(status[activeBot]?.position || {});
-    renderBotControls(status.bot_processes || {});
-    renderSignalActivity(status[activeBot] || {});
-    renderCouncil(status[activeBot]?.council);
-    renderFilterVerdict(status[activeBot]?.filter_verdict);
+    // Each render wrapped individually so one failure doesn't kill all updates
+    const renders = [
+      ['health',    () => renderHealth(health, status.bot_processes || {})],
+      ['connLog',   () => renderConnLog(connLog)],
+      ['bridge',    () => renderBridgeActivity(health)],
+      ['bot',       () => renderBot(bot)],
+      ['market',    () => renderMarket(bot.market || {})],
+      ['stats',     () => renderStats(bot.risk || {})],
+      ['trades',    () => renderTrades(bot.trades || [])],
+      ['strategies',() => renderStrategies(bot.strategies || [])],
+      ['position',  () => renderPosition(bot.position || {})],
+      ['controls',  () => renderBotControls(status.bot_processes || {})],
+      ['signals',   () => renderSignalActivity(bot)],
+      ['insights',  () => renderAIInsights(bot)],
+      ['council',   () => renderCouncil(bot.council)],
+      ['filter',    () => renderFilterVerdict(bot.filter_verdict)],
+    ];
+    for (const [name, fn] of renders) {
+      try { fn(); } catch (e) { console.warn('Render ' + name + ':', e.message); }
+    }
 
     document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
   } catch (e) {
     console.error('Poll error:', e);
+    document.getElementById('last-update').textContent = 'ERR: ' + (e.message || e) + ' @ ' + new Date().toLocaleTimeString();
   }
 
   // Poll debrief less frequently (every 30s)
@@ -401,10 +430,11 @@ async function poll() {
 }
 
 // ── Health Bar ─────────────────────────────────────────────────────
-function renderHealth(h) {
+function renderHealth(h, procs) {
   const nt8Status = h.nt8_status || 'disconnected';
   const age = h.nt8_last_tick_age_s;
   const bots = h.bots_connected || [];
+  procs = procs || {};
 
   setPill('h-nt8', nt8Status === 'live' ? 'live' : nt8Status === 'stale' ? 'stale' : 'dead',
     `NT8 Feed: ${nt8Status === 'live' ? age?.toFixed(0) + 's' : nt8Status}`);
@@ -412,10 +442,27 @@ function renderHealth(h) {
     `Bridge :8765: ${h.nt8_connected ? 'ok' : 'down'}`);
   setPill('h-bridge-bot', bots.length > 0 ? 'live' : 'dead',
     `Bridge :8766: ${bots.length} bots`);
-  setPill('h-prod', bots.includes('prod') ? 'live' : 'dead',
-    `Prod: ${bots.includes('prod') ? 'connected' : 'down'}`);
-  setPill('h-lab', bots.includes('lab') ? 'live' : 'dead',
-    `Lab: ${bots.includes('lab') ? 'connected' : 'down'}`);
+
+  // Bot pills: green=connected to bridge, yellow=process running but not connected, red=down
+  for (const bn of ['prod', 'lab']) {
+    const bridgeOk = bots.includes(bn);
+    const procOk = procs[bn] === 'running';
+    const cls = bridgeOk ? 'live' : procOk ? 'stale' : 'dead';
+    const label = bridgeOk ? 'connected' : procOk ? 'reconnecting' : 'down';
+    setPill('h-' + bn, cls, bn.charAt(0).toUpperCase() + bn.slice(1) + ': ' + label);
+  }
+
+  // Debug: show raw bridge data in health bar for diagnostics
+  let debugEl = document.getElementById('h-debug');
+  if (!debugEl) {
+    debugEl = document.createElement('span');
+    debugEl.id = 'h-debug';
+    debugEl.style.cssText = 'font-size:10px;color:var(--text-dim);font-family:var(--mono);margin-left:auto;';
+    document.querySelector('.health-bar').appendChild(debugEl);
+  }
+  debugEl.textContent = 'bridge_bots:[' + bots.join(',') + '] procs:{' +
+    Object.entries(procs).map(([k,v]) => k + ':' + v).join(',') + '}' +
+    (h.error ? ' ERR:' + h.error : '');
 
   // Alert banner
   const banner = document.getElementById('alert-banner');
@@ -609,10 +656,11 @@ function renderSignalActivity(bot) {
 }
 
 // ── Bot Tabs ───────────────────────────────────────────────────────
-function switchBot(name) {
+function switchBot(name, btn) {
   activeBot = name;
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  event.target.classList.add('active');
+  (btn || document.getElementById('tab-' + name)).classList.add('active');
+  poll();  // Immediately refresh with new bot's data
 }
 
 function renderBot(bot) {
@@ -665,10 +713,10 @@ function renderBotControls(botProcs) {
 }
 
 // ── Controls ───────────────────────────────────────────────────────
-function setProfile(name) {
+function setProfile(name, btn) {
   fetch('/api/runtime-controls/profile', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({profile:name})});
   document.querySelectorAll('.profile-btn').forEach(b => b.classList.remove('active'));
-  event.target.classList.add('active');
+  if (btn) btn.classList.add('active');
 }
 
 function toggleStrategy(name, enabled) {
@@ -689,6 +737,247 @@ function saveParams() {
     max_daily_loss: parseFloat(el('sl-dailyloss').value),
   };
   fetch('/api/runtime-controls/params', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(params)});
+}
+
+// ── AI Insights ───────────────────────────────────────────────────
+let _insightHistory = [];  // Rolling buffer of recent insights
+const MAX_INSIGHTS = 25;
+
+function renderAIInsights(bot) {
+  const container = el('ai-insights');
+  if (!container) return;
+  const now = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+
+  // Collect new insights from bot state
+  const newInsights = [];
+
+  // 1. SMC Patterns — the big one
+  const smc = bot.smc_patterns;
+  if (smc && smc.recent_signals) {
+    smc.recent_signals.forEach(s => {
+      const key = 'smc_' + s.pattern + '_' + s.price;
+      if (!_insightHistory.find(i => i.key === key)) {
+        const icon = s.direction === 'LONG' ? '\u25B2' : '\u25BC';
+        newInsights.push({key, ts: now, badge: 'smc', label: 'SMC',
+          icon, text: '<b>' + esc(s.pattern) + '</b> @ ' + s.price?.toFixed(2) + ' \u2014 ' + esc(s.description)});
+      }
+    });
+    // Structure change
+    if (smc.structure && smc.structure !== 'NEUTRAL') {
+      const sKey = 'smc_struct_' + smc.structure + '_' + smc.bar_count;
+      if (!_insightHistory.find(i => i.key === sKey)) {
+        newInsights.push({key: sKey, ts: now, badge: 'smc', label: 'SMC',
+          icon: smc.structure === 'BULLISH' ? '\u25B2' : '\u25BC',
+          text: 'Market structure: <b>' + esc(smc.structure) + '</b>'});
+      }
+    }
+  }
+
+  // 2. HMM Regime
+  const hmm = bot.hmm_regime;
+  if (hmm && hmm.regime) {
+    const hKey = 'hmm_' + hmm.regime;
+    const existing = _insightHistory.find(i => i.key?.startsWith('hmm_'));
+    if (!existing || existing.key !== hKey) {
+      // Remove old HMM entry
+      _insightHistory = _insightHistory.filter(i => !i.key?.startsWith('hmm_'));
+      newInsights.push({key: hKey, ts: now, badge: 'hmm', label: 'HMM',
+        icon: '\u26A1', text: 'Regime: <b>' + esc(hmm.regime) + '</b> (conf=' + (hmm.confidence * 100)?.toFixed(0) + '%)' +
+        (hmm.change_point ? ' \u2014 <b style="color:var(--yellow)">CHANGE POINT</b>' : '')});
+    }
+  }
+
+  // 3. RSI Divergence
+  const rsiDiv = bot.rsi_last_divergence;
+  if (rsiDiv) {
+    const rKey = 'rsi_' + rsiDiv.type + '_' + rsiDiv.rsi_current?.toFixed(0);
+    if (!_insightHistory.find(i => i.key === rKey)) {
+      newInsights.push({key: rKey, ts: now, badge: 'rsi', label: 'RSI',
+        icon: rsiDiv.type === 'bullish' ? '\u25B2' : '\u25BC',
+        text: '<b>' + esc(rsiDiv.type) + ' divergence</b> RSI=' + rsiDiv.rsi_current?.toFixed(1) +
+        ' str=' + rsiDiv.strength?.toFixed(0)});
+    }
+  }
+
+  // 4. DOM signals
+  const market = bot.market || {};
+  if (market.dom_signal) {
+    const ds = market.dom_signal;
+    if (ds.signal && ds.signal !== 'NEUTRAL') {
+      const dKey = 'dom_' + ds.signal + '_' + Math.floor(Date.now() / 30000); // Refresh every 30s
+      if (!_insightHistory.find(i => i.key === dKey)) {
+        newInsights.push({key: dKey, ts: now, badge: 'dom', label: 'DOM',
+          icon: '\u{1F4CA}', text: '<b>' + esc(ds.signal) + '</b> ' + esc(ds.description || '')});
+      }
+    }
+  }
+  if (market.dom_bid_heavy) {
+    const dbKey = 'dom_bid_heavy_' + Math.floor(Date.now() / 60000);
+    if (!_insightHistory.find(i => i.key === dbKey)) {
+      newInsights.push({key: dbKey, ts: now, badge: 'dom', label: 'DOM',
+        icon: '\u25B2', text: 'Bid-heavy DOM imbalance: <b>' + ((market.dom_imbalance || 0) * 100).toFixed(0) + '% bid</b>'});
+    }
+  }
+  if (market.dom_ask_heavy) {
+    const daKey = 'dom_ask_heavy_' + Math.floor(Date.now() / 60000);
+    if (!_insightHistory.find(i => i.key === daKey)) {
+      newInsights.push({key: daKey, ts: now, badge: 'dom', label: 'DOM',
+        icon: '\u25BC', text: 'Ask-heavy DOM imbalance: <b>' + ((1 - (market.dom_imbalance || 0)) * 100).toFixed(0) + '% ask</b>'});
+    }
+  }
+
+  // 5. HTF Patterns
+  const htf = bot.htf_patterns;
+  if (htf && htf.active_patterns) {
+    htf.active_patterns.forEach(p => {
+      const hKey = 'htf_' + p.pattern + '_' + p.timeframe;
+      if (!_insightHistory.find(i => i.key === hKey)) {
+        newInsights.push({key: hKey, ts: now, badge: 'htf', label: p.timeframe?.toUpperCase(),
+          icon: '\u{1F50D}', text: '<b>' + esc(p.pattern) + '</b> ' + esc(p.direction || '') +
+          ' str=' + (p.strength || 0)});
+      }
+    });
+  }
+
+  // 6. Calendar risk alerts
+  const calRisk = bot.calendar_risk;
+  if (calRisk && calRisk.adjustment) {
+    const adj = calRisk.adjustment;
+    if (adj.blocked || adj.size_multiplier < 1.0 || adj.stop_multiplier > 1.0) {
+      const cKey = 'cal_' + adj.reason?.substring(0, 30);
+      if (!_insightHistory.find(i => i.key === cKey)) {
+        const icon = adj.blocked ? '\u26D4' : '\u26A0';
+        newInsights.push({key: cKey, ts: now, badge: 'calendar', label: 'EVENT',
+          icon, text: '<b>' + (adj.blocked ? 'BLOCKED' : 'CAUTION') + '</b> ' + esc(adj.reason)});
+      }
+    }
+  }
+
+  // 7. Intermarket divergences
+  const im = bot.intermarket;
+  if (im && im.risk_signal) {
+    const rs = im.risk_signal;
+    if (rs.divergence_count > 0) {
+      rs.divergences.forEach(d => {
+        const imKey = 'im_div_' + d.name + '_' + Math.floor(Date.now() / 60000);
+        if (!_insightHistory.find(i => i.key === imKey)) {
+          newInsights.push({key: imKey, ts: now, badge: 'risk', label: 'DIVERGE',
+            icon: '\u26A0', text: '<b>' + esc(d.name) + '</b> divergence (corr=' + d.correlation + ')'});
+        }
+      });
+    }
+    if (rs.risk_level === 'HIGH') {
+      const roKey = 'risk_off_' + Math.floor(Date.now() / 120000);
+      if (!_insightHistory.find(i => i.key === roKey)) {
+        newInsights.push({key: roKey, ts: now, badge: 'risk', label: 'RISK',
+          icon: '\u{1F534}', text: '<b>RISK-OFF</b> score=' + rs.risk_off_score + ' \u2014 ' + esc(rs.recommendation)});
+      }
+    }
+  }
+
+  // 8. Playbook changes
+  const playbook = bot.playbook;
+  if (playbook && playbook.regime && playbook.regime !== 'DEFAULT') {
+    const pbKey = 'pb_' + playbook.regime;
+    const existing = _insightHistory.find(i => i.key?.startsWith('pb_'));
+    if (!existing || existing.key !== pbKey) {
+      _insightHistory = _insightHistory.filter(i => !i.key?.startsWith('pb_'));
+      newInsights.push({key: pbKey, ts: now, badge: 'hmm', label: 'PLAYBOOK',
+        icon: '\u{1F4D6}', text: '<b>' + esc(playbook.regime) + '</b> \u2014 ' + esc(playbook.description)});
+    }
+  }
+
+  // 9. Geometric Chart Patterns (triangles, H&S, double top, etc.)
+  const chartPats = bot.chart_patterns;
+  if (chartPats && chartPats.active_patterns && chartPats.active_patterns.length > 0) {
+    chartPats.active_patterns.forEach(cp => {
+      const cpKey = 'chart_' + cp.pattern + '_' + cp.timeframe + '_' + cp.neckline?.toFixed(0);
+      if (!_insightHistory.find(i => i.key === cpKey)) {
+        const icon = cp.direction === 'LONG' ? '\u25B2' : '\u25BC';
+        let text = '<b>' + esc(cp.pattern.replace(/_/g, ' ')) + '</b> on ' + esc(cp.timeframe) +
+          ' str=' + (cp.strength || 0).toFixed(0);
+        if (cp.target_price) text += ' tgt=' + cp.target_price.toFixed(2);
+        if (cp.neckline) text += ' neck=' + cp.neckline.toFixed(2);
+        if (cp.confirmed) text += ' <b style="color:var(--green)">CONFIRMED</b>';
+        if (cp.description) text += ' \u2014 ' + esc(cp.description);
+        newInsights.push({key: cpKey, ts: now, badge: 'chart', label: cp.timeframe?.toUpperCase(),
+          icon, text});
+      }
+    });
+  }
+
+  // 10. Candlestick Patterns (pandas-ta 62 patterns)
+  const pta = bot.pandas_ta;
+  if (pta && pta.active_patterns) {
+    const ap = pta.active_patterns;
+    const names = Object.keys(ap);
+    if (names.length > 0) {
+      const ptKey = 'pta_' + names.sort().join('_') + '_' + pta.bar_count;
+      if (!_insightHistory.find(i => i.key === ptKey)) {
+        const bulls = names.filter(n => ap[n] > 0).map(n => n);
+        const bears = names.filter(n => ap[n] < 0).map(n => n);
+        let text = '';
+        if (bulls.length) text += '<b style="color:var(--green)">' + bulls.join(', ') + '</b> ';
+        if (bears.length) text += '<b style="color:var(--red)">' + bears.join(', ') + '</b>';
+        if (pta.strongest_bullish) text += ' strongest\u25B2=' + esc(pta.strongest_bullish);
+        if (pta.strongest_bearish) text += ' strongest\u25BC=' + esc(pta.strongest_bearish);
+        newInsights.push({key: ptKey, ts: now, badge: 'candle', label: 'CANDLE',
+          icon: '\u{1F56F}', text: text});
+      }
+    }
+  }
+
+  // 10. COT Institutional Positioning
+  const cot = bot.cot_feed;
+  if (cot && cot.leveraged_fund_net !== 0) {
+    const cotKey = 'cot_' + cot.extreme_signal + '_' + cot.trend;
+    const existing = _insightHistory.find(i => i.key?.startsWith('cot_'));
+    if (!existing || existing.key !== cotKey) {
+      _insightHistory = _insightHistory.filter(i => !i.key?.startsWith('cot_'));
+      const net = cot.leveraged_fund_net;
+      const pct = (cot.percentile_rank * 100).toFixed(0);
+      const icon = net > 0 ? '\u25B2' : '\u25BC';
+      let text = '<b>Net ' + (net > 0 ? 'LONG' : 'SHORT') + '</b> ' + Math.abs(net).toLocaleString() +
+        ' contracts (rank=' + pct + '% trend=' + esc(cot.trend) + ')';
+      if (cot.extreme_signal !== 'NEUTRAL') {
+        text += ' <b style="color:var(--yellow)">' + esc(cot.extreme_signal) + '</b>';
+      }
+      newInsights.push({key: cotKey, ts: now, badge: 'cot', label: 'COT',
+        icon, text});
+    }
+  }
+
+  // 11. Session regime changes
+  const session = bot.session || {};
+  if (session.regime) {
+    const rKey = 'regime_' + session.regime;
+    const existing = _insightHistory.find(i => i.key?.startsWith('regime_'));
+    if (!existing || existing.key !== rKey) {
+      _insightHistory = _insightHistory.filter(i => !i.key?.startsWith('regime_'));
+      newInsights.push({key: rKey, ts: now, badge: 'regime', label: 'REGIME',
+        icon: '\u23F0', text: 'Session regime: <b>' + esc(session.regime) + '</b>'});
+    }
+  }
+
+  // Add new insights to front of history
+  if (newInsights.length > 0) {
+    _insightHistory = [...newInsights, ..._insightHistory].slice(0, MAX_INSIGHTS);
+  }
+
+  // Render
+  if (_insightHistory.length === 0) {
+    container.innerHTML = '<div style="color:var(--text-dim);padding:12px;text-align:center;">Waiting for patterns\u2026</div>';
+    return;
+  }
+
+  container.innerHTML = _insightHistory.map(i =>
+    '<div class="insight">' +
+      '<span class="insight-ts">' + esc(i.ts) + '</span>' +
+      '<span class="insight-badge ' + esc(i.badge) + '">' + esc(i.label) + '</span>' +
+      '<span class="insight-icon">' + (i.icon || '') + '</span>' +
+      '<span class="insight-text">' + i.text + '</span>' +
+    '</div>'
+  ).join('');
 }
 
 // ── AI Council ────────────────────────────────────────────────────

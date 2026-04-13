@@ -167,6 +167,36 @@ class HistoryLogger:
             "vwap_at_exit":      market.get("vwap"),
             "cvd_at_exit":       market.get("cvd"),
             "atr_at_exit":       market.get("atr_5m"),
+            # MAE/MFE from ExpectancyEngine (Phase A: persisted for ML training)
+            "mae_ticks":       market.get("mae_ticks"),
+            "mfe_ticks":       market.get("mfe_ticks"),
+            "capture_ratio":   market.get("capture_ratio"),
+            "went_red_first":  market.get("went_red_first"),
+            "mae_time_s":      market.get("mae_time_s"),
+            "mfe_time_s":      market.get("mfe_time_s"),
+        })
+
+    def log_near_miss(self, signal: dict, market: dict, reason: str):
+        """Log a signal that was generated but not taken (for Phase B RAG training)."""
+        self._write({
+            "event":        "near_miss",
+            "ts":           datetime.now().isoformat(),
+            "bot":          self.bot_name,
+            "direction":    signal.get("direction"),
+            "strategy":     signal.get("strategy"),
+            "confidence":   signal.get("confidence"),
+            "entry_score":  signal.get("entry_score"),
+            "reason":       signal.get("reason"),
+            "skip_reason":  reason,
+            # Market context at signal time
+            "price":        market.get("price"),
+            "vwap":         market.get("vwap"),
+            "atr_5m":       market.get("atr_5m"),
+            "cvd":          market.get("cvd"),
+            "dom_imbalance":market.get("dom_imbalance"),
+            "regime":       market.get("regime"),
+            "tf_votes_bullish": market.get("tf_votes_bullish"),
+            "tf_votes_bearish": market.get("tf_votes_bearish"),
         })
 
     def log_session_summary(self, risk_dict: dict, trade_count: int):

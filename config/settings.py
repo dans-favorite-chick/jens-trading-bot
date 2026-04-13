@@ -27,7 +27,7 @@ HEARTBEAT_INTERVAL_S = 3        # NT8 indicator sends heartbeat every N seconds
 STALE_THRESHOLD_S = 10          # Yellow warning after N seconds without data
 DISCONNECT_THRESHOLD_S = 30     # Red / switch to file fallback after N seconds
 FILE_POLL_INTERVAL_S = 0.25     # Poll file fallback every N seconds
-TICK_BUFFER_SIZE = 100          # Ring buffer of recent ticks for late-connecting bots
+TICK_BUFFER_SIZE = 500          # Ring buffer — ~1.5 min of bars on reconnect (2000 overwhelmed event loop)
 
 # ─── Risk Limits ────────────────────────────────────────────────────
 MAX_LOSS_PER_TRADE = 20.0       # Hard limit per trade ($)

@@ -14,15 +14,17 @@ from core.candlestick_patterns import CandlestickAnalyzer, get_pattern_confluenc
 # Regime-specific overrides — BE AGGRESSIVE in golden windows
 # Non-golden regimes use strategy config defaults (tighter gates)
 _REGIME_OVERRIDES = {
-    "OPEN_MOMENTUM": {"min_tf_votes": 2, "min_momentum": 35, "min_confluence": 2.0},
-    "MID_MORNING":   {"min_tf_votes": 2, "min_momentum": 35, "min_confluence": 2.0},
-    "LATE_AFTERNOON": {"min_tf_votes": 2, "min_momentum": 45, "min_confluence": 2.5},
-    # Lab bot regimes — still need TF alignment but lower thresholds to practice
-    "OVERNIGHT_RANGE": {"min_tf_votes": 2, "min_momentum": 40, "min_confluence": 2.5},
-    "AFTERHOURS":      {"min_tf_votes": 2, "min_momentum": 40, "min_confluence": 2.5},
-    "PREMARKET_DRIFT":  {"min_tf_votes": 2, "min_momentum": 40, "min_confluence": 2.5},
-    "AFTERNOON_CHOP":   {"min_tf_votes": 2, "min_momentum": 45, "min_confluence": 2.5},
-    "CLOSE_CHOP":       {"min_tf_votes": 2, "min_momentum": 45, "min_confluence": 2.5},
+    # Golden windows — TRADE HARD. 2 TF alignment, low momentum/confluence bar.
+    "OPEN_MOMENTUM": {"min_tf_votes": 2, "min_momentum": 25, "min_confluence": 1.5},
+    "MID_MORNING":   {"min_tf_votes": 2, "min_momentum": 30, "min_confluence": 1.5},
+    # Secondary windows — still aggressive but slightly tighter
+    "LATE_AFTERNOON": {"min_tf_votes": 2, "min_momentum": 35, "min_confluence": 2.0},
+    # Off-hours — loosen for data collection
+    "OVERNIGHT_RANGE": {"min_tf_votes": 2, "min_momentum": 35, "min_confluence": 2.0},
+    "AFTERHOURS":      {"min_tf_votes": 2, "min_momentum": 35, "min_confluence": 2.0},
+    "PREMARKET_DRIFT":  {"min_tf_votes": 2, "min_momentum": 35, "min_confluence": 2.0},
+    "AFTERNOON_CHOP":   {"min_tf_votes": 2, "min_momentum": 40, "min_confluence": 2.5},
+    "CLOSE_CHOP":       {"min_tf_votes": 2, "min_momentum": 40, "min_confluence": 2.5},
 }
 
 
@@ -58,7 +60,9 @@ class BiasMomentumFollow(BaseStrategy):
             direction = "SHORT"
             votes = bearish_votes
         else:
-            return None  # Not enough alignment
+            self._last_reject = (f"TF_VOTES: bull={bullish_votes} bear={bearish_votes} "
+                                 f"need={min_tf_votes} bias={tf_bias}")
+            return None
 
         # ── Momentum check ──────────────────────────────────────────
         price = market.get("price", 0)
@@ -141,11 +145,15 @@ class BiasMomentumFollow(BaseStrategy):
             confluences.append(f"Warning: opposing pattern {opposed_name}")
 
         if momentum_score < min_momentum:
+            self._last_reject = (f"MOMENTUM: score={momentum_score} need={min_momentum} "
+                                 f"({', '.join(confluences[1:])})")
             return None
 
         # ── Confluence score ────────────────────────────────────────
         confluence = votes + (momentum_score / 30)
         if confluence < min_confluence:
+            self._last_reject = (f"CONFLUENCE: score={confluence:.1f} need={min_confluence} "
+                                 f"votes={votes} momentum={momentum_score}")
             return None
 
         confluences.append(f"TF: {votes}/4 {'bull' if direction == 'LONG' else 'bear'}")

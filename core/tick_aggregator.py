@@ -277,12 +277,16 @@ class TickAggregator:
                 self.ema21 = bar.close * k21 + self.ema21 * (1 - k21)
 
         # ── TF Bias ─────────────────────────────────────────────────
+        # 2-of-3 voting: majority of last 3 bars rising = BULLISH, falling = BEARISH
+        # (Old rule required ALL 3 consecutive — way too strict for MNQ chop)
         bars = list(self._get_builder(tf).completed)
         if len(bars) >= 3:
             recent_closes = [b.close for b in bars[-3:]]
-            if all(recent_closes[i] < recent_closes[i + 1] for i in range(len(recent_closes) - 1)):
+            rises = sum(1 for i in range(len(recent_closes) - 1) if recent_closes[i + 1] > recent_closes[i])
+            falls = sum(1 for i in range(len(recent_closes) - 1) if recent_closes[i + 1] < recent_closes[i])
+            if rises >= 2:
                 self.tf_bias[tf] = "BULLISH"
-            elif all(recent_closes[i] > recent_closes[i + 1] for i in range(len(recent_closes) - 1)):
+            elif falls >= 2:
                 self.tf_bias[tf] = "BEARISH"
             else:
                 self.tf_bias[tf] = "NEUTRAL"
