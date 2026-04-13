@@ -6,11 +6,16 @@ bias from raw tick data. Single source of truth — all derived math
 lives here, not in NT8.
 """
 
+import json
+import logging
+import os
 import time
 import math
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+
+_log = logging.getLogger("TickAggregator")
 
 from core.dom_analyzer import DOMAnalyzer
 
@@ -348,3 +353,138 @@ class TickAggregator:
             "dom_signal": self.dom_analyzer.get_dom_signal(),
             "regime":        None,   # set by session_manager, placeholder here
         }
+
+    # ─── State Persistence (survive restarts) ──────────────────────
+    def save_state(self, path: str) -> None:
+        """Save completed bars + indicator state to disk. Called on every bar."""
+        try:
+            def _bars_to_list(builder: BarBuilder) -> list:
+                return [
+                    {"o": b.open, "h": b.high, "l": b.low, "c": b.close,
+                     "v": b.volume, "tc": b.tick_count,
+                     "st": b.start_time, "et": b.end_time}
+                    for b in builder.completed
+                ]
+
+            state = {
+                "saved_at": time.time(),
+                "saved_day": datetime.now().strftime("%Y-%m-%d"),
+                "bars_1m": _bars_to_list(self.bars_1m),
+                "bars_5m": _bars_to_list(self.bars_5m),
+                "bars_15m": _bars_to_list(self.bars_15m),
+                "bars_60m": _bars_to_list(self.bars_60m),
+                "bar_counts": {
+                    "1m": self.bars_1m.bar_count,
+                    "5m": self.bars_5m.bar_count,
+                    "15m": self.bars_15m.bar_count,
+                    "60m": self.bars_60m.bar_count,
+                },
+                "atr": dict(self.atr),
+                "tr_history": {k: list(v) for k, v in self._tr_history.items()},
+                "ema9": self.ema9,
+                "ema21": self.ema21,
+                "ema9_count": self._ema9_count,
+                "ema21_count": self._ema21_count,
+                "vwap": self.vwap,
+                "vwap_cum_pv": self._vwap_cum_pv,
+                "vwap_cum_vol": self._vwap_cum_vol,
+                "vwap_day": str(self._vwap_day) if self._vwap_day else None,
+                "cvd_session": self._cvd_session,
+                "tf_bias": dict(self.tf_bias),
+                "last_price": self.last_price,
+                "tick_count": self.tick_count,
+            }
+            tmp = path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(state, f)
+            os.replace(tmp, path)  # Atomic write
+        except Exception as e:
+            _log.debug(f"State save error: {e}")
+
+    def restore_state(self, path: str) -> bool:
+        """Restore bars + indicators from disk. Call BEFORE processing ticks.
+
+        Returns True if state was successfully restored.
+        """
+        try:
+            if not os.path.exists(path):
+                return False
+
+            with open(path, "r") as f:
+                state = json.load(f)
+
+            # Only restore same-day state (indicators reset on new day)
+            saved_day = state.get("saved_day")
+            today = datetime.now().strftime("%Y-%m-%d")
+            if saved_day != today:
+                _log.info(f"[RESTORE] Stale state from {saved_day}, skipping (today={today})")
+                return False
+
+            # Check freshness — reject state older than 2 hours
+            saved_at = state.get("saved_at", 0)
+            if time.time() - saved_at > 7200:
+                _log.info("[RESTORE] State older than 2 hours, skipping")
+                return False
+
+            def _list_to_bars(builder: BarBuilder, bar_list: list):
+                builder.completed.clear()
+                for b in bar_list:
+                    bar = Bar(
+                        open=b["o"], high=b["h"], low=b["l"], close=b["c"],
+                        volume=b["v"], tick_count=b.get("tc", 0),
+                        start_time=b.get("st", 0), end_time=b.get("et", 0),
+                    )
+                    builder.completed.append(bar)
+                builder._started = False  # Will re-start on next tick
+
+            _list_to_bars(self.bars_1m, state.get("bars_1m", []))
+            _list_to_bars(self.bars_5m, state.get("bars_5m", []))
+            _list_to_bars(self.bars_15m, state.get("bars_15m", []))
+            _list_to_bars(self.bars_60m, state.get("bars_60m", []))
+
+            counts = state.get("bar_counts", {})
+            self.bars_1m.bar_count = counts.get("1m", len(self.bars_1m.completed))
+            self.bars_5m.bar_count = counts.get("5m", len(self.bars_5m.completed))
+            self.bars_15m.bar_count = counts.get("15m", len(self.bars_15m.completed))
+            self.bars_60m.bar_count = counts.get("60m", len(self.bars_60m.completed))
+
+            # Restore ATR
+            self.atr = state.get("atr", self.atr)
+            for k, v in state.get("tr_history", {}).items():
+                if k in self._tr_history:
+                    self._tr_history[k] = deque(v, maxlen=14)
+
+            # Restore EMAs
+            self.ema9 = state.get("ema9", 0.0)
+            self.ema21 = state.get("ema21", 0.0)
+            self._ema9_count = state.get("ema9_count", 0)
+            self._ema21_count = state.get("ema21_count", 0)
+
+            # Restore VWAP
+            self.vwap = state.get("vwap", 0.0)
+            self._vwap_cum_pv = state.get("vwap_cum_pv", 0.0)
+            self._vwap_cum_vol = state.get("vwap_cum_vol", 0)
+            vday = state.get("vwap_day")
+            if vday and vday != "None":
+                from datetime import date
+                self._vwap_day = date.fromisoformat(vday)
+
+            # Restore CVD + TF bias
+            self._cvd_session = state.get("cvd_session", 0.0)
+            self.cvd = self._cvd_session
+            self.tf_bias = state.get("tf_bias", self.tf_bias)
+            self._update_tf_votes()
+            self.last_price = state.get("last_price", 0.0)
+            self.tick_count = state.get("tick_count", 0)
+
+            n_bars = (len(self.bars_1m.completed) + len(self.bars_5m.completed) +
+                      len(self.bars_15m.completed) + len(self.bars_60m.completed))
+            _log.info(f"[RESTORE] Loaded {n_bars} bars | "
+                      f"ATR_5m={self.atr['5m']:.2f} EMA9={self.ema9:.2f} "
+                      f"VWAP={self.vwap:.2f} CVD={self.cvd:.0f} "
+                      f"TF={self.tf_bias}")
+            return True
+
+        except Exception as e:
+            _log.warning(f"[RESTORE] Failed: {e}")
+            return False

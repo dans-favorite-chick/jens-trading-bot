@@ -93,6 +93,13 @@ class BaseBot:
 
     def __init__(self):
         self.aggregator = TickAggregator()
+        # Restore aggregator state from disk (survive restarts — no warmup needed)
+        self._aggregator_state_path = os.path.join(
+            os.path.dirname(__file__), "..", "data", f"aggregator_state_{self.bot_name}.json"
+        )
+        os.makedirs(os.path.dirname(self._aggregator_state_path), exist_ok=True)
+        if self.aggregator.restore_state(self._aggregator_state_path):
+            logger.info(f"[WARMUP] Aggregator state restored — indicators pre-loaded")
         self.risk = RiskManager()
         self.session = SessionManager(bot_name=self.bot_name)
         self.positions = PositionManager()
@@ -546,6 +553,12 @@ class BaseBot:
                     logger.info(f"[HTF PATTERN] {timeframe} {p['pattern']} "
                                 f"({p.get('direction','?')}) "
                                 f"strength={p.get('strength',0)}")
+
+        # Persist aggregator state on every bar (survive restarts)
+        try:
+            self.aggregator.save_state(self._aggregator_state_path)
+        except Exception:
+            pass
 
         # Evaluate on 1m AND 5m bar completions
         if timeframe not in ("1m", "5m"):
