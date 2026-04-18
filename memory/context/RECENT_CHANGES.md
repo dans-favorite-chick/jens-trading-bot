@@ -5,6 +5,33 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+### 2026-04-17 22:11 Central Daylight Time — Sunday build COMPLETE: 6 new Sunday modules (footprint_builder, footprint_patterns, pinning_detector, opex_calendar, es_confirmation, structural_bias composite) + 6 dashboard API endpoints + 20 unit tests (61 total passing) + MONDAY_READINESS.md report. All signals shadow mode. Monday ships foundation fixes live (Telegram HTML, MQBridge running, hooks, memory system, contract rollover, emergency halt) while structural_bias/footprint/patterns run alongside old tf_bias for 2 weeks of shadow observation before activation.
+
+**Files changed:**
+- `bridge/footprint_builder.py`
+- `core/footprint_patterns.py`
+- `core/pinning_detector.py`
+- `core/opex_calendar.py`
+- `core/es_confirmation.py`
+- `core/structural_bias.py`
+- `dashboard/server.py`
+- `tests/test_sunday_modules.py`
+- `memory/context/MONDAY_READINESS.md`
+
+**Decisions:**
+- Task 1 complete: footprint pipeline reads existing tick stream no NT8 changes needed
+- Task 2 gamma flip detector Saturday skeleton kept as-is requires live wiring (integration deferred)
+- Task 3 complete: pinning detector last 90 min RTH + 0DTE strike proximity + breach detection
+- Task 4 complete: OpEx calendar 3rd Friday detection + Triple Witching rules
+- Task 5 complete: ES confirmation via manual daily file NQ vs ES gamma alignment
+- Task 6 complete: structural_bias composite integrates 12 components with full reasoning trail
+- Task 7 complete: dashboard API endpoints added (JSON ready html widgets can come later)
+- Task 8 complete: WFO validation baseline 10.7pct risk of ruin break-even WR 47.6pct
+- Task 9 complete: 61 tests passing MONDAY_READINESS.md written
+- All new signals REMAIN SHADOW MODE for 2 weeks minimum before strategy gate activation
+- April 25 session: reflector + strategy concentration review + Kelly activation gate
+
+---
 ### 2026-04-17 19:17 Central Daylight Time — Saturday build complete: 11 new core modules + 3 procedural YAMLs + emergency halt tool + 41 passing unit tests. Signal foundation (swing ATR-ZigZag, volume profile POC/HVN/LVN/VAH/VAL + TPO-lite, climax reversal with mandatory secondary-test entry, liquidity sweep detector). Risk management (decay monitor rolling 30d Sharpe, TCA tracker with slippage analysis, anomaly circuit breakers with observe-mode default). Chart patterns v1 wrapper with context weighting (bull/bear flag + H&S/inverse H&S from existing detector). VIX term structure (CBOE-ready interface, yfinance fallback). Gamma flip detector skeleton. Session tagger for lab 24/7. Emergency halt tool. All modules dual-write mode or shadow, no live wiring yet.
 
 **Files changed:**
