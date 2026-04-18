@@ -5,6 +5,19 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+### 2026-04-17 22:29 Central Daylight Time — Weekend evaluation complete. KEY FINDING: 697 live trades = 33.3% WR + negative P&L -,227.68. The architectural rebuild gave us the TOOLS to find strategy problems but did not SOLVE them. Scheduled 20/80 fix week for Apr 20-22 (replayable strategies + CI + decay alerts). Recommended LIVE_TRADING stays False until 90-day replay proves positive expectancy.
+
+**Files changed:**
+- `memory/context/EVALUATION_2026-04-18.md`
+
+**Decisions:**
+- Sim Option A verified harness deterministic + MC convergence
+- Sim Option B surfaced THE critical finding: 33% WR with 5:1 config but net losing = ema_exit cutting winners short
+- Option C 90-day sim deferred pending replayable strategy refactor
+- 20/80 fix week scheduled Apr 20-22 with specific tasks per evening
+- Recommendation: LIVE_TRADING=False indefinitely until 90-day replay validates a real strategy
+
+---
 ### 2026-04-17 22:19 Central Daylight Time — Wire-up COMPLETE: all Saturday+Sunday modules now RUN in base_bot shadow mode. SwingState+VolumeProfile+ReversalDetector+SweepWatcher+GammaFlipDetector+Footprint1m/5m+DecayMonitor+TCA+CircuitBreakers all instantiated. Tick handler feeds footprint+volume profile+tick rate detector. 5m bar close feeds swing/climax/sweep/gamma flip/footprint. _evaluate_strategies computes full structural_bias composite every cycle with MenthorQ+VIX+OpEx+ES+Pinning enrichment. Dashboard endpoints (/api/structural-bias, /api/gamma-context, /api/footprint, /api/risk-mgmt, /api/all-signals) returning real data. Bots restarted clean, 0 errors, 61/61 tests still passing. Monday open = real shadow data flowing.
 
 **Files changed:**
