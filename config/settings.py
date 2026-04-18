@@ -5,6 +5,8 @@ Edit these values to configure the system. Dashboard sliders override
 STRATEGY_DEFAULTS at runtime (session-only unless "Save to Config" is clicked).
 """
 
+import os
+
 # ─── Instrument & Account ───────────────────────────────────────────
 # NOTE on contract codes: CME quarterly cycle for NQ/MNQ
 #   H = March   (3rd Friday)
@@ -28,9 +30,15 @@ BOT_WS_PORT = 8766       # Bridge listens, bots connect as clients
 HEALTH_HTTP_PORT = 8767   # Bridge health endpoint (GET /health)
 DASHBOARD_PORT = 5000     # Flask dashboard
 
-# ─── NT8 File Paths (OneDrive — do NOT change) ─────────────────────
-OIF_INCOMING = r"C:\Users\Trading PC\OneDrive\Documents\NinjaTrader 8\incoming"
-OIF_OUTGOING = r"C:\Users\Trading PC\OneDrive\Documents\NinjaTrader 8\outgoing"
+# ─── NT8 File Paths (local Documents, post 2026-04-18 migration) ───
+# NT8 data folder was migrated out of OneDrive on 2026-04-18 (via
+# OneDrive Settings → Stop backup of Documents → "Only on my PC").
+# Change NT8_DATA_ROOT alone to relocate every NT8-dependent path;
+# downstream constants derive from it, so nothing else here should
+# need to be re-hardcoded.
+NT8_DATA_ROOT = r"C:\Users\Trading PC\Documents\NinjaTrader 8"
+OIF_INCOMING = os.path.join(NT8_DATA_ROOT, "incoming")
+OIF_OUTGOING = os.path.join(NT8_DATA_ROOT, "outgoing")
 FILE_FALLBACK_PATH = r"C:\temp\mnq_data.json"
 
 # ─── Connection Thresholds ──────────────────────────────────────────
