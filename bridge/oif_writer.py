@@ -23,7 +23,8 @@ _oif_counter = int(time.time() * 1000) % 1000000  # Start from timestamp to avoi
 
 
 def write_oif(action: str, qty: int = 1, stop_price: float = None,
-              target_price: float = None, trade_id: str = "") -> list[str]:
+              target_price: float = None, trade_id: str = "",
+              order_type: str = "MARKET", limit_price: float = 0.0) -> list[str]:
     """
     Write OIF file(s) to NT8 incoming folder.
 
@@ -33,6 +34,8 @@ def write_oif(action: str, qty: int = 1, stop_price: float = None,
         stop_price: Optional stop loss price (Phase 2: OCO brackets)
         target_price: Optional profit target price (Phase 2: OCO brackets)
         trade_id: Unique trade ID for correlation
+        order_type: "MARKET" (default) or "LIMIT" — LIMIT fills at limit_price or better
+        limit_price: Required when order_type="LIMIT". Price to limit entry at.
 
     Returns:
         List of file paths written
@@ -51,21 +54,47 @@ def write_oif(action: str, qty: int = 1, stop_price: float = None,
     cmds = []
 
     if action in ("ENTER_LONG", "BUY"):
-        cmds.append(f"PLACE;{ACCOUNT};{INSTRUMENT};BUY;{qty};MARKET;0;0;DAY;;;;\n")
-        # OCO bracket orders: stop + target protect position in NT8
         # OIF format: PLACE;Acct;Inst;Action;Qty;Type;LimitPrice;StopPrice;TIF
+        if order_type == "LIMIT" and limit_price > 0:
+            cmds.append(f"PLACE;{ACCOUNT};{INSTRUMENT};BUY;{qty};LIMIT;{limit_price:.2f};0;DAY;;;;\n")
+            logger.info(f"[OIF:{trade_id or 'N/A'}] LIMIT ENTRY LONG @ {limit_price:.2f}")
+        else:
+            cmds.append(f"PLACE;{ACCOUNT};{INSTRUMENT};BUY;{qty};MARKET;0;0;DAY;;;;\n")
+        # OCO bracket orders: stop + target protect position in NT8
         if stop_price and target_price:
             cmds.append(f"PLACE;{ACCOUNT};{INSTRUMENT};SELL;{qty};STOP;0;{stop_price:.2f};DAY;;;;\n")
             cmds.append(f"PLACE;{ACCOUNT};{INSTRUMENT};SELL;{qty};LIMIT;{target_price:.2f};0;DAY;;;;\n")
 
     elif action in ("ENTER_SHORT", "SELL"):
-        cmds.append(f"PLACE;{ACCOUNT};{INSTRUMENT};SELL;{qty};MARKET;0;0;DAY;;;;\n")
+        if order_type == "LIMIT" and limit_price > 0:
+            cmds.append(f"PLACE;{ACCOUNT};{INSTRUMENT};SELL;{qty};LIMIT;{limit_price:.2f};0;DAY;;;;\n")
+            logger.info(f"[OIF:{trade_id or 'N/A'}] LIMIT ENTRY SHORT @ {limit_price:.2f}")
+        else:
+            cmds.append(f"PLACE;{ACCOUNT};{INSTRUMENT};SELL;{qty};MARKET;0;0;DAY;;;;\n")
         if stop_price and target_price:
             cmds.append(f"PLACE;{ACCOUNT};{INSTRUMENT};BUY;{qty};STOP;0;{stop_price:.2f};DAY;;;;\n")
             cmds.append(f"PLACE;{ACCOUNT};{INSTRUMENT};BUY;{qty};LIMIT;{target_price:.2f};0;DAY;;;;\n")
 
     elif action in ("EXIT", "EXIT_ALL", "CLOSE", "CLOSEPOSITION"):
         cmds.append(f"CLOSEPOSITION;{ACCOUNT};{INSTRUMENT};DAY;;;;;;;;;\n")
+
+    elif action == "PARTIAL_EXIT_LONG":
+        # Sell N contracts at market (partial close of a LONG position)
+        cmds.append(f"PLACE;{ACCOUNT};{INSTRUMENT};SELL;{qty};MARKET;0;0;DAY;;;;\n")
+
+    elif action == "PARTIAL_EXIT_SHORT":
+        # Buy N contracts at market (partial close of a SHORT position)
+        cmds.append(f"PLACE;{ACCOUNT};{INSTRUMENT};BUY;{qty};MARKET;0;0;DAY;;;;\n")
+
+    elif action == "PLACE_STOP_SELL":
+        # Standalone stop-loss for a LONG position (sell stop below market)
+        if stop_price:
+            cmds.append(f"PLACE;{ACCOUNT};{INSTRUMENT};SELL;{qty};STOP;0;{stop_price:.2f};GTC;;;;\n")
+
+    elif action == "PLACE_STOP_BUY":
+        # Standalone stop-loss for a SHORT position (buy stop above market)
+        if stop_price:
+            cmds.append(f"PLACE;{ACCOUNT};{INSTRUMENT};BUY;{qty};STOP;0;{stop_price:.2f};GTC;;;;\n")
 
     elif action == "CANCEL_ALL":
         cmds.append(f"CANCELALLORDERS;{ACCOUNT};{INSTRUMENT};;;;;;;;;;;;\n")
@@ -90,6 +119,43 @@ def write_oif(action: str, qty: int = 1, stop_price: float = None,
             logger.error(f"[OIF FAILED] {filepath}: {e}")
 
     return written
+
+
+def write_partial_exit(direction: str, n_contracts: int = 1,
+                       trade_id: str = "") -> list[str]:
+    """
+    Exit N contracts at market (partial close). Leaves remaining contracts open.
+
+    Args:
+        direction: "LONG" (sell N) or "SHORT" (buy N)
+        n_contracts: Contracts to exit
+        trade_id: For logging correlation
+
+    Returns list of file paths written.
+    """
+    action = "PARTIAL_EXIT_LONG" if direction.upper() == "LONG" else "PARTIAL_EXIT_SHORT"
+    paths = write_oif(action, qty=n_contracts, trade_id=trade_id)
+    logger.info(f"[OIF:PARTIAL_EXIT:{trade_id}] {direction} close {n_contracts}x -> {paths}")
+    return paths
+
+
+def write_be_stop(direction: str, stop_price: float, n_contracts: int = 1,
+                  trade_id: str = "") -> list[str]:
+    """
+    Place a standalone stop order at break-even price for remaining contracts.
+
+    Args:
+        direction: "LONG" (places sell stop) or "SHORT" (places buy stop)
+        stop_price: Price for the stop order
+        n_contracts: Remaining contracts to protect
+        trade_id: For logging
+
+    Returns list of file paths written.
+    """
+    action = "PLACE_STOP_SELL" if direction.upper() == "LONG" else "PLACE_STOP_BUY"
+    paths = write_oif(action, qty=n_contracts, stop_price=stop_price, trade_id=trade_id)
+    logger.info(f"[OIF:BE_STOP:{trade_id}] {direction} stop @ {stop_price:.2f} -> {paths}")
+    return paths
 
 
 def check_fills(since_time: float = 0) -> list[dict]:

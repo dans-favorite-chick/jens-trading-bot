@@ -346,11 +346,15 @@ class BridgeServer:
         target_price = data.get("target_price")
         trade_id = data.get("trade_id", "")
         reason = data.get("reason", "")
+        order_type = data.get("order_type", "MARKET")
+        limit_price = data.get("limit_price", 0.0)
 
         trade_log.info(f"[TRADE CMD:{trade_id}] bot={bot_name} action={action} qty={qty} "
+                       f"type={order_type} limit={limit_price if order_type == 'LIMIT' else 'N/A'} "
                        f"stop={stop_price} target={target_price} reason={reason}")
 
-        paths = write_oif(action, qty, stop_price, target_price, trade_id=trade_id)
+        paths = write_oif(action, qty, stop_price, target_price, trade_id=trade_id,
+                          order_type=order_type, limit_price=limit_price)
 
         if not paths and action not in ("CANCEL_ALL", "CANCELALLORDERS"):
             trade_log.error(f"[OIF FAIL:{trade_id}] write_oif returned 0 files for {action}!")
