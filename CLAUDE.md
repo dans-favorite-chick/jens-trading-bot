@@ -17,15 +17,15 @@ NinjaTrader 8 (TickStreamer.cs indicator)
 1. **NT8 Indicator, not Strategy** — Strategies crash with ErrorHandling=Stop
 2. **Python is WS SERVER, NT8 connects OUT** — reverse direction failed
 3. **OIF files for trade execution** — file path is consistent and reliable
-4. **OneDrive NT8 path must not move** — NT8 won't boot without it
+4. **NT8 data folder path is config-driven** — change `NT8_DATA_ROOT` in `config/settings.py`; migrated out of OneDrive 2026-04-18
 5. **No Newtonsoft.Json in C#** — not bundled with NT8, use StringBuilder
 6. **VWAP calculated in Python** — Order Flow+ license required in NT8
 
 ### Key Paths
-- OIF incoming: `C:\Users\Trading PC\OneDrive\Documents\NinjaTrader 8\incoming\`
-- OIF outgoing: `C:\Users\Trading PC\OneDrive\Documents\NinjaTrader 8\outgoing\`
+- OIF incoming: `C:\Users\Trading PC\Documents\NinjaTrader 8\incoming\`
+- OIF outgoing: `C:\Users\Trading PC\Documents\NinjaTrader 8\outgoing\`
 - File fallback: `C:\temp\mnq_data.json`
-- NT8 indicators: `C:\Users\Trading PC\AppData\Roaming\NinjaTrader 8\bin\Custom\Indicators\`
+- NT8 indicators: `C:\Users\Trading PC\Documents\NinjaTrader 8\bin\Custom\Indicators\`
 
 ### Ports
 - `:8765` — Bridge WS server (NT8 connects here)

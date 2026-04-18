@@ -115,7 +115,7 @@ python bots/prod_bot.py &
 
 ## What CANNOT be rolled back
 
-- **NT8 indicators you deployed** (MQBridge, TickStreamer) — those live in `C:\Users\Trading PC\OneDrive\Documents\NinjaTrader 8\bin\Custom\Indicators\`. To roll back, manually uninstall from NT8.
+- **NT8 indicators you deployed** (MQBridge, TickStreamer) — those live in `C:\Users\Trading PC\Documents\NinjaTrader 8\bin\Custom\Indicators\`. To roll back, manually uninstall from NT8.
 - **Claude Code hooks in `~/.claude/settings.json`** — manually remove the `"hooks"` block if they misbehave.
 - **`C:\temp\menthorq_levels.json`** content — MQBridge overwrites every 60s. To stop updates, remove MQBridge from NT8 chart.
 - **Scheduled tasks** in Claude — manage via `/scheduled` command in Claude CLI.
@@ -138,4 +138,4 @@ taskkill //PID <lab_pid> //F
 
 - MQBridge / NT8 indicator issues → see CLAUDE.md + KNOWN_ISSUES.md
 - Telegram issues → `.env` file has TELEGRAM_TOKEN + TELEGRAM_CHAT_ID
-- If totally stuck → restore from OneDrive backup (`C:\Trading Project\phoenix_bot` is in OneDrive)
+- If totally stuck → restore via git history (`git log` / `git reflog`) or from the `C:\NT8_BACKUP_2026-04-18\` snapshot made before the OneDrive migration.

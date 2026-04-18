@@ -44,7 +44,7 @@ Risk Manager gates every entry:
   • ATR regime adjusts RR targets and time stops
 
 Trade Execution:
-  → OIF files written to: C:\Users\Trading PC\OneDrive\Documents\NinjaTrader 8\incoming\
+  → OIF files written to: C:\Users\Trading PC\Documents\NinjaTrader 8\incoming\
   → Format: PLACE;Sim101;MNQM6 06-26;BUY;1;MARKET;0;0;DAY;;;;
   → NT8 reads & executes, writes fill to outgoing/ folder
   → Bot reads fill confirmation
@@ -77,7 +77,7 @@ Dashboard (Flask :5000):
 2. **Python is server, NT8 connects OUT** — reverse direction failed (months of debugging)
 3. **TCP not WebSocket for NT8** — .NET Framework 4.8 ClientWebSocket has silent send bug
 4. **OIF files for trade execution** — consistent, reliable, proven path
-5. **OneDrive NT8 path cannot move** — NT8 won't boot without it
+5. **NT8 data folder is at `C:\Users\Trading PC\Documents\NinjaTrader 8\`** — migrated out of OneDrive 2026-04-18; change `NT8_DATA_ROOT` in `config/settings.py` if the path ever moves again
 6. **No Newtonsoft.Json in C#** — not bundled with NT8, use StringBuilder
 7. **VWAP calculated in Python** — Order Flow+ license required in NT8
 

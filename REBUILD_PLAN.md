@@ -120,7 +120,7 @@ The current setup is spread across 5+ bot trees (Jen V1, V2, V3, Research Bot, M
 
 **OIF trade path (keep as-is — reliable):**
 - `oif_writer.py` extracted from `Jen_Trading_Botv1/trading_controller.py:62-107`
-- Writes to `C:\Users\Trading PC\OneDrive\Documents\NinjaTrader 8\incoming\`
+- Writes to `C:\Users\Trading PC\Documents\NinjaTrader 8\incoming\`
 - Format: `PLACE;Sim101;MNQM6 06-26;BUY;1;MARKET;0;0;DAY;;;;`
 - Reads fill confirmations from `outgoing/` folder
 - Phase 1: MARKET orders only (no OCO brackets yet)
@@ -385,6 +385,5 @@ Server endpoints organized by concern in `server.py` with clear route groupings.
 | NT8 Indicator, not Strategy | Strategies crash with ErrorHandling=Stop | PROJECT_MEMORY.md:134 |
 | Python is WS SERVER, NT8 connects OUT | NT8 HttpListener failed; client model works | CLAUDE.md:23 |
 | OIF files for trade execution | File path is "consistent and reliable" per user | trading_controller.py:62 |
-| OneDrive NT8 path must not move | NT8 won't boot without it | PROJECT_MEMORY.md:159 |
 | No Newtonsoft.Json in C# | Not bundled with NT8 | Use StringBuilder |
 | VWAP calculated in Python | Order Flow+ license required in NT8 | Manual cumsum formula |
