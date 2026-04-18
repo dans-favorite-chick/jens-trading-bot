@@ -4,11 +4,15 @@ _Open issues that haven't been resolved yet. Resolved issues moved to semantic/l
 
 ## 🔴 OPEN
 
-### NT8 indicator install path discrepancy
+### NT8 indicator install path discrepancy — RESOLVED 2026-04-18
 
 CLAUDE.md says NT8 indicators folder is `C:\Users\Trading PC\AppData\Roaming\NinjaTrader 8\bin\Custom\Indicators\` but the active install on this machine is at `C:\Users\Trading PC\OneDrive\Documents\NinjaTrader 8\bin\Custom\Indicators\` (OneDrive path). All future NT8 indicator operations should use OneDrive path.
 
 **Action:** Update CLAUDE.md at next convenient opportunity.
+
+> **Update (2026-04-18):** RESOLVED. Two events closed this issue:
+> 1. NT8 data folder migrated out of OneDrive — active install is now at `C:\Users\Trading PC\Documents\NinjaTrader 8\bin\Custom\Indicators\` (not OneDrive, not AppData).
+> 2. CLAUDE.md updated in the same migration PR to reflect the current path. The earlier recommendation "use OneDrive path" no longer applies — use the `Documents\` path.
 
 ### Bias_momentum hotfix VERIFIED 2026-04-17 18:55
 

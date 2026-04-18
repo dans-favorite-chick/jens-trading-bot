@@ -56,6 +56,8 @@ Same strategies, different parameters. Encoded in `memory/procedural/regime_matr
 
 Indicators can be removed from a chart without warning. `TickStreamer.cs` showed up in OneDrive install; `MQBridge.cs` had been silently uninstalled. Both need to be confirmed applied each morning pre-open.
 
+> **Update (2026-04-18):** The "OneDrive install" reference reflects the pre-migration layout. NT8 data folder has since moved to `C:\Users\Trading PC\Documents\NinjaTrader 8\bin\Custom\Indicators\`. The underlying lesson — fragile indicator state, confirm each morning pre-open — still applies.
+
 ### Watchdog detecting "NT8:live ticks:0/s" is insufficient
 
 The bot considered itself "connected" but received zero data. Bot kept running, waiting forever. Need anomaly detection that triggers remediation (restart indicator, alert user) not just observes. Planned for Saturday.
