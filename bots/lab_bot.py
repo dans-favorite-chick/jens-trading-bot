@@ -1,9 +1,16 @@
 """
 Phoenix Bot — Lab (Experimental) Bot
 
-ZERO GATES. Trades EVERYTHING. The lab bot's sole purpose is to
-aggressively test every theory and gather maximum data. It fires
-on every signal from every strategy in every regime — long AND short.
+ZERO GATES. Observes EVERYTHING. The lab bot's sole purpose is to
+aggressively test every theory and gather maximum data. It evaluates
+every signal from every strategy in every regime — long AND short.
+
+OBSERVE-ONLY DURING MARKET HOURS:
+  - Zero NT8 communication. No OIF files written. No bridge sends.
+  - Paper trades are tracked INTERNALLY (positions, P&L, stop/target,
+    expectancy, MAE/MFE, history) — full analytics, zero execution.
+  - All data flows to the dashboard, history logs, and RAG exactly
+    as if the trades had been real. Gives clean backtest-quality data.
 
 No TF vote minimums. No momentum gates. No confluence filters.
 No regime restrictions. No session window limits.
@@ -23,6 +30,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from bots.base_bot import BaseBot
 from strategies.base_strategy import Signal
+from config.settings import TICK_SIZE
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,41 +56,56 @@ LAB_STRATEGY_OVERRIDES = {
         "min_tf_votes": 1,           # Just 1 TF agreeing is enough
         "min_momentum": 0,           # No momentum gate
         "skip_regime_overrides": True, # Bypass hardcoded regime gates
-        "stop_ticks": 8,
-        "target_rr": 1.5,
+        "stop_ticks": 14,            # Floor (ATR stop overrides when warm — typically 20-40t)
+        "target_rr": 20.0,           # 20:1 — reversal+stall exit drives this, not the OCO bracket
+        "max_ema_dist_ticks": 999,   # Lab: disable extension gate — collect data at all distances
     },
     "spring_setup": {
-        "min_wick_ticks": 3,         # Tiny wicks count
+        "min_wick_ticks": 3,            # Tiny wicks count
         "require_vwap_reclaim": False,  # No VWAP gate
         "require_delta_flip": False,    # No delta gate
+        "require_tf_alignment": False,  # NO TF gate — lab observes counter-trend springs
         "skip_regime_overrides": True,
-        "stop_multiplier": 1.5,
-        "target_rr": 1.5,
+        "stop_multiplier": 1.5,         # Fallback only — ATR stop runs if ATR_5m available
+        "target_rr": 5.0,              # Raised from 1.5 — spring setups can run 20-50pts
+        "atr_stop_multiplier": 1.1,
+        "max_stop_ticks": 40,
+        "min_stop_ticks": 8,
     },
     "vwap_pullback": {
         "min_confluence": 0.0,
         "min_tf_votes": 1,           # Just 1 TF
         "skip_regime_overrides": True,
-        "stop_ticks": 8,
-        "target_rr": 1.5,
+        "stop_ticks": 14,
+        "target_rr": 20.0,           # 20:1 — reversal+stall exit drives this
     },
     "high_precision_only": {
         "min_confluence": 0.0,
         "min_tf_votes": 1,           # Down from 4 to 1
         "min_precision": 0,          # No precision gate
         "skip_regime_overrides": True,
-        "stop_ticks": 8,
-        "target_rr": 1.5,
+        "stop_ticks": 14,
+        "target_rr": 5.0,            # Raised from 1.5 — high precision needs big targets
     },
     "ib_breakout": {
         "min_confluence": 0.0,
         "min_tf_votes": 1,
         "skip_regime_overrides": True,
         "stop_ticks": 10,
-        "target_rr": 1.5,
-        "ib_minutes": 15,            # Shorter IB window — faster signals
-        "max_ib_width_atr_mult": 5.0,  # Almost never reject for width
-        "all_regimes": True,          # Trade IB breakout in ALL regimes
+        "target_rr": 5.0,            # IB breakouts naturally run 50-200pts — let them
+        "ib_minutes": 15,
+        "max_ib_width_atr_mult": 5.0,
+        "all_regimes": True,
+        "require_cvd_confirm": False,
+    },
+    "dom_pullback": {
+        # Lab: loosen DOM threshold so we collect data across all absorption levels
+        "min_dom_strength": 10,        # Very loose — capture any DOM absorption signal
+        "max_ema_dist_ticks": 28,      # Matches prod (data-validated P25 zone)
+        "max_vwap_dist_ticks": 20,
+        "skip_regime_overrides": True,
+        "stop_ticks": 10,
+        "target_rr": 20.0,           # 20:1 — reversal+stall exit drives this
     },
 }
 
@@ -229,6 +252,14 @@ class LabBot(BaseBot):
                 logger.error(f"  [LAB:{strat.name}] ERROR: {e}")
                 self._last_eval["strategies"].append({"name": strat.name, "result": "ERROR", "reason": str(e)})
 
+        # ── Capture HTF state unconditionally (even when no signal) ─────
+        # This mirrors the fix in base_bot so lab logs always have htf_state.
+        try:
+            htf_state = self.htf_scanner.get_state()
+            self._last_eval["htf_state"] = htf_state
+        except Exception:
+            pass
+
         if best_signal:
             # Apply confluence boosts (SMC, RSI, HTF — same as base)
             try:
@@ -240,15 +271,20 @@ class LabBot(BaseBot):
             except Exception:
                 pass
 
-            # Record signal
-            self.tracker.record_signal(
-                strategy=best_signal.strategy,
-                direction=best_signal.direction,
-                confidence=best_signal.confidence,
-                taken=False,
-                regime=session_info.get("regime", "UNKNOWN"),
-                trade_id=best_signal.trade_id,
-            )
+            # HTF confluence boost (same as base_bot for data consistency)
+            try:
+                htf_conf = self.htf_scanner.get_confluence_score(best_signal.direction)
+                htf_boost = 0
+                if htf_conf.get("aligned_count", 0) >= 2 and htf_conf.get("score", 0) > 30:
+                    htf_boost = min(15, int(htf_conf["score"] / 5))
+                    best_signal.confidence = min(100, best_signal.confidence + htf_boost)
+                    best_signal.confluences.append(
+                        f"HTF {htf_conf.get('strongest', '')} ({htf_conf.get('strongest_tf', '')}) +{htf_boost}"
+                    )
+                self._last_eval["htf_confluence"] = htf_conf
+            except Exception:
+                pass
+
             self._last_eval["best_signal"] = {
                 "direction": best_signal.direction,
                 "strategy": best_signal.strategy,
@@ -263,9 +299,13 @@ class LabBot(BaseBot):
                 "reason": best_signal.reason,
                 "confluences": best_signal.confluences,
             }
-            self._pending_signal = best_signal
-            logger.info(f"[LAB TRADE QUEUED] {best_signal.direction} via {best_signal.strategy} "
-                         f"conf={best_signal.confidence:.0f}")
+            # ── OBSERVE ONLY — paper enter, never touch NT8 ─────────
+            # Do NOT set self._pending_signal (which would trigger
+            # _enter_trade → ws.send → bridge → OIF → NT8).
+            # Instead, open a paper position internally right now.
+            self._paper_enter(best_signal, market)
+            logger.info(f"[LAB PAPER] {best_signal.direction} via {best_signal.strategy} "
+                         f"conf={best_signal.confidence:.0f} — INTERNAL ONLY, no NT8")
         else:
             self.last_signal = None
             # DON'T clear _pending_signal here — a prior eval may have set it
@@ -273,6 +313,207 @@ class LabBot(BaseBot):
             # race condition where rapid 1m+5m bar evals wipe signals.
 
         self.history.log_eval(self._last_eval, market)
+
+    # ─── Paper Trade Implementation ───────────────────────────────────
+    # These replace _enter_trade / _exit_trade for the lab bot.
+    # All internal analytics still run (positions, expectancy, history,
+    # strategy_tracker, trade_memory, RAG). Zero NT8 communication.
+
+    def _paper_enter(self, signal: Signal, market: dict):
+        """Open a paper position internally at current price. No NT8, no OIF."""
+        if not self.positions.is_flat:
+            return  # Already in a paper position
+
+        price = market.get("price", 0)
+        if not price:
+            return
+
+        tid = signal.trade_id
+        stop_ticks = max(4, signal.stop_ticks)   # Floor at 4t
+        contracts  = 1                            # Lab: always 1 contract
+
+        risk_dollars = stop_ticks * TICK_SIZE * contracts * 2  # MNQ: $2/tick/contract
+
+        # Stop and target from signal direction
+        if signal.direction == "LONG":
+            stop_price   = round(price - stop_ticks * TICK_SIZE, 2)
+            target_price = round(price + stop_ticks * TICK_SIZE * signal.target_rr, 2)
+        else:
+            stop_price   = round(price + stop_ticks * TICK_SIZE, 2)
+            target_price = round(price - stop_ticks * TICK_SIZE * signal.target_rr, 2)
+
+        # Tag market snapshot with entry context (same fields as live trades)
+        market["regime"]       = self.session.get_current_regime()
+        market["signal_price"] = price
+        market["paper_trade"]  = True   # Marker: never executed in NT8
+
+        # Open position internally
+        self.positions.open_position(
+            trade_id=tid,
+            direction=signal.direction,
+            entry_price=price,
+            contracts=contracts,
+            stop_price=stop_price,
+            target_price=target_price,
+            strategy=signal.strategy,
+            reason=signal.reason,
+            market_snapshot=market,
+        )
+        self.status = "IN_TRADE"
+
+        # Start expectancy tracking (MAE/MFE accumulates on every tick)
+        try:
+            self.expectancy.start_tracking(
+                trade_id=tid,
+                direction=signal.direction,
+                entry_price=price,
+                signal_price=price,
+                stop_price=stop_price,
+                target_price=target_price,
+                strategy=signal.strategy,
+                regime=self.session.get_current_regime(),
+            )
+        except Exception as e:
+            logger.debug(f"[LAB PAPER:{tid}] expectancy start error (non-blocking): {e}")
+
+        # Consume any active regime transition bonus (same as live)
+        try:
+            self.regime_transitions.mark_signal_used()
+        except Exception:
+            pass
+
+        # Record signal as TAKEN (paper fill = taken for tracking purposes)
+        self.tracker.record_signal(
+            strategy=signal.strategy,
+            direction=signal.direction,
+            confidence=signal.confidence,
+            taken=True,
+            regime=self.session.get_current_regime(),
+            trade_id=tid,
+        )
+
+        # Log history entry (same schema as live trades)
+        self.history.log_entry(
+            signal, price, contracts, stop_price, target_price,
+            risk_dollars, "PAPER_LAB", market,
+        )
+
+        logger.info(
+            f"[LAB PAPER FILL:{tid}] {signal.direction} {contracts}x @ {price:.2f} | "
+            f"SL={stop_price:.2f}  TP={target_price:.2f}  "
+            f"risk=${risk_dollars:.2f}  strat={signal.strategy}  "
+            f"INTERNAL ONLY — NT8 NOT TOUCHED"
+        )
+
+    async def _exit_trade(self, ws, price: float, reason: str):
+        """Paper exit — close position internally. Zero NT8 / bridge / OIF communication."""
+        if self.positions.is_flat:
+            return
+
+        pos = self.positions.position
+        tid = pos.trade_id
+        self.status = "EXIT_PENDING"
+        logger.info(
+            f"[LAB PAPER EXIT:{tid}] {pos.direction} @ {price:.2f}  "
+            f"reason={reason}  INTERNAL ONLY"
+        )
+
+        # Close Python position (no NT8 send first — paper trade has no NT8 position)
+        trade = self.positions.close_position(price, reason)
+        if not trade:
+            self.status = "IDLE"
+            return
+
+        self.risk.record_trade(trade["pnl_dollars"])
+        self.trade_memory.record(trade)
+        self.tracker.record_trade(trade)
+
+        # MAE/MFE analysis
+        exp_analysis = None
+        try:
+            exp_analysis = self.expectancy.close_trade(
+                exit_price=price,
+                pnl_ticks=trade["pnl_ticks"],
+                result=trade["result"],
+            )
+        except Exception as e:
+            logger.debug(f"[LAB PAPER EXIT:{tid}] expectancy close error: {e}")
+
+        # Log exit with MAE/MFE (same schema as live)
+        market_snap = self.aggregator.snapshot()
+        market_snap["paper_trade"] = True
+        if exp_analysis:
+            market_snap["mae_ticks"]      = exp_analysis.get("mae_ticks")
+            market_snap["mfe_ticks"]      = exp_analysis.get("mfe_ticks")
+            market_snap["capture_ratio"]  = exp_analysis.get("edge_captured_pct")
+            market_snap["went_red_first"] = exp_analysis.get("went_red_first")
+            market_snap["mae_time_s"]     = exp_analysis.get("mae_time_s")
+            market_snap["mfe_time_s"]     = exp_analysis.get("mfe_time_s")
+        self.history.log_exit(trade, market_snap)
+
+        # RAG vector storage
+        try:
+            rag_outcome = {
+                "mae_ticks":    market_snap.get("mae_ticks", 0),
+                "mfe_ticks":    market_snap.get("mfe_ticks", 0),
+                "capture_ratio": market_snap.get("capture_ratio", 0),
+                "hold_seconds": trade.get("hold_time_s", 0),
+                "exit_reason":  trade.get("exit_reason", ""),
+            }
+            self.trade_rag.add_trade(trade, market_snap, rag_outcome)
+        except Exception as e:
+            logger.debug(f"[LAB PAPER EXIT:{tid}] RAG add error (non-blocking): {e}")
+
+        # Loss fingerprinting and counter-edge learning
+        if trade["result"] == "LOSS":
+            try:
+                self.no_trade_fp.learn_from_trade(trade, self.aggregator.snapshot())
+            except Exception:
+                pass
+            try:
+                self.counter_edge.learn_from_loss(trade)
+            except Exception:
+                pass
+
+        # Execution quality (fill_latency=0 for paper)
+        try:
+            self.execution_quality.record(
+                trade_id=trade.get("trade_id", ""),
+                signal_price=trade["entry_price"],
+                entry_price=trade["entry_price"],
+                exit_price=trade["exit_price"],
+                pnl_ticks=trade["pnl_ticks"],
+                fill_latency_ms=0,
+                strategy=trade["strategy"],
+                regime=market_snap.get("regime", "UNKNOWN"),
+            )
+        except Exception:
+            pass
+
+        pnl = trade["pnl_dollars"]
+        result = trade["result"]
+        logger.info(
+            f"[LAB PAPER CLOSED:{tid}] {result}  P&L=${pnl:+.2f}  "
+            f"exit={price:.2f}  reason={reason}  "
+            f"hold={trade.get('hold_time_s', 0):.0f}s"
+        )
+
+        # Telegram notification (informational — marks as paper)
+        import core.telegram_notifier as tg
+        asyncio.ensure_future(tg.notify_exit(
+            trade_id=trade.get("trade_id", ""),
+            direction=trade["direction"],
+            strategy=f"[PAPER] {trade['strategy']}",
+            entry_price=trade["entry_price"],
+            exit_price=trade["exit_price"],
+            pnl_dollars=pnl,
+            pnl_ticks=trade["pnl_ticks"],
+            result=result,
+            exit_reason=reason,
+            hold_time_s=trade["hold_time_s"],
+        ))
+
+        self.status = "IDLE"
 
     def set_profile(self, profile_name: str):
         """IGNORED — Lab bot has zero gates."""
