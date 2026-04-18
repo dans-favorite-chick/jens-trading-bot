@@ -5,6 +5,25 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+### 2026-04-18 15:01 Central Daylight Time — Session changes: 14 files modified
+
+**Files changed:**
+- `agents/council_gate.py`
+- `agents/expert_knowledge.py`
+- `agents/pretrade_filter.py`
+- `agents/session_debriefer.py`
+- `bots/lab_bot.py`
+- `bridge/bridge_server.py`
+- `bridge/oif_writer.py`
+- `config/strategies.py`
+- `dashboard/templates/dashboard.html`
+- `requirements.txt`
+- `strategies/base_strategy.py`
+- `strategies/ib_breakout.py`
+- `strategies/spring_setup.py`
+- `strategies/vwap_pullback.py`
+
+---
 ### 2026-04-17 22:29 Central Daylight Time — Weekend evaluation complete. KEY FINDING: 697 live trades = 33.3% WR + negative P&L -,227.68. The architectural rebuild gave us the TOOLS to find strategy problems but did not SOLVE them. Scheduled 20/80 fix week for Apr 20-22 (replayable strategies + CI + decay alerts). Recommended LIVE_TRADING stays False until 90-day replay proves positive expectancy.
 
 **Files changed:**
