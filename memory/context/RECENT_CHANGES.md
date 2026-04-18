@@ -5,6 +5,22 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+### 2026-04-17 22:19 Central Daylight Time — Wire-up COMPLETE: all Saturday+Sunday modules now RUN in base_bot shadow mode. SwingState+VolumeProfile+ReversalDetector+SweepWatcher+GammaFlipDetector+Footprint1m/5m+DecayMonitor+TCA+CircuitBreakers all instantiated. Tick handler feeds footprint+volume profile+tick rate detector. 5m bar close feeds swing/climax/sweep/gamma flip/footprint. _evaluate_strategies computes full structural_bias composite every cycle with MenthorQ+VIX+OpEx+ES+Pinning enrichment. Dashboard endpoints (/api/structural-bias, /api/gamma-context, /api/footprint, /api/risk-mgmt, /api/all-signals) returning real data. Bots restarted clean, 0 errors, 61/61 tests still passing. Monday open = real shadow data flowing.
+
+**Files changed:**
+- `bots/base_bot.py`
+
+**Decisions:**
+- User pushed back on deferring wire-up: correctly pointed out shadow observation requires modules to RUN
+- Wire-up adds ~220 lines to base_bot.py, all try/except guarded so shadow errors cannot break live trading
+- All 13 new modules instantiated + hooked into proper lifecycle points
+- Composite structural_bias runs every _evaluate_strategies cycle with full reasoning trail
+- Dashboard API endpoints now return live data (confirmed via curl)
+- Bots UP clean no errors watchdog healthy MQ flowing real values
+- 2-week shadow observation window NOW STARTED (not delayed to future session)
+- April 25 validation review has real data to work with
+
+---
 ### 2026-04-17 22:11 Central Daylight Time — Sunday build COMPLETE: 6 new Sunday modules (footprint_builder, footprint_patterns, pinning_detector, opex_calendar, es_confirmation, structural_bias composite) + 6 dashboard API endpoints + 20 unit tests (61 total passing) + MONDAY_READINESS.md report. All signals shadow mode. Monday ships foundation fixes live (Telegram HTML, MQBridge running, hooks, memory system, contract rollover, emergency halt) while structural_bias/footprint/patterns run alongside old tf_bias for 2 weeks of shadow observation before activation.
 
 **Files changed:**
