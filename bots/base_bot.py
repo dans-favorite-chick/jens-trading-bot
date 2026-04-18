@@ -32,7 +32,8 @@ from config.settings import (BOT_WS_PORT, TICK_SIZE, LIVE_TRADING, DASHBOARD_POR
                              SCALE_OUT_ENABLED, SCALE_OUT_RR, TREND_RIDER_ENABLED,
                              TREND_RIDER_MIN_SCORE,
                              ATR_STOP_ENABLED, ATR_STOP_TF, ATR_STOP_MULTIPLIER,
-                             ATR_STOP_MIN_TICKS, ATR_STOP_MAX_TICKS)
+                             ATR_STOP_MIN_TICKS, ATR_STOP_MAX_TICKS,
+                             NT8_DATA_ROOT, OIF_INCOMING, OIF_OUTGOING)
 from config.strategies import STRATEGIES, STRATEGY_DEFAULTS
 from core.tick_aggregator import TickAggregator
 from core.risk_manager import RiskManager
@@ -108,6 +109,41 @@ except ImportError:
 logger = logging.getLogger("Bot")
 
 
+def _validate_nt8_paths():
+    """
+    Verify NT8-dependent paths exist on disk before the bot starts any work.
+
+    A bot pointed at a nonexistent NT8 folder is worse than one that refuses
+    to start — OIF writes silently drop and fill-ACK polls read nothing.
+    On any missing path: log CRITICAL, fire a Telegram alert if configured,
+    and exit(1) before tick handling begins.
+    """
+    paths = [
+        ("NT8_DATA_ROOT", NT8_DATA_ROOT),
+        ("OIF_INCOMING", OIF_INCOMING),
+        ("OIF_OUTGOING", OIF_OUTGOING),
+    ]
+    missing = [(name, p) for name, p in paths if not os.path.isdir(p)]
+    if not missing:
+        return
+
+    for name, p in missing:
+        logger.critical(f"[STARTUP] NT8 path missing: {name}={p}")
+
+    summary = ", ".join(f"{n}={p}" for n, p in missing)
+    try:
+        tg.send_sync(
+            "\U0001F6A8 <b>BOT FAILED TO START</b>\n"
+            f"Missing NT8 paths: <code>{summary}</code>\n"
+            "Check config/settings.py NT8_DATA_ROOT — NT8 data folder may have moved."
+        )
+    except Exception as e:
+        # Never let an alert failure mask the real startup failure
+        logger.warning(f"[STARTUP] Telegram alert also failed: {e}")
+
+    sys.exit(1)
+
+
 # ── Trend Rider helpers (module-level, pure functions) ───────────────────────
 
 def _should_scale_out(pos, price: float, scale_rr: float) -> bool:
@@ -145,6 +181,7 @@ class BaseBot:
     only_validated: bool = False  # Prod overrides to True
 
     def __init__(self):
+        _validate_nt8_paths()
         self.aggregator = TickAggregator()
         # Restore aggregator state from disk (survive restarts — no warmup needed)
         self._aggregator_state_path = os.path.join(
