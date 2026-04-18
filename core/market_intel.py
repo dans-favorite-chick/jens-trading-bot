@@ -612,7 +612,8 @@ async def get_fred_macro() -> dict:
         return cached
 
     result = {"fed_funds_rate": None, "cpi_yoy": None,
-              "unemployment": None, "source": "unavailable"}
+              "unemployment": None, "yield_curve_10y2y": None,
+              "yield_curve_inverted": None, "source": "unavailable"}
 
     try:
         # FRED API is free, no key needed for basic series
@@ -663,6 +664,21 @@ async def get_fred_macro() -> dict:
             except Exception:
                 pass
 
+            # 10Y-2Y Yield Curve Spread (T10Y2Y) — recession indicator
+            try:
+                resp = _requests.get(base, params={
+                    "series_id": "T10Y2Y", "sort_order": "desc",
+                    "limit": "1", "file_type": "json",
+                    "api_key": os.environ.get("FRED_API_KEY", ""),
+                }, timeout=5)
+                if resp.status_code == 200:
+                    obs = resp.json().get("observations", [])
+                    if obs and obs[0]["value"] != ".":
+                        out["yield_curve_10y2y"] = float(obs[0]["value"])
+                        out["yield_curve_inverted"] = float(obs[0]["value"]) < 0
+            except Exception:
+                pass
+
             return out
 
         fred_data = await asyncio.wait_for(
@@ -675,7 +691,9 @@ async def get_fred_macro() -> dict:
             result["source"] = "fred"
             logger.info(f"FRED macro: FFR={fred_data.get('fed_funds_rate')}, "
                          f"CPI={fred_data.get('cpi_yoy')}%, "
-                         f"Unemp={fred_data.get('unemployment')}%")
+                         f"Unemp={fred_data.get('unemployment')}%, "
+                         f"YieldCurve={fred_data.get('yield_curve_10y2y')} "
+                         f"(inverted={fred_data.get('yield_curve_inverted')})")
 
     except Exception as e:
         logger.debug(f"FRED fetch failed: {e}")

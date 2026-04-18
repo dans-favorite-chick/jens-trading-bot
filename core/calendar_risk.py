@@ -87,6 +87,7 @@ class CalendarRiskManager:
                        f"{sum(1 for e in self._events if e.impact == 'HIGH')} high-impact")
         except Exception as e:
             logger.warning(f"[CALENDAR] Fetch failed (non-blocking): {e}")
+            self._last_fetch = time.time()  # Back off — don't retry until next interval
 
     def _classify_impact(self, event_name: str) -> str:
         name_upper = event_name.upper()

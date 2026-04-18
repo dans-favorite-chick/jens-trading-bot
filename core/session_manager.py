@@ -10,7 +10,10 @@ from datetime import datetime, time as dtime
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from config.settings import SESSION_WINDOWS, PROD_PRIMARY_START, PROD_PRIMARY_END
+from config.settings import (SESSION_WINDOWS,
+                             PROD_PRIMARY_START, PROD_PRIMARY_END,
+                             PROD_SECONDARY_START, PROD_SECONDARY_END,
+                             CR_ADAPTIVE_SESSION, CR_EXTENDED_END)
 
 logger = logging.getLogger("SessionManager")
 
@@ -45,14 +48,23 @@ REGIME_CONFIG = {
     "AFTERNOON_CHOP": {
         "min_confluence_override": 4.0,
         "size_multiplier": 0.5,
-        "allowed_strategies": None,
-        "notes": "DEATH ZONE — lunch lull, very selective",
+        # Only level-based strategies in the death zone.
+        # bias_momentum and high_precision_only are momentum chasers — they need price
+        # moving with conviction. AFTERNOON_CHOP is mean-reverting lunch chop; the only
+        # valid trades here are: spring reversal at an extreme, VWAP reclaim, or DOM
+        # absorption pullback to a level. Momentum entries stop out on noise instantly.
+        # This applies even on TREND days (session_unrestricted bypasses the window
+        # check but NOT the per-regime allowed_strategies check here).
+        "allowed_strategies": ["dom_pullback", "spring_setup", "vwap_pullback",
+                               "ib_breakout", "compression_breakout"],
+        "notes": "DEATH ZONE — level-based entries only (dom_pullback, spring, vwap), no momentum chasing",
     },
     "LATE_AFTERNOON": {
-        "min_confluence_override": None,
+        "min_confluence_override": 3.0,   # Slightly higher bar than open — be selective
         "size_multiplier": 0.8,
-        "allowed_strategies": ["bias_momentum", "spring_setup"],
-        "notes": "Institutional reposition window",
+        "allowed_strategies": None,        # All strategies — this is the second trend window
+        "notes": "Institutional reposition 13:00-15:00. Trend continuation trades. "
+                 "Today (4/14): +300pt move ran entirely through this window.",
     },
     "CLOSE_CHOP": {
         "min_confluence_override": 4.0,
@@ -185,16 +197,56 @@ class SessionManager:
     def get_confluence_override(self, regime: str = None) -> float | None:
         return self.get_regime_config(regime)["min_confluence_override"]
 
-    def is_prod_trading_window(self, now: datetime = None) -> bool:
-        """Check if we're in the production bot's primary trading window."""
+    def is_prod_trading_window(self, now: datetime = None,
+                               cr_verdict: str = None, cr_score: int = 0) -> bool:
+        """Check if we're in a production bot trading window.
+
+        Windows:
+          Primary:   PROD_PRIMARY_START – PROD_PRIMARY_END  (08:30–11:00 CST)
+                     Open momentum + mid-morning — highest edge window.
+
+          Secondary: PROD_SECONDARY_START – PROD_SECONDARY_END  (13:00–14:30 CST)
+                     Institutional repositioning / late-afternoon trend trades.
+                     Today's example: +300pt move ran entirely here.
+
+          CR Extended: PROD_SECONDARY_END – CR_EXTENDED_END  (14:30–15:00 CST)
+                     Only active on strong CONTINUATION days (cr_score >= 4).
+                     Lets the bot ride institutional flow into the close.
+
+        Args:
+            cr_verdict: "CONTINUATION" | "REVERSAL" | "CONTESTED" | None
+            cr_score:   Momentum score 0-5 from ContinuationReversalEngine
+        """
         if now is None:
             now = datetime.now()
-        start = _parse_time(PROD_PRIMARY_START)
-        end = _parse_time(PROD_PRIMARY_END)
-        return start <= now.time() < end
+        t = now.time()
+
+        # Primary window: 08:30–11:00 CST
+        if _parse_time(PROD_PRIMARY_START) <= t < _parse_time(PROD_PRIMARY_END):
+            return True
+
+        # Secondary window: 13:00–14:30 CST
+        if _parse_time(PROD_SECONDARY_START) <= t < _parse_time(PROD_SECONDARY_END):
+            return True
+
+        # C/R Extension: 14:30–15:00 CST — only on strong continuation days
+        if CR_ADAPTIVE_SESSION and cr_verdict == "CONTINUATION" and cr_score >= 4:
+            if _parse_time(PROD_SECONDARY_END) <= t < _parse_time(CR_EXTENDED_END):
+                logger.info(f"[SESSION] CR Extension active: "
+                            f"CONTINUATION score={cr_score} → trading until {CR_EXTENDED_END}")
+                return True
+
+        return False
 
     def to_dict(self) -> dict:
         config = self.get_regime_config()
+        t = datetime.now().time()
+        # Determine which window label is active (for dashboard display)
+        in_primary   = _parse_time(PROD_PRIMARY_START) <= t < _parse_time(PROD_PRIMARY_END)
+        in_secondary = _parse_time(PROD_SECONDARY_START) <= t < _parse_time(PROD_SECONDARY_END)
+        window_label = ("PRIMARY" if in_primary else
+                        "SECONDARY" if in_secondary else
+                        "EXTENDED" if self.is_prod_trading_window() else "CLOSED")
         return {
             "regime": self.current_regime,
             "size_multiplier": config["size_multiplier"],
@@ -202,4 +254,5 @@ class SessionManager:
             "allowed_strategies": config["allowed_strategies"],
             "notes": config["notes"],
             "is_prod_window": self.is_prod_trading_window(),
+            "prod_window_label": window_label,  # PRIMARY / SECONDARY / EXTENDED / CLOSED
         }

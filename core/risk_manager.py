@@ -21,6 +21,7 @@ from config.settings import (
     MAX_LOSS_PER_TRADE, DAILY_LOSS_LIMIT, WEEKLY_LOSS_LIMIT,
     RECOVERY_MODE_TRIGGER, MAX_TRADES_PER_SESSION,
     COOLOFF_AFTER_CONSECUTIVE_LOSSES, COOLOFF_DURATION_MIN,
+    MIN_TRADE_SPACING_MIN,
     VIX_LOW, VIX_NORMAL, VIX_HIGH, VIX_EXTREME,
     RISK_TIER_A_PLUS, RISK_TIER_B, RISK_TIER_C,
     ATR_LOW, ATR_NORMAL, ATR_HIGH, TICK_SIZE,
@@ -39,7 +40,8 @@ class RiskState:
     losses_today: int = 0
     consecutive_losses: int = 0
     recovery_mode: bool = False
-    cooloff_until: float = 0.0  # timestamp
+    cooloff_until: float = 0.0      # timestamp: consecutive-loss cooloff
+    last_trade_time: float = 0.0    # timestamp: last completed trade (for spacing)
     killed: bool = False
     kill_reason: str = ""
 
@@ -52,6 +54,9 @@ class RiskManager:
         self._risk_per_trade = MAX_LOSS_PER_TRADE
         self._daily_limit = DAILY_LOSS_LIMIT
         self._max_trades = MAX_TRADES_PER_SESSION
+        # Dynamic trade spacing — default from config, overridden by day classifier
+        # TREND days: 5 min | RANGE: 12 min | VOLATILE: 20 min
+        self._spacing_min = MIN_TRADE_SPACING_MIN
 
     # ─── Dashboard Slider Overrides ─────────────────────────────────
     def set_risk_per_trade(self, value: float):
@@ -62,6 +67,14 @@ class RiskManager:
 
     def set_max_trades(self, value: int):
         self._max_trades = value
+
+    def set_trade_spacing(self, minutes: int):
+        """Dynamically adjust trade spacing based on day type.
+        Called by base_bot whenever DayClassifier updates the day type.
+        """
+        if minutes != self._spacing_min:
+            logger.info(f"[RISK] Trade spacing: {self._spacing_min}min -> {minutes}min")
+        self._spacing_min = minutes
 
     # ─── Pre-Trade Checks ───────────────────────────────────────────
     def can_trade(self, vix: float = 0.0) -> tuple[bool, str]:
@@ -84,6 +97,13 @@ class RiskManager:
         if time.time() < self.state.cooloff_until:
             remaining = int(self.state.cooloff_until - time.time())
             return False, f"Cooloff active ({remaining}s remaining after {COOLOFF_AFTER_CONSECUTIVE_LOSSES} losses)"
+
+        if self.state.last_trade_time > 0:
+            spacing_s = self._spacing_min * 60   # Dynamic — set by DayClassifier
+            elapsed = time.time() - self.state.last_trade_time
+            if elapsed < spacing_s:
+                wait = int(spacing_s - elapsed)
+                return False, f"Trade spacing: {wait}s until next entry ({self._spacing_min}min minimum)"
 
         if vix >= VIX_EXTREME:
             return False, f"VIX extreme ({vix:.1f} >= {VIX_EXTREME}): NO TRADE"
@@ -180,6 +200,9 @@ class RiskManager:
             self.state.recovery_mode = True
             logger.warning(f"RECOVERY MODE activated: daily P&L = ${self.state.daily_pnl:.2f}")
 
+        # Trade spacing — stamp when this trade finished
+        self.state.last_trade_time = time.time()
+
         # Cooloff check
         if self.state.consecutive_losses >= COOLOFF_AFTER_CONSECUTIVE_LOSSES:
             self.state.cooloff_until = time.time() + COOLOFF_DURATION_MIN * 60
@@ -203,6 +226,7 @@ class RiskManager:
         self.state.consecutive_losses = 0
         self.state.recovery_mode = False
         self.state.cooloff_until = 0.0
+        self.state.last_trade_time = 0.0
         self.state.killed = False
         self.state.kill_reason = ""
         logger.info("Daily risk state reset")
@@ -219,6 +243,9 @@ class RiskManager:
             "consecutive_losses": self.state.consecutive_losses,
             "recovery_mode": self.state.recovery_mode,
             "cooloff_active": time.time() < self.state.cooloff_until,
+            "spacing_active": (self.state.last_trade_time > 0 and
+                               time.time() - self.state.last_trade_time < self._spacing_min * 60),
+            "spacing_min": self._spacing_min,   # Current dynamic spacing (varies by day type)
             "killed": self.state.killed,
             "kill_reason": self.state.kill_reason,
             "daily_limit": self._daily_limit,

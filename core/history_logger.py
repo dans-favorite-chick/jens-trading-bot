@@ -111,10 +111,24 @@ class HistoryLogger:
             "ema9":         market.get("ema9"),
             "cvd":          market.get("cvd"),
             "bar_delta":    market.get("bar_delta"),
+            "atr_1m":       market.get("atr_1m"),
             "atr_5m":       market.get("atr_5m"),
+            "atr_tick":     market.get("atr_tick"),
             "dom_imbalance":market.get("dom_imbalance"),
             "tf_votes_bullish": market.get("tf_votes_bullish"),
             "tf_votes_bearish": market.get("tf_votes_bearish"),
+            "tf_bias":          market.get("tf_bias"),
+            "bars_tick":        market.get("bars_tick"),
+            # HTF pattern scanner — active patterns + confluence at eval time
+            "htf_confluence":   eval_record.get("htf_confluence"),   # set when signal present
+            "htf_state":        eval_record.get("htf_state"),         # always captured
+            # Other confluence / suppression factors
+            "rsi_divergence":   eval_record.get("rsi_divergence"),
+            "smc":              eval_record.get("smc"),
+            "cr_verdict":       market.get("cr_verdict"),
+            "cr_confidence":    market.get("cr_confidence"),
+            "above_hvl":        market.get("above_hvl"),
+            "gamma_regime":     market.get("gamma_regime"),
         })
 
     def log_entry(self, signal, price: float, contracts: int,
