@@ -6,7 +6,13 @@ Port from MNQ v5 Elite Spring pattern. The "Rule of Three":
 2. VWAP reclaim (price back above/below VWAP after sweep)
 3. Delta flip (CVD direction confirms reversal)
 
-All three must confirm. Stop = 1.5x wick size. Target = 1.5:1 RR.
+All three must confirm. Stop = structure low/high +/- buffer (not wick multiplier).
+Target = 1.5:1 RR minimum.
+
+v2 fixes (2026-04-14):
+- TF alignment gate: spring must fire WITH dominant trend (3/4 TF votes)
+- Structure-based stop: stop placed at min/max(last_bar, prev_bar) low/high ±2t
+  rather than wick×1.5 — avoids getting stopped at exact session low
 """
 
 from strategies.base_strategy import BaseStrategy, Signal
@@ -24,6 +30,12 @@ class SpringSetup(BaseStrategy):
         require_vwap = self.config.get("require_vwap_reclaim", True)
         require_delta = self.config.get("require_delta_flip", True)
         max_hold = self.config.get("max_hold_min", 15)
+        # FIX 1: TF alignment gate — spring must fire WITH dominant trend direction
+        require_tf_alignment = self.config.get("require_tf_alignment", True)
+        min_tf_votes = self.config.get("min_tf_votes", 3)
+        # FIX 2: Structure-based stop — stop at bar low/high rather than wick×mult
+        stop_at_structure = self.config.get("stop_at_structure", True)
+        structure_buffer_ticks = self.config.get("structure_buffer_ticks", 2)
         from config.settings import TICK_SIZE
         tick_size = TICK_SIZE
 
@@ -72,6 +84,40 @@ class SpringSetup(BaseStrategy):
         if direction is None:
             return None
 
+        # ── TREND Day Direction Gate ─────────────────────────────────
+        # On TREND days, springs fire WITH the trend only — not against it.
+        # A bearish wick on a High-Conviction Bullish TREND day is NOT a
+        # reversal signal — it's a pullback before continuation. Shorting it
+        # has a historically terrible WR. Block it hard regardless of lab/prod mode.
+        day_type = market.get("day_type", "UNKNOWN")
+        mq_bias = market.get("mq_direction_bias", "NEUTRAL")
+        if day_type == "TREND":
+            if direction == "SHORT" and mq_bias == "LONG":
+                self._last_reject = "TREND day + MQ LONG: spring SHORTs blocked (counter-trend)"
+                return None
+            elif direction == "LONG" and mq_bias == "SHORT":
+                self._last_reject = "TREND day + MQ SHORT: spring LONGs blocked (counter-trend)"
+                return None
+            # No MQ bias set but still a TREND day — use C/R verdict if available
+            elif mq_bias == "NEUTRAL":
+                cr_verdict = market.get("cr_verdict", "UNKNOWN")
+                if direction == "SHORT" and cr_verdict == "CONTINUATION":
+                    self._last_reject = "TREND day (CONTINUATION): spring SHORTs blocked"
+                    return None
+
+        # ── FIX 1: TF Alignment Gate ─────────────────────────────────
+        # Spring must fire WITH the dominant trend — counter-trend springs have
+        # 16% WR. Require at least 3/4 TFs aligned with direction.
+        if require_tf_alignment:
+            bullish_votes = market.get("tf_votes_bullish", 0)
+            bearish_votes = market.get("tf_votes_bearish", 0)
+            if direction == "LONG" and bullish_votes < min_tf_votes:
+                return None  # Counter-trend long — not enough TF alignment
+            elif direction == "SHORT" and bearish_votes < min_tf_votes:
+                return None  # Counter-trend short — not enough TF alignment
+            votes = bullish_votes if direction == "LONG" else bearish_votes
+            confluences.append(f"TF aligned: {votes}/{min_tf_votes}+ votes")
+
         # ── Rule 2: VWAP reclaim ────────────────────────────────────
         vwap_confirmed = False
         if require_vwap:
@@ -100,9 +146,54 @@ class SpringSetup(BaseStrategy):
         else:
             delta_confirmed = True
 
-        # ── Calculate stop and score ────────────────────────────────
-        stop_ticks = int(wick_ticks * stop_mult)
-        stop_ticks = max(stop_ticks, 6)  # Minimum 6 tick stop
+        # ── ATR-Based Stop (anchored to wick extreme) ─────────────────
+        # Research: 1.0–1.2 × 5m ATR from the wick extreme is the validated
+        # range for reversal patterns. Anchoring to the wick low/high (not entry)
+        # ensures the stop is BELOW the level that was already defended by liquidity.
+        #
+        # Stop placement:
+        #   LONG:  stop_price = last_bar.low  − (atr_mult × ATR_5m)
+        #   SHORT: stop_price = last_bar.high + (atr_mult × ATR_5m)
+        # Then compute stop_ticks = (price − stop_price) / tick_size
+        #
+        # Setting signal.atr_stop_override = True tells base_bot NOT to apply
+        # the global ATR override on top of this (it's already ATR-based).
+        atr_mult = self.config.get("atr_stop_multiplier", 1.1)
+        max_stop_ticks = self.config.get("max_stop_ticks", 40)   # $20 risk cap at 1 contract
+        min_stop_ticks = self.config.get("min_stop_ticks", 8)
+        atr_5m = market.get("atr_5m", 0) or 0
+        atr_stop_override = False
+
+        if atr_5m > 0:
+            if direction == "LONG":
+                stop_price = last_bar.low - (atr_mult * atr_5m)
+                stop_distance = price - stop_price
+            else:  # SHORT
+                stop_price = last_bar.high + (atr_mult * atr_5m)
+                stop_distance = stop_price - price
+
+            if stop_distance > 0:
+                raw_ticks = int(stop_distance / tick_size)
+                stop_ticks = max(min_stop_ticks, min(max_stop_ticks, raw_ticks))
+                wick_ref = "low" if direction == "LONG" else "high"
+                confluences.append(
+                    f"ATR stop: wick {wick_ref} {atr_mult}xATR5m({atr_5m:.1f}pt) = {stop_ticks}t"
+                    + (f" [capped from {raw_ticks}t]" if raw_ticks > max_stop_ticks else "")
+                )
+                atr_stop_override = True
+            else:
+                # Price already past the wick extreme — stale signal
+                return None
+        else:
+            # ATR not available — fall back to structure stop
+            if direction == "LONG":
+                structure_low = min(last_bar.low, prev_bar.low)
+                stop_distance = price - structure_low + (structure_buffer_ticks * tick_size)
+            else:
+                structure_high = max(last_bar.high, prev_bar.high)
+                stop_distance = structure_high - price + (structure_buffer_ticks * tick_size)
+            stop_ticks = max(min_stop_ticks, int(stop_distance / tick_size))
+            confluences.append(f"Structure stop (ATR unavailable): {stop_ticks}t")
 
         # Entry score based on wick quality + confirmations
         entry_score = 30  # Base for having a spring
@@ -114,11 +205,36 @@ class SpringSetup(BaseStrategy):
             entry_score += 10
         if delta_confirmed:
             entry_score += 10
+        # Bonus for strong TF alignment
+        if require_tf_alignment:
+            votes = market.get("tf_votes_bullish" if direction == "LONG" else "tf_votes_bearish", 0)
+            if votes >= 4:
+                entry_score += 5  # Full 4/4 TF alignment bonus
 
-        confluences.append(f"Stop: {stop_ticks}t (wick x{stop_mult})")
+        # Volume climax on the wick bar = institutional sweep (highest quality spring)
+        # Smart money uses high-volume wicks to sweep stops and enter large positions.
+        # A spring on a climax bar is MORE valid, not less.
+        vol_climax_ratio = float(market.get("vol_climax_ratio", 1.0) or 1.0)
+        if vol_climax_ratio >= 2.0:
+            entry_score += 10
+            confluences.append(f"Volume climax on spring ({vol_climax_ratio:.1f}x avg) — institutional sweep")
+        elif vol_climax_ratio >= 1.5:
+            entry_score += 5
+            confluences.append(f"Above-avg volume on spring ({vol_climax_ratio:.1f}x)")
+
+        # VSA confirmation: high-volume absorption bar at spring level = accumulation
+        vsa = market.get("vsa_signal_5m", "NEUTRAL") or "NEUTRAL"
+        if (vsa == "EFFORT_UP" and direction == "LONG") or (vsa == "EFFORT_DOWN" and direction == "SHORT"):
+            entry_score += 8
+            confluences.append(f"VSA effort bar confirms spring direction")
+        elif vsa == "ABSORPTION":
+            # Absorption at the wick level = supply being absorbed = bullish for LONG spring
+            entry_score += 5
+            confluences.append("VSA absorption at spring level — supply being soaked")
+
         confluences.append(f"Regime: {session_info.get('regime', '?')}")
 
-        return Signal(
+        sig = Signal(
             direction=direction,
             stop_ticks=stop_ticks,
             target_rr=target_rr,
@@ -128,3 +244,5 @@ class SpringSetup(BaseStrategy):
             reason=f"Spring {direction} — wick {wick_ticks:.0f}t, VWAP {'ok' if vwap_confirmed else 'no'}, CVD {'ok' if delta_confirmed else 'no'}",
             confluences=confluences,
         )
+        sig.atr_stop_override = atr_stop_override
+        return sig

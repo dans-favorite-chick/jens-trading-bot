@@ -21,6 +21,11 @@ class Signal:
     reason: str            # Human-readable entry reason
     confluences: list[str] # List of confluences met
     trade_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    # Set True when the strategy has already computed an ATR-based stop internally.
+    # base_bot will skip its own ATR override so the strategy's calculation is used.
+    # Use this for patterns that need stop anchored to a specific price (wick extreme)
+    # rather than from entry price.
+    atr_stop_override: bool = False
 
     def to_dict(self) -> dict:
         return {

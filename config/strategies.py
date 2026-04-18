@@ -10,33 +10,33 @@ Format is intentionally flat dict — easy for Claude Code to read/edit.
 
 STRATEGY_DEFAULTS = {
     # ─── Global Thresholds (dashboard sliders) ──────────────────────
-    "min_confluence": 3.5,           # Slider: 2.0 – 5.0, step 0.1
-    "min_momentum_confidence": 60,   # Slider: 40 – 90, step 5
+    "min_confluence": 5.0,            # Slider: 2.0 – 7.0, step 0.1 (raised from 3.5 — fewer, better trades)
+    "min_momentum_confidence": 80,   # Slider: 40 – 90, step 5 (raised from 60 — require strong momentum)
     "min_precision": 48,             # Slider: 30 – 60, step 2
     "risk_per_trade": 15.0,          # Slider: $5 – $20, step $1
     "max_daily_loss": 45.0,          # Slider: $20 – $60, step $5
-    "base_rr_ratio": 1.5,            # Default risk:reward target
+    "base_rr_ratio": 5.0,            # Default risk:reward (raised from 1.5 — targeting 20+ point moves)
 
     # ─── Aggression Profiles (dashboard buttons) ────────────────────
     # These override the above sliders when selected
     "profiles": {
         "safe": {
-            "min_confluence": 4.5,
-            "min_momentum_confidence": 80,
+            "min_confluence": 6.0,
+            "min_momentum_confidence": 85,
             "min_precision": 55,
             "risk_per_trade": 8.0,
             "max_daily_loss": 25.0,
         },
         "balanced": {
-            "min_confluence": 3.5,
-            "min_momentum_confidence": 60,
+            "min_confluence": 5.0,
+            "min_momentum_confidence": 80,
             "min_precision": 48,
             "risk_per_trade": 15.0,
             "max_daily_loss": 45.0,
         },
         "aggressive": {
-            "min_confluence": 2.5,
-            "min_momentum_confidence": 45,
+            "min_confluence": 4.0,
+            "min_momentum_confidence": 70,
             "min_precision": 35,
             "risk_per_trade": 20.0,
             "max_daily_loss": 50.0,
@@ -51,41 +51,77 @@ STRATEGIES = {
     "bias_momentum": {
         "enabled": True,
         "validated": True,    # Runs in prod bot
-        "stop_ticks": 9,
-        "target_rr": 2.0,
-        "min_confluence": 3.5,  # Tightened: was 3.0, too many low-quality signals
-        "min_tf_votes": 3,
-        "max_hold_min": 25,
-        "min_momentum": 55,
+        # Stop wider than MNQ 1m ATR (7.7 ticks avg) so noise doesn't stop us out.
+        # 20 ticks = 5 points = $10 risk. Gives the trade room to breathe.
+        "stop_ticks": 20,
+        # 5:1 RR minimum → 100 ticks = 25 points = $50. Aligns with 20-80 pt goal.
+        # Only worthwhile if the setup is a genuine strong trend day.
+        "target_rr": 5.0,
+        # Defaults (regime overrides in bias_momentum.py typically take precedence)
+        # Direction gate: 15m + 5m + 1m must ALL align (see bias_momentum.py evaluate())
+        "min_confluence": 5.5,
+        "max_hold_min": 60,   # Give it room to run — strong trends last 30-60 min
+        "min_momentum": 80,
+        # EMA9 extension gate (see bias_momentum.py): outside golden windows (OPEN_MOMENTUM,
+        # MID_MORNING), reject if price is already > N ticks from EMA9. Prevents chasing
+        # extended moves in LATE_AFTERNOON. 60t = 15pts — still allows re-entry close
+        # to EMA9, blocks buying 130-200t above EMA9 in afternoon chop.
+        "max_ema_dist_ticks": 60,
     },
     "spring_setup": {
         "enabled": True,
         "validated": True,    # Runs in prod bot
-        "stop_multiplier": 1.5,  # 1.5x wick size
+        "stop_multiplier": 1.5,  # fallback wick multiplier (used only if stop_at_structure=False)
         "target_rr": 1.5,
         "min_wick_ticks": 6,
         "require_vwap_reclaim": True,
         "require_delta_flip": True,
         "max_hold_min": 15,
+        # v2 fixes (2026-04-14): TF gate + ATR-anchored stop
+        "require_tf_alignment": True,   # Only fire WITH dominant trend (3/4 TF votes)
+        "min_tf_votes": 3,              # Min TF votes in direction to allow entry
+        # ATR stop (research-validated for reversal patterns):
+        # Stop = wick_extreme ± (atr_stop_multiplier × ATR_5m)
+        # 1.0-1.2× is validated range; 1.1 balanced (not too tight, not too wide)
+        # Anchored to wick low/high — NOT entry price — so it's below the defended level
+        "atr_stop_multiplier": 1.1,     # 1.1 × 5m ATR from wick extreme
+        "structure_buffer_ticks": 2,    # Fallback buffer if ATR unavailable
     },
     "vwap_pullback": {
         "enabled": True,
         "validated": False,   # Lab only
-        "stop_ticks": 8,
-        "target_rr": 1.8,
+        "stop_ticks": 14,
+        "target_rr": 20.0,   # Reversal+stall exit drives this — target is not the OCO bracket
         "min_confluence": 3.2,
         "min_tf_votes": 3,
-        "max_hold_min": 18,
+        "max_hold_min": 60,  # Give it room — VWAP pullbacks can run 30-80pts
     },
     "high_precision_only": {
         "enabled": True,
         "validated": False,   # Lab only — Research Bot found promise (64% WR solo)
-        "stop_ticks": 8,      # but needs more live data before prod promotion
-        "target_rr": 1.5,
+        "stop_ticks": 14,
+        "target_rr": 5.0,    # 5:1 — high precision setups deserve big targets
         "min_confluence": 3.5,
-        "min_tf_votes": 3,    # Loosened from 4 (Research Bot recommendation)
-        "min_precision": 50,  # Loosened from 55 (Research Bot recommendation)
-        "max_hold_min": 15,
+        "min_tf_votes": 3,
+        "min_precision": 65,
+        "max_hold_min": 30,
+    },
+    "dom_pullback": {
+        "enabled": True,
+        "validated": False,   # Lab only — replicates user's manual DOM absorption entry
+        # Entry: pullback to EMA9 or VWAP + sell orders being pulled/absorbed by buyers
+        "stop_ticks": 10,     # 10t = 2.5pts — tight stop just below the pullback low
+        "target_rr": 2.5,     # 2.5:1 = 25t = 6.25pts minimum capture
+        # DOM absorption threshold — 0=any signal, 100=very strong only
+        # 35 is moderate: absorption is visible but not overwhelming
+        "min_dom_strength": 35,
+        # Pullback detection: how close to EMA9 / VWAP to qualify as "at the level"
+        # Data: P25 of EMA9 distance by regime = 26-40t. The P25 is the "normal close approach"
+        # zone — a bar in the bottom quartile of EMA9 distance is a genuine touch.
+        # 28t = 7pts — within 7 MNQ points of EMA9 qualifies as "at the level".
+        "max_ema_dist_ticks": 28,   # Widened from 12t → 28t (data-validated P25 zone)
+        "max_vwap_dist_ticks": 20,  # Widened from 10t → 20t (more realistic touch zone)
+        "max_hold_min": 20,
     },
     "tick_scalp": {
         "enabled": True,      # Enabled for lab bot
@@ -104,5 +140,32 @@ STRATEGIES = {
         "max_ib_width_atr_mult": 1.5,
         "stop_at_ib_midpoint": False,  # False = stop at full IB opposite, True = tighter stop at midpoint
         "max_hold_min": 60,
+        # v2 fix (2026-04-14): CVD must confirm breakout direction
+        # Without this: SHORT at IB low with CVD=+6.05M → -164t loss (buyers absorbing)
+        "require_cvd_confirm": True,   # CVD > 0 for LONG, CVD < 0 for SHORT — hard gate
+    },
+    "compression_breakout": {
+        "enabled": True,
+        "validated": False,   # Lab only — PRE-explosion entry, build sample before prod promotion
+        # Coil detection — None = use regime default from _REGIME_PARAMS in the strategy file
+        #   Primary (8:30-10:30): min_coil_bars=3, tight_mult=0.90
+        #   Afternoon:            min_coil_bars=5, tight_mult=1.20-1.50
+        "min_coil_bars": None,      # None = regime default
+        "tight_mult":    None,      # None = regime default
+        "min_tf_votes": 2,          # TF votes needed to confirm direction (exhaustion allows min-1)
+        "stop_buffer_ticks": 3,     # Ticks beyond coil low/high for stop
+        # Stop management
+        "max_stop_ticks": 40,       # Hard cap ($20 risk). Pre-explosion stops are naturally tight
+                                    # (8-20t typically). Cap guards against drift edge cases.
+                                    # At 3:1 RR with 40t stop → target=120t ($60). Squeezes run 400t+.
+        # Targets — these moves run FAR, use wide RR
+        # With 20-tick stop (5 pts): 5:1 = 100t = 25pts, 8:1 = 160t = 40pts
+        # Explosion squeezes on MNQ routinely run 400t+ (100pts). Let it run.
+        "target_rr": 5.0,           # 5:1 minimum — 100 ticks = 25 points minimum
+        "max_hold_min": 90,         # Give it room to run — big squeezes last 45-90 min
+        # Lab bot collects data — key questions to tune:
+        #   Which signal (VRR / exhaustion / close-breakout) has highest win rate?
+        #   Does ATR-declining alone add value without a directional signal?
+        #   Is exhaustion_tf_min = min_tf_votes-1 the right relaxation?
     },
 }

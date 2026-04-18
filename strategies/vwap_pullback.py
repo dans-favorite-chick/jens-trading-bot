@@ -17,9 +17,13 @@ class VWAPPullback(BaseStrategy):
     def evaluate(self, market: dict, bars_5m: list, bars_1m: list,
                  session_info: dict) -> Signal | None:
 
-        min_tf_votes = self.config.get("min_tf_votes", 3)
         stop_ticks = self.config.get("stop_ticks", 8)
         target_rr = self.config.get("target_rr", 1.8)
+        day_type = market.get("day_type", "UNKNOWN")
+        mq_bias  = market.get("mq_direction_bias", "NEUTRAL")
+        trend_day = (day_type == "TREND")
+        # TREND days: 1 TF vote sufficient (context gives direction). Non-TREND: need 2.
+        min_tf_votes = 1 if trend_day else self.config.get("min_tf_votes", 2)
 
         if len(bars_1m) < 2:
             return None
@@ -52,14 +56,18 @@ class VWAPPullback(BaseStrategy):
         max_dist_above = (max(recent_highs) - vwap) / tick_size
         max_dist_below = (vwap - min(recent_lows)) / tick_size
 
-        # Bullish pullback: TF bullish, price was above VWAP recently, pulled back to it
-        if bullish >= min_tf_votes and max_dist_above >= 8:
-            # Price was 8+ ticks above VWAP and has now returned — this IS a pullback
+        # Bullish pullback: price was above VWAP, pulled back to it
+        # TREND days: MQ bias sets direction. Non-TREND: need TF vote majority.
+        if trend_day and mq_bias == "LONG" and max_dist_above >= 8:
+            direction = "LONG"
+            confluences.append(f"TREND day (MQ LONG) pullback — {max_dist_above:.0f}t from VWAP")
+        elif trend_day and mq_bias == "SHORT" and max_dist_below >= 8:
+            direction = "SHORT"
+            confluences.append(f"TREND day (MQ SHORT) pullback — {max_dist_below:.0f}t from VWAP")
+        elif bullish >= min_tf_votes and max_dist_above >= 8:
             direction = "LONG"
             confluences.append(f"Bullish TF: {bullish}/4")
             confluences.append(f"Pullback from {max_dist_above:.0f}t above VWAP")
-
-        # Bearish pullback: TF bearish, price was below VWAP recently, bounced up to it
         elif bearish >= min_tf_votes and max_dist_below >= 8:
             direction = "SHORT"
             confluences.append(f"Bearish TF: {bearish}/4")

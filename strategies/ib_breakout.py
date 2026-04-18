@@ -137,6 +137,18 @@ class IBBreakout(BaseStrategy):
         if direction is None:
             return None
 
+        # ── FIX: CVD Hard Confirmation ──────────────────────────────
+        # CVD must confirm the breakout direction. Without this, a SHORT breakout
+        # with positive CVD (buyers absorbing at the low) is a trap — not a trend.
+        # Example: 2026-04-14 10:05 SHORT with CVD=+6.05M → -164t loss.
+        require_cvd = self.config.get("require_cvd_confirm", True)
+        if require_cvd:
+            cvd_now = market.get("cvd", 0)
+            if direction == "LONG" and cvd_now <= 0:
+                return None  # Price broke IB high but buyers are not in control
+            elif direction == "SHORT" and cvd_now >= 0:
+                return None  # Price broke IB low but sellers are not in control — buyers absorbing
+
         # Mark direction as traded for today
         self._traded_today[direction] = True
 
