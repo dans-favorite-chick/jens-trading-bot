@@ -84,8 +84,40 @@ Key things to watch for:
 - Is Trump posting about tariffs with negative sentiment? (CAUTION on LONG)
 - Is crypto in Extreme Fear while taking a LONG? (risk-off correlation, CAUTION)
 
+━━━ MENTHOR Q GAMMA ENVIRONMENT RULES (highest priority) ━━━
+These override standard rules. GEX regime is the most important context.
+
+NEGATIVE GEX + LONG signal:
+  - If price is BELOW HVL (High Vol Level): SIT_OUT unless confluence >= 4 and momentum_score >= 70
+  - If price is ABOVE HVL: CAUTION — negative gamma amplifies stops, use 1.5x stop sizing
+  - Any LONG in negative GEX requires bar_delta confirmation (must be positive on current bar)
+  - CVD being negative all day in negative GEX does NOT mean short — dealers amplify moves both ways
+
+NEGATIVE GEX + SHORT signal:
+  - CLEAR — negative gamma AMPLIFIES downside moves, shorts work better here
+  - Below HVL = maximum short power, moves are faster and larger than normal
+  - Loss of put support levels = extremely aggressive shorts (gamma cascade)
+  - Widen profit targets — moves go further than ATR suggests
+
+POSITIVE GEX + any signal:
+  - CLEAR with tighter stops — positive GEX suppresses volatility, mean-reversion favored
+  - Use GEX levels (gex_level_1, call_resistance) as profit targets (price often stalls there)
+  - Fading extreme moves is safer in positive GEX — dealers push back toward equilibrium
+  - HVL reclaim from below = high-confidence LONG (dealers start suppressing downside)
+
+HVL (High Vol Level) — most important single number:
+  - Price crossing above HVL = regime shift to positive gamma → LONG gets CLEAR
+  - Price crossing below HVL = regime shift to negative gamma → LONG gets SIT_OUT
+  - HVL acts as strong support/resistance due to dealer gamma positioning
+
+DEX (Dealer Delta):
+  - Negative GEX + Negative DEX = worst for longs (dealers amplifying AND structurally selling)
+  - Negative GEX + Positive DEX = squeeze setup possible (dealers buying to hedge)
+
+Post-OPEX week: stops 1.5x wider — gamma stabilizers expired, expect larger moves.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 Be decisive. Lean toward CLEAR unless something is clearly wrong.
-Speed matters more than perfection — this runs on every signal.
 Speed matters more than perfection — this runs on every signal."""
 
 
@@ -94,8 +126,9 @@ def build_filter_prompt(
     market: dict,
     recent_trades: list[dict],
     regime: str,
+    strategy_context: str = "",
 ) -> str:
-    """Build a compact prompt with signal + context."""
+    """Build a compact prompt with signal + context + strategy knowledge."""
 
     # Summarize recent trade outcomes (last 5)
     recent_summary = []
@@ -107,6 +140,32 @@ def build_filter_prompt(
             "pnl": t.get("pnl_dollars", 0),
             "exit_reason": t.get("exit_reason", ""),
         })
+
+    strat_section = ""
+    if strategy_context:
+        strat_section = f"\n## Strategy Knowledge (from library)\n{strategy_context}\n"
+
+    # Build Menthor Q section
+    mq_data = market.get("menthorq", {})
+    price = market.get("price", 0)
+    hvl = mq_data.get("hvl", 0.0)
+    if hvl and hvl > 0:
+        price_vs_hvl = (f"ABOVE HVL +{price - hvl:.2f}" if price > hvl
+                        else f"BELOW HVL {price - hvl:.2f}")
+    else:
+        price_vs_hvl = "HVL unknown"
+
+    mq_section = f"""
+## Menthor Q — Options Gamma Flow
+GEX Regime: {mq_data.get('gex_regime', 'UNKNOWN')} | Net GEX: {mq_data.get('net_gex_bn', 0.0)}B
+HVL: {hvl if hvl else 'N/A'} | Price vs HVL: {price_vs_hvl}
+DEX: {mq_data.get('dex', 'UNKNOWN')}
+Vanna: {mq_data.get('vanna', 'NEUTRAL')} | Charm: {mq_data.get('charm', 'NEUTRAL')} | CTA: {mq_data.get('cta_positioning', 'NEUTRAL')}
+GEX Levels: L1={mq_data.get('gex_level_1', 'N/A')} L2={mq_data.get('gex_level_2', 'N/A')} L3={mq_data.get('gex_level_3', 'N/A')}
+Call Wall: {mq_data.get('call_resistance_all', 'N/A')} | Put Wall: {mq_data.get('put_support_all', 'N/A')}
+0DTE Call: {mq_data.get('call_resistance_0dte', 'N/A')} | 0DTE Put: {mq_data.get('put_support_0dte', 'N/A')}
+MQ Direction Bias: {mq_data.get('direction_bias', 'NEUTRAL')} | Stop Multiplier: {mq_data.get('stop_multiplier', 1.0)}x
+"""
 
     prompt = f"""## Trade Signal to Evaluate
 
@@ -129,7 +188,7 @@ CVD: {market.get('cvd', 0)}
 Bar Delta: {market.get('bar_delta', 0)}
 DOM Imbalance: {market.get('dom_imbalance', 0.5)} (bid_heavy={market.get('dom_bid_heavy', False)}, ask_heavy={market.get('dom_ask_heavy', False)})
 TF Bias: bullish={market.get('tf_votes_bullish', 0)}/4 bearish={market.get('tf_votes_bearish', 0)}/4
-
+{mq_section}{strat_section}
 ## Recent Trades (last 5)
 {json.dumps(recent_summary, indent=1)}
 
@@ -146,6 +205,7 @@ async def check(
     recent_trades: list[dict],
     regime: str = "UNKNOWN",
     model: str = DEFAULT_MODEL,
+    strategy_context: str = "",
 ) -> FilterVerdict:
     """
     Run pre-trade AI filter on a signal.
@@ -156,6 +216,7 @@ async def check(
         recent_trades: Recent trade history (from TradeMemory or PositionManager)
         regime: Current market regime string
         model: AI model to use
+        strategy_context: Relevant strategies from the knowledge library
 
     Returns:
         FilterVerdict with action, reason, confidence, and latency
@@ -163,7 +224,8 @@ async def check(
     start = time.time()
 
     try:
-        prompt = build_filter_prompt(signal, market, recent_trades, regime)
+        prompt = build_filter_prompt(signal, market, recent_trades, regime,
+                                     strategy_context=strategy_context)
 
         response = await ask(
             prompt=prompt,

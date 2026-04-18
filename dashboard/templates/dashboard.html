@@ -189,6 +189,36 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
 
 /* Debrief */
 .debrief-content { max-height:300px; overflow-y:auto; font-size:12px; line-height:1.6; white-space:pre-wrap; font-family:var(--font); }
+
+/* ===== SECTION: MenthorQ Quick Entry ===== */
+.mq-form { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px 12px; }
+.mq-field { display:flex; flex-direction:column; gap:3px; }
+.mq-field label { font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.5px; }
+.mq-field input, .mq-field select {
+  padding:5px 8px; background:#0d1117; border:1px solid var(--border);
+  border-radius:4px; color:var(--text); font-size:13px; font-family:var(--mono);
+  outline:none; width:100%;
+}
+.mq-field input:focus, .mq-field select:focus { border-color:var(--blue); }
+.mq-field.wide { grid-column:span 2; }
+.mq-field.full { grid-column:span 3; }
+.mq-hvl input { border-color:var(--yellow); }
+.mq-hvl input:focus { border-color:var(--yellow); box-shadow:0 0 0 2px #d2992233; }
+.mq-save-btn {
+  padding:7px 18px; background:var(--blue); color:#000; border:none;
+  border-radius:4px; cursor:pointer; font-weight:700; font-size:13px;
+  white-space:nowrap;
+}
+.mq-save-btn:hover { background:#79b8ff; }
+.mq-save-btn:active { transform:scale(0.97); }
+.mq-status { margin-top:8px; padding:7px 10px; border-radius:4px; font-size:11px; font-family:var(--mono); background:#0d1117; border:1px solid var(--border); display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+.mq-status.today { border-color:#3fb95066; }
+.mq-status.stale { border-color:#d2992266; }
+.mq-confirm { display:none; padding:4px 10px; border-radius:4px; background:#0d2818; color:var(--green); font-size:12px; font-weight:700; font-family:var(--mono); border:1px solid var(--green); }
+.mq-confirm.show { display:inline-block; }
+.mq-gex-neg { color:var(--red); }
+.mq-gex-pos { color:var(--green); }
+.mq-gex-unk { color:var(--text-dim); }
 </style>
 </head>
 <body>
@@ -336,6 +366,67 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
     </div>
   </div>
 </div>
+</div>
+
+<!-- ===== SECTION: MenthorQ Morning Setup ===== -->
+<div class="card" style="margin-top:12px;">
+  <h3>MenthorQ Morning Setup <span style="font-size:10px;color:var(--text-dim);font-weight:400;text-transform:none;">— fill once before session open</span></h3>
+  <form class="mq-form" id="mq-form" onsubmit="saveMQSetup(event)">
+
+    <div class="mq-field">
+      <label>GEX Regime</label>
+      <select id="mq-gex-regime" name="gex_regime">
+        <option value="NEGATIVE">NEGATIVE (red)</option>
+        <option value="POSITIVE">POSITIVE (green)</option>
+        <option value="UNKNOWN" selected>UNKNOWN</option>
+      </select>
+    </div>
+
+    <div class="mq-field">
+      <label>Net GEX $B</label>
+      <input type="number" id="mq-net-gex" name="net_gex_bn" step="0.1" placeholder="-2.1">
+    </div>
+
+    <div class="mq-field mq-hvl">
+      <label>HVL ★ Most Important</label>
+      <input type="number" id="mq-hvl" name="hvl" step="0.25" placeholder="21200.00">
+    </div>
+
+    <div class="mq-field">
+      <label>Direction Bias</label>
+      <select id="mq-bias" name="direction_bias">
+        <option value="NEUTRAL" selected>NEUTRAL</option>
+        <option value="LONG">LONG</option>
+        <option value="SHORT">SHORT</option>
+      </select>
+    </div>
+
+    <div class="mq-field">
+      <label>Stop Multiplier</label>
+      <select id="mq-stop-mult" name="stop_multiplier">
+        <option value="1.0" selected>1.0 — Normal</option>
+        <option value="1.5">1.5 — Neg Gamma Wide</option>
+        <option value="0.8">0.8 — Pos Gamma Tight</option>
+      </select>
+    </div>
+
+    <div class="mq-field" style="align-self:flex-end;">
+      <label>&nbsp;</label>
+      <button type="submit" class="mq-save-btn">💾 Save MQ Setup</button>
+    </div>
+
+    <div class="mq-field full">
+      <label>Notes (optional)</label>
+      <input type="text" id="mq-notes" name="notes" placeholder="e.g. Fed day — expect chop through HVL">
+    </div>
+
+  </form>
+
+  <div id="mq-confirm" class="mq-confirm"></div>
+
+  <div id="mq-status" class="mq-status">
+    <span style="color:var(--text-dim);">Loading MQ status…</span>
+  </div>
 </div>
 
 <!-- ===== SECTION: Trade Log ===== -->
@@ -1053,6 +1144,89 @@ async function pollDebrief() {
   } catch (e) {}
 }
 
+// ── MenthorQ Morning Setup ────────────────────────────────────────
+async function saveMQSetup(e) {
+  e.preventDefault();
+  const form = document.getElementById('mq-form');
+  const btn = form.querySelector('.mq-save-btn');
+  const confirmEl = document.getElementById('mq-confirm');
+
+  const payload = {
+    gex_regime:      document.getElementById('mq-gex-regime').value,
+    net_gex_bn:      parseFloat(document.getElementById('mq-net-gex').value) || 0,
+    hvl:             parseFloat(document.getElementById('mq-hvl').value) || 0,
+    direction_bias:  document.getElementById('mq-bias').value,
+    stop_multiplier: parseFloat(document.getElementById('mq-stop-mult').value),
+    notes:           document.getElementById('mq-notes').value,
+  };
+
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+  confirmEl.className = 'mq-confirm';
+
+  try {
+    const res = await fetch('/api/mq-update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      const hvl = data.snapshot && data.snapshot.hvl ? data.snapshot.hvl.toLocaleString() : '?';
+      confirmEl.textContent = '✓ Saved  — HVL: ' + hvl;
+      confirmEl.className = 'mq-confirm show';
+      setTimeout(() => { confirmEl.className = 'mq-confirm'; }, 4000);
+      renderMQStatus(data.snapshot);
+    } else {
+      confirmEl.textContent = '✗ Error: ' + (data.error || 'unknown');
+      confirmEl.className = 'mq-confirm show';
+      confirmEl.style.background = '#2d0000';
+      confirmEl.style.color = 'var(--red)';
+      confirmEl.style.borderColor = 'var(--red)';
+    }
+  } catch (err) {
+    confirmEl.textContent = '✗ Network error';
+    confirmEl.className = 'mq-confirm show';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '💾 Save MQ Setup';
+  }
+}
+
+function renderMQStatus(snap) {
+  const el = document.getElementById('mq-status');
+  if (!snap) { el.innerHTML = '<span style="color:var(--text-dim)">No MQ data yet</span>'; return; }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const isCurrent = snap.date === today;
+  el.className = 'mq-status ' + (isCurrent ? 'today' : 'stale');
+
+  const dateColor = isCurrent ? 'var(--green)' : 'var(--yellow)';
+  const dateLabel = isCurrent ? '✓ Today' : '⚠ Stale (' + (snap.date || '?') + ')';
+
+  const regime = (snap.gex_regime || 'UNKNOWN').toUpperCase();
+  const regimeCls = regime === 'NEGATIVE' ? 'mq-gex-neg' : regime === 'POSITIVE' ? 'mq-gex-pos' : 'mq-gex-unk';
+
+  const hvl = snap.hvl ? snap.hvl.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}) : '—';
+  const bias = snap.direction_bias || '—';
+  const mult = snap.stop_multiplier != null ? snap.stop_multiplier : '—';
+
+  el.innerHTML =
+    '<span style="color:' + dateColor + ';font-weight:700">' + esc(dateLabel) + '</span>' +
+    '<span>HVL: <b style="color:var(--yellow)">' + esc(hvl) + '</b></span>' +
+    '<span>Regime: <b class="' + regimeCls + '">' + esc(regime) + '</b></span>' +
+    '<span>Bias: <b>' + esc(bias) + '</b></span>' +
+    '<span>Stop×: <b>' + esc(String(mult)) + '</b></span>';
+}
+
+async function pollMQStatus() {
+  try {
+    const res = await fetch('/api/mq-status');
+    const data = await res.json();
+    if (data.snapshot) renderMQStatus(data.snapshot);
+  } catch (e) {}
+}
+
 // ── Helpers ────────────────────────────────────────────────────────
 function el(id) { return document.getElementById(id); }
 
@@ -1061,6 +1235,8 @@ setInterval(poll, POLL_MS);
 poll();
 setInterval(pollDebrief, 30000);
 pollDebrief();
+setInterval(pollMQStatus, 30000);
+pollMQStatus();
 </script>
 </body>
 </html>

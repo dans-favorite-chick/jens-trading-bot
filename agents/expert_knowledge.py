@@ -1128,3 +1128,162 @@ def format_patterns_for_prompt(patterns: list[dict]) -> str:
         lines.append("")
 
     return "\n".join(lines)
+
+
+# =====================================================================
+# 8. Menthor Q Options Flow Expert Knowledge
+# =====================================================================
+
+MENTHORQ_EXPERT_KNOWLEDGE: str = """\
+## Menthor Q Options Flow — Expert Knowledge Base
+
+Menthor Q is an institutional-grade options analytics platform providing gamma exposure (GEX),
+delta exposure (DEX), dealer positioning, and flow data for NQ/MNQ futures.
+This knowledge base trains the AI to reason like a Menthor Q expert.
+
+### THE CORE PRINCIPLE: Dealers Always Hedge
+Market makers (dealers) ALWAYS delta-hedge their options inventory. This is mechanical,
+predictable, and creates reliable price effects. GEX tells you HOW they hedge:
+  - Dealers LONG gamma (positive GEX): sell rallies, buy dips → price suppressed
+  - Dealers SHORT gamma (negative GEX): buy rallies, sell drops → price amplified
+
+### THE HVL (High Vol Level) — Single Most Important Number
+The exact price where dealer gamma flips positive to negative.
+  - ABOVE HVL: Positive gamma regime. Dealers stabilize. Use fade/mean-reversion strategies.
+  - BELOW HVL: Negative gamma regime. Dealers amplify. Use momentum strategies. NO FADING.
+  - HVL itself: Major support/resistance. Test of HVL from either side = high-conviction setup.
+  - HVL Reclaim (price crosses above): Dealers flip to buyers. Strong long setup.
+  - HVL Loss (price crosses below): Dealers flip to sellers. Strong short setup.
+
+### GEX REGIME RULES
+NEGATIVE GEX (Red bars — price below HVL):
+  - NEVER fade moves. Dealers amplify every tick in the trend direction.
+  - Widen stops 1.5x minimum. Moves are larger than normal ATR suggests.
+  - SHORT bias: Every rally is a sell. Target GEX levels below as exit.
+  - LONG only: If clear HVL reclaim with CVD confirming + bullish catalyst.
+  - Day type: Trending, volatile, fast. Risk of waterfall drops or gamma squeezes.
+
+POSITIVE GEX (Green bars — price above HVL):
+  - Fade extremes. Dealers cap moves at GEX resistance / support.
+  - Tighten stops 0.75x. Moves are suppressed.
+  - Range trading: Enter near GEX support, exit at GEX resistance.
+  - Both directions OK. DEX determines the lean (positive DEX = bullish drift).
+  - Day type: Range-bound, sticky, predictable. Options sellers thrive.
+
+### DEX (Delta Exposure) — Directional Bias
+  - Positive DEX: Structural buying pressure. Dealers mechanically buy dips.
+  - Negative DEX: Structural selling pressure. Dealers mechanically sell rallies.
+  - Negative GEX + Negative DEX = WORST for longs. Dealers amplify AND sell strength.
+  - Negative GEX + Positive DEX = Volatile but bullish potential (squeeze setup).
+  - Positive GEX + Positive DEX = Most stable bullish environment. Dip-buying works.
+  - Positive GEX + Negative DEX = Stable but bearish lean. Fade rallies.
+
+### GEX LEVELS 1-10 — Intraday S/R
+Strikes with highest gamma cluster. Level 1 = strongest.
+  - Positive GEX: Levels act as real S/R. Fade into them. Bounce from them.
+  - Negative GEX: Breaking Level 1 triggers cascading dealer re-hedging.
+    Level 1 break down → dealers forced to sell more → fast drop to Level 2.
+  - 0DTE levels: Most powerful in last 2 hours. 0DTE gamma is exponential near expiry.
+  - 0DTE Put Wall break in afternoon = high-conviction SHORT trigger.
+  - 0DTE Call Wall break in morning = high-conviction LONG (gamma squeeze).
+
+### VANNA FLOWS
+  - Bearish Vanna: Rising VIX + large short put OI. Dealers must sell into drops.
+    Creates self-reinforcing cascade. Do NOT long when Vanna = BEARISH.
+  - Bullish Vanna: Falling VIX + OTM put decay. Dealers buy back hedges.
+    Creates "vanna bid" — market grinds up mechanically. Buy dips aggressively.
+  - Post-VIX-spike vanna unwind (VIX falling fast) = fastest rallies in the market.
+
+### CHARM FLOWS
+  - Post-OPEX (week after monthly options expiration): Vanna/charm stabilizers expire.
+    Price action becomes MORE volatile and unpredictable. Widen stops.
+  - OTM puts decaying → "charm bid" → structural buying. Bullish drift post-OPEX.
+  - Monthly OPEX = 3rd Friday. Quarterly OPEX (Mar/Jun/Sep/Dec) = most powerful.
+
+### CTA MODEL
+  - CTAs BUYING: Systematic funds adding longs. Pullbacks are mechanical buys.
+  - CTAs SELLING: Systematic funds adding shorts. Rallies are mechanical sells.
+  - CTAs MAX SHORT (extreme) + Negative GEX + Catalyst = GAMMA SQUEEZE setup.
+    This is the setup that produces 3-8% ramps in 2-4 hours. DO NOT short these.
+  - CTAs MAX LONG + Negative GEX = Mean reversion warning. Any negative catalyst = sharp selloff.
+
+### PRE-TRADE FILTER DECISIONS WITH MENTHOR Q
+LONG signal in NEGATIVE GEX + price BELOW HVL:
+  → Default: CAUTION or SIT_OUT. Mechanical headwind from dealers.
+  → SIT_OUT if: CVD negative, DEX negative, Vanna bearish (triple headwind).
+  → CLEAR only if: HVL reclaimed + CVD positive + strong catalyst.
+
+SHORT signal in NEGATIVE GEX + price BELOW HVL:
+  → Default: CLEAR. Mechanical tailwind from dealers.
+  → Apply 1.5x stop multiplier. Wider stop = fewer whipsaws.
+  → SIT_OUT only if: imminent news event or daily loss limit hit.
+
+Any signal in POSITIVE GEX:
+  → Both directions OK. Use GEX levels as entries and exits.
+  → Tighten stops 25%. Moves are suppressed.
+  → Fade into GEX levels. Do not chase breakouts.
+
+### COUNCIL VOTING GUIDANCE
+When voting on session bias with MQ data:
+  Negative GEX + Below HVL + Negative DEX + Vanna Bearish → BEARISH vote, confidence 80-90
+  Negative GEX + Below HVL + Positive DEX + CTA Buying → BULLISH vote (squeeze), confidence 60
+  Positive GEX + Above HVL + Positive DEX → BULLISH vote, confidence 70-80
+  Positive GEX + Above HVL + Negative DEX → BEARISH lean, confidence 55-65
+  Price AT HVL (within 0.5x ATR) → NEUTRAL, wait for confirmation
+
+### DEBRIEF EVALUATION CHECKLIST
+For each trade in the session:
+  1. Was direction aligned with GEX regime? (LONG in negative GEX = misaligned)
+  2. Was stop sized for the regime? (Negative GEX needs 1.5x wider stops)
+  3. Was entry near a GEX level? (Best entries are at/near GEX levels)
+  4. Did vanna/charm context match? (Vanna bearish + long = mechanical headwind)
+  5. Did CTA model support direction? (CTA selling + long = institutional headwind)
+Most common MQ mistakes: regime-blind LONGs below HVL, tight stops in negative gamma.
+"""
+
+
+def get_menthorq_knowledge() -> str:
+    """Return the full Menthor Q expert knowledge block for prompt injection."""
+    return MENTHORQ_EXPERT_KNOWLEDGE
+
+
+def get_menthorq_pretrade_rules(direction: str, gex_regime: str, above_hvl: bool) -> str:
+    """
+    Return targeted Menthor Q rules for a specific trade scenario.
+    Used by the pre-trade filter to inject only the relevant rules.
+    """
+    lines = ["## Menthor Q Pre-Trade Context"]
+
+    if gex_regime == "NEGATIVE":
+        if not above_hvl:
+            if direction == "LONG":
+                lines.append(
+                    "WARNING: LONG signal in negative GEX regime with price BELOW HVL. "
+                    "Dealers are short gamma AND below the regime flip level. "
+                    "Every tick down triggers more dealer selling. "
+                    "This LONG faces double mechanical headwind. "
+                    "Lean toward CAUTION or SIT_OUT unless very strong catalyst exists."
+                )
+            else:  # SHORT
+                lines.append(
+                    "CONFIRM: SHORT signal in negative GEX with price below HVL. "
+                    "Dealers short gamma amplify every move down. "
+                    "This is the highest-conviction MQ short setup. "
+                    "Apply 1.5x stop width. Target next GEX level below. CLEAR."
+                )
+        else:  # above HVL but negative GEX
+            lines.append(
+                f"NOTE: Price above HVL but GEX still negative. Transitional zone. "
+                f"A {direction} here is valid but volatile — negative GEX amplifies both directions. "
+                f"Use wider stops."
+            )
+    elif gex_regime == "POSITIVE":
+        lines.append(
+            f"POSITIVE GEX regime: Dealers suppress moves. "
+            f"{'Fade into resistance, tight stop.' if direction == 'SHORT' else 'Buy near support, tight stop.'} "
+            f"GEX levels are reliable S/R today. Do not chase breakouts."
+        )
+    else:
+        lines.append("MQ regime unknown — no directional restriction applied.")
+
+    return "\n".join(lines)
