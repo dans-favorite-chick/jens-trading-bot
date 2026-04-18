@@ -28,12 +28,18 @@ except ImportError:
 
 from config.settings import (BOT_WS_PORT, TICK_SIZE, LIVE_TRADING, DASHBOARD_PORT,
                              AGENT_COUNCIL_ENABLED, AGENT_PRETRADE_FILTER_ENABLED,
-                             AGENT_DEBRIEF_ENABLED)
+                             AGENT_DEBRIEF_ENABLED, ENTRY_ORDER_TYPE, LIMIT_OFFSET_TICKS,
+                             SCALE_OUT_ENABLED, SCALE_OUT_RR, TREND_RIDER_ENABLED,
+                             TREND_RIDER_MIN_SCORE,
+                             ATR_STOP_ENABLED, ATR_STOP_TF, ATR_STOP_MULTIPLIER,
+                             ATR_STOP_MIN_TICKS, ATR_STOP_MAX_TICKS)
 from config.strategies import STRATEGIES, STRATEGY_DEFAULTS
 from core.tick_aggregator import TickAggregator
 from core.risk_manager import RiskManager
 from core.session_manager import SessionManager
 from core.position_manager import PositionManager
+from core.trend_stall import TrendStallDetector
+from core.day_classifier import DayClassifier
 from core.trade_memory import TradeMemory
 from core.history_logger import HistoryLogger
 from core.strategy_tracker import StrategyTracker
@@ -59,6 +65,26 @@ from core.calendar_risk import CalendarRiskManager
 from core.regime_playbooks import PlaybookManager
 from core.intermarket_engine import IntermarketEngine
 from core.edge_miner import EdgeMiner
+# ─── NEW Apr 2026 rebuild modules (shadow mode — no trade gating) ───
+from core.swing_detector import SwingState, bias_from_swings
+from core.volume_profile import VolumeProfile
+from core.reversal_detector import ReversalDetector
+from core.liquidity_sweep import SweepWatcher
+from core.strategy_decay_monitor import DecayMonitor
+from core.tca_tracker import TCATracker
+from core.circuit_breakers import CircuitBreakers
+from core.chart_patterns_v1 import extract_v1_patterns
+from core.vix_term_structure import get_cached as get_vix_term_cached
+from core.gamma_flip_detector import GammaFlipDetector
+from core.pinning_detector import PinningDetector
+from core.opex_calendar import get_opex_status
+from core.es_confirmation import check_confirmation as check_es_confirmation
+from core.session_tagger import session_for as session_tag_for
+from core.structural_bias import compute_structural_bias
+from bridge.footprint_builder import FootprintAccumulator
+from core.footprint_patterns import scan_bar as scan_footprint_bar
+from core.contract_rollover import get_active_contract, log_rollover_status
+from core.simple_sizing import get_sizer as get_simple_sizer
 from core.knowledge_rag import KnowledgeRAG
 from core.pandas_ta_detector import PandasTADetector
 from core.chart_patterns import ChartPatternDetector
@@ -80,6 +106,33 @@ except ImportError:
     sys.exit(1)
 
 logger = logging.getLogger("Bot")
+
+
+# ── Trend Rider helpers (module-level, pure functions) ───────────────────────
+
+def _should_scale_out(pos, price: float, scale_rr: float) -> bool:
+    """True when price has moved scale_rr * stop_distance in our favor."""
+    stop_dist = abs(pos.entry_price - pos.stop_price)
+    if stop_dist == 0:
+        return False
+    if pos.direction == "LONG":
+        return price >= pos.entry_price + stop_dist * scale_rr
+    else:
+        return price <= pos.entry_price - stop_dist * scale_rr
+
+
+def _trail_stop(pos, price: float):
+    """
+    Trail stop to midpoint between entry and current price.
+    Only moves in favorable direction — never worsens risk.
+    """
+    mid = (pos.entry_price + price) / 2
+    if pos.direction == "LONG" and mid > pos.stop_price:
+        pos.stop_price = round(mid, 2)
+        logger.info(f"[TRAIL:{pos.trade_id}] Stop trailed to {pos.stop_price:.2f} (mid)")
+    elif pos.direction == "SHORT" and mid < pos.stop_price:
+        pos.stop_price = round(mid, 2)
+        logger.info(f"[TRAIL:{pos.trade_id}] Stop trailed to {pos.stop_price:.2f} (mid)")
 
 
 class BaseBot:
@@ -158,6 +211,39 @@ class BaseBot:
         self._last_rsi_divergence = None   # Latest divergence signal
         self._last_htf_confluence = None   # Latest HTF pattern confluence
 
+        # ─── NEW Apr 2026 rebuild modules (SHADOW MODE) ───────────────
+        # These modules RUN but do NOT gate strategy signals (dual-write).
+        # Strategies continue using old tf_bias until WFO validates structural_bias.
+        # Data flows: tick/bar → these modules → market snapshot enrichment → dashboard.
+        self.swing_state_5m = SwingState()
+        self.volume_profile = VolumeProfile()
+        self.reversal_detector = ReversalDetector()
+        self.sweep_watcher = SweepWatcher()
+        self.gamma_flip_detector = GammaFlipDetector()
+        self.pinning_detector = PinningDetector()
+        self.footprint_1m = FootprintAccumulator(bar_length_s=60)
+        self.footprint_5m = FootprintAccumulator(bar_length_s=300)
+        self.decay_monitor = DecayMonitor(shadow_mode=True)
+        self.tca_tracker = TCATracker()
+        self.circuit_breakers = CircuitBreakers(observe_mode=True)
+        self.simple_sizer = get_simple_sizer()
+        # Latest outputs (exposed to dashboard via _state)
+        self._last_structural_bias = None
+        self._last_footprint_signals: list = []
+        self._last_chart_patterns_v1: list = []
+        self._last_climax_warning = None
+        self._last_sweep_event = None
+        self._last_vix_term = None
+        self._last_pinning_state = None
+        self._last_opex_status = None
+        self._last_es_confirmation = None
+        self._last_gamma_flip_event = None
+        # Contract rollover check at startup
+        try:
+            log_rollover_status()
+        except Exception as _e:
+            logger.warning(f"[ROLLOVER] check failed at startup: {_e}")
+
         # State for dashboard
         self.status = "IDLE"
         self._ws = None  # Active websocket (for heartbeat sender)
@@ -173,7 +259,16 @@ class BaseBot:
         self._council_ran_today = False     # Only run once per session day
         self._last_regime = None            # Track regime transitions
         self._filter_verdict = None         # Latest pre-trade filter verdict
+        self._last_cr = None               # Latest C/R assessment (continuation_reversal)
         self._debrief_ran_today = False     # Only run once per session day
+
+        # Trend rider state
+        self._stall_detector = TrendStallDetector(lookback=5)
+        self._rider_active = False          # True while holding runner contract
+        self._day_classifier = DayClassifier()
+        self._day_type = "UNKNOWN"          # TREND | RANGE | VOLATILE | UNKNOWN
+        self._price_bar_highs: list[float] = []   # Recent bar highs (for stall detector)
+        self._price_bar_lows:  list[float] = []   # Recent bar lows
         self._pending_exit_reason = None    # Market close auto-exit
         self._current_date = None           # For daily reset detection
         self._last_bridge_ack_ok = True     # Bridge OIF write confirmation
@@ -195,6 +290,8 @@ class BaseBot:
         from strategies.vwap_pullback import VWAPPullback
         from strategies.high_precision import HighPrecisionOnly
         from strategies.ib_breakout import IBBreakout
+        from strategies.compression_breakout import CompressionBreakout
+        from strategies.dom_pullback import DOMPullback
 
         strategy_classes = {
             "bias_momentum": BiasMomentumFollow,
@@ -202,6 +299,8 @@ class BaseBot:
             "vwap_pullback": VWAPPullback,
             "high_precision_only": HighPrecisionOnly,
             "ib_breakout": IBBreakout,
+            "compression_breakout": CompressionBreakout,
+            "dom_pullback": DOMPullback,
         }
 
         for name, config in STRATEGIES.items():
@@ -386,11 +485,40 @@ class BaseBot:
                 # Without this, rapid tick processing starves keepalive
                 await asyncio.sleep(0)
 
+                # Tick loop heartbeat — detect frozen loops
+                self._last_tick_time = time.time()
+
                 # Process tick through aggregator
                 snapshot = self.aggregator.process_tick(tick)
 
+                # NEW (shadow): feed footprint builders on every tick (fast path, no branching)
+                try:
+                    self.footprint_1m.process_tick(tick)
+                    self.footprint_5m.process_tick(tick)
+                except Exception:
+                    pass  # Footprint errors must not break tick loop
+
+                # NEW (shadow): feed volume profile
+                try:
+                    from datetime import datetime as _dt
+                    _price = float(snapshot.get("price", 0) or 0)
+                    _vol = float(tick.get("vol", 0) or 0)
+                    if _price > 0 and _vol > 0:
+                        self.volume_profile.update_tick(_price, _vol, _dt.now())
+                except Exception:
+                    pass
+
+                # NEW (shadow): feed circuit breakers tick-rate detector
+                try:
+                    self.circuit_breakers.record_tick()
+                except Exception:
+                    pass
+
                 # Phase 6b: Feed microstructure filter on every tick
                 self.microstructure_filter.update_tick(snapshot.get("price", 0))
+
+                # Track intra-bar price extremes (for EMA+DOM smart exit wick detection)
+                self._stall_detector.update_tick_price(snapshot.get("price", 0))
 
                 # Check position exits on every tick
                 if not self.positions.is_flat:
@@ -403,7 +531,84 @@ class BaseBot:
                         self._pending_exit_reason = None
                         await self._exit_trade(ws, price, reason)
                         continue
-                    # Get max hold time from the active strategy's config
+
+                    # ── Trend Rider: runner management (single & multi-contract) ──
+                    pos = self.positions.position
+                    if pos and TREND_RIDER_ENABLED:
+
+                        if pos.rider_mode:
+                            # ── RIDER MODE ─────────────────────────────────────────────
+                            # Break-even stop: day-type aware trigger.
+                            #
+                            # TREND day: BE at 1R (full stop distance). Trend moves extend
+                            #   well beyond 1R — no need to lock in early.
+                            #
+                            # RANGE/VOLATILE/UNKNOWN: BE at 0.5R (half the stop distance).
+                            #   Data: choppy day extension P50 = 25 ticks. A 40-tick BE
+                            #   trigger would NEVER fire before reversal. 0.5R = ~20t on
+                            #   a 40t stop = activates at +10 pts, protecting the gain
+                            #   before the inevitable chop-day reversal hits.
+                            if not pos.be_stop_active:
+                                stop_dist = abs(pos.entry_price - pos.stop_price)
+                                if stop_dist > 0:
+                                    # BE trigger: 1R on trend days, 0.5R otherwise
+                                    be_mult = 1.0 if self._day_type == "TREND" else 0.5
+                                    be_trigger = (pos.entry_price + stop_dist * be_mult
+                                                  if pos.direction == "LONG"
+                                                  else pos.entry_price - stop_dist * be_mult)
+                                    if ((pos.direction == "LONG" and price >= be_trigger) or
+                                            (pos.direction == "SHORT" and price <= be_trigger)):
+                                        be_stop = (round(pos.entry_price + TICK_SIZE * 2, 2)
+                                                   if pos.direction == "LONG"
+                                                   else round(pos.entry_price - TICK_SIZE * 2, 2))
+                                        pos.stop_price = be_stop
+                                        pos.be_stop_active = True
+                                        logger.info(f"[RIDER:{pos.trade_id}] BE STOP "
+                                                    f"({self._day_type}, {be_mult:.0%}R) — "
+                                                    f"stop moved to {be_stop:.2f} "
+                                                    f"(price={price:.2f}, +{(price-pos.entry_price)/TICK_SIZE:.0f}t)")
+
+                            # Stall detector drives exit — check every tick (already rate-limited inside)
+                            stall = self._stall_detector.check(snapshot, pos.direction)
+                            if stall["exit_signal"]:
+                                logger.info(f"[RIDER:{pos.trade_id}] Trend stall STRONG "
+                                            f"— exiting runner. Reasons: {stall['reasons']}")
+                                await self._exit_trade(ws, price, "trend_stall")
+                            elif stall["tighten_stop"]:
+                                _trail_stop(pos, price)
+
+                        elif SCALE_OUT_ENABLED and not pos.scaled_out and pos.original_contracts >= 2:
+                            # Original multi-contract scale-out path (unchanged)
+                            if _should_scale_out(pos, price, SCALE_OUT_RR):
+                                await self._scale_out_trade(ws, price)
+
+                    # ── Smart Exit: EMA extension + DOM reversal + candle wick ──
+                    # Fires when: (1) held 120s+ (2) in profit N ticks+ (3) extended from
+                    # EMA9 (4) DOM sellers stacking AND candle wicking (BOTH required).
+                    # SKIPPED when pos.rider_mode=True — on TREND day runners, DOM wobbles
+                    # are noise, not reversals. Stall detector (above) handles those exits.
+                    #
+                    # Day-type aware min profit:
+                    #   TREND days:  40t (10pts) — big moves have room, protect real gains
+                    #   Other days:  20t (5pts)  — choppy P50 extension = 25t, gate at 40t
+                    #                              would never fire; 20t still filters noise
+                    if self.positions.position and not self.positions.is_flat:
+                        _pos = self.positions.position
+                        if not _pos.rider_mode:
+                            from config.settings import TICK_SIZE as _TICK_SIZE
+                            _min_profit = 40 if self._day_type == "TREND" else 20
+                            smart = self._stall_detector.check_ema_dom_exit(
+                                snapshot, _pos.direction,
+                                tick_size=_TICK_SIZE,
+                                entry_price=_pos.entry_price,
+                                entry_time=_pos.entry_time,
+                                min_profit_ticks=_min_profit,
+                            )
+                            if smart["exit_signal"]:
+                                logger.info(f"[SMART EXIT:{_pos.trade_id}] {smart['reason']}")
+                                await self._exit_trade(ws, price, "ema_dom_exit")
+
+                    # Normal stop/target/time exits
                     _max_hold = None
                     if self.positions.position:
                         _strat_name = self.positions.position.strategy
@@ -416,79 +621,139 @@ class BaseBot:
                         await self._exit_trade(ws, price, exit_reason)
 
                 # Execute pending signals from strategy evaluation
+                # HARD TIMEOUT: entire signal→trade path must complete in 15s
+                # or we abandon it. This prevents the tick loop from ever freezing.
                 if hasattr(self, '_pending_signal') and self._pending_signal and self.positions.is_flat:
                     signal = self._pending_signal
                     self._pending_signal = None
 
-                    # Phase 4: Pre-trade filter (3s timeout, defaults to CLEAR)
-                    if AGENTS_AVAILABLE and AGENT_PRETRADE_FILTER_ENABLED:
-                        try:
-                            market_snap = self.aggregator.snapshot()
-                            regime = self.session.get_current_regime()
-                            recent = self.trade_memory.recent(5)
+                    try:
+                        await asyncio.wait_for(
+                            self._process_signal(ws, signal),
+                            timeout=15.0,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.error(f"[SIGNAL TIMEOUT] Signal processing took >15s — "
+                                      f"abandoned {signal.direction} via {signal.strategy}. "
+                                      f"Tick loop continues.")
+                        self.last_rejection = "Signal processing timeout (15s)"
+                    except Exception as e:
+                        logger.error(f"[SIGNAL ERROR] {e}")
+                        self.last_rejection = f"Signal error: {e}"
 
-                            # News awareness — inform AI filter but NEVER block trades
-                            # News = opportunity, not restriction
-                            try:
-                                from core.market_intel import get_economic_calendar
-                                cal = await get_economic_calendar()
-                                if cal.get("trade_restricted"):
-                                    event_name = cal.get('next_event', {}).get('name', 'event')
-                                    logger.info(f"[NEWS SIGNAL] High-impact event: {event_name} "
-                                                 f"— AI filter will factor this in")
-                                    # Add to market context for AI filter (signal, not gate)
-                                    market_snap["news_event_imminent"] = event_name
-                                    asyncio.ensure_future(tg.notify_alert(
-                                        "NEWS EVENT", f"{event_name} — trade with awareness"))
-                            except Exception:
-                                pass
-                            verdict = await pretrade_filter.check(
-                                signal=signal.to_dict() if hasattr(signal, 'to_dict') else {
-                                    "direction": signal.direction,
-                                    "strategy": signal.strategy,
-                                    "reason": signal.reason,
-                                    "confluences": signal.confluences,
-                                    "confidence": signal.confidence,
-                                    "entry_score": signal.entry_score,
-                                    "stop_ticks": signal.stop_ticks,
-                                    "target_rr": signal.target_rr,
-                                },
-                                market=market_snap,
-                                recent_trades=recent,
-                                regime=regime,
-                            )
-                            self._filter_verdict = {
-                                "action": verdict.action,
-                                "reason": verdict.reason,
-                                "confidence": verdict.confidence,
-                                "latency_ms": verdict.latency_ms,
-                                "source": verdict.source,
-                                "timestamp": datetime.now().isoformat(),
-                            }
-                            logger.info(f"[FILTER] {verdict.action} ({verdict.confidence:.0f}%) "
-                                        f"in {verdict.latency_ms:.0f}ms: {verdict.reason}")
+    # ─── Signal Processing (extracted for timeout wrapper) ──────────
+    async def _process_signal(self, ws, signal):
+        """Process a pending signal: run AI filter, then enter trade.
+        Called inside asyncio.wait_for(timeout=15s) so it can never
+        freeze the tick loop.
+        """
+        # Phase 4: Pre-trade filter (3s timeout, defaults to CLEAR)
+        if AGENTS_AVAILABLE and AGENT_PRETRADE_FILTER_ENABLED:
+            try:
+                market_snap = self.aggregator.snapshot()
+                regime = self.session.get_current_regime()
+                recent = self.trade_memory.recent(5)
 
-                            if verdict.action == "SIT_OUT":
-                                logger.info(f"[FILTER] SIT_OUT — skipping trade")
-                                self.last_rejection = f"AI filter: {verdict.reason}"
-                                # Phase 7: Log near-miss for AI learning
-                                try:
-                                    sig_dict = {
-                                        "direction": signal.direction, "strategy": signal.strategy,
-                                        "confidence": signal.confidence, "entry_score": signal.entry_score,
-                                        "reason": signal.reason,
-                                    }
-                                    self.history.log_near_miss(sig_dict, market_snap, f"filter_sit_out: {verdict.reason}")
-                                    self.trade_rag.add_near_miss(sig_dict, market_snap)
-                                except Exception:
-                                    pass
-                                continue
-                            # CAUTION handled in _enter_trade via self._filter_verdict
-                        except Exception as e:
-                            logger.warning(f"[FILTER] Error (defaulting to CLEAR): {e}")
-                            self._filter_verdict = {"action": "CLEAR", "reason": f"Error: {e}", "source": "default"}
+                # News awareness — inform AI filter but NEVER block trades
+                try:
+                    from core.market_intel import get_economic_calendar
+                    cal = await get_economic_calendar()
+                    if cal.get("trade_restricted"):
+                        event_name = cal.get('next_event', {}).get('name', 'event')
+                        logger.info(f"[NEWS SIGNAL] High-impact event: {event_name} "
+                                     f"— AI filter will factor this in")
+                        market_snap["news_event_imminent"] = event_name
+                        asyncio.ensure_future(tg.notify_alert(
+                            "NEWS EVENT", f"{event_name} — trade with awareness"))
+                except Exception:
+                    pass
+                # Query strategy knowledge for AI context
+                strategy_context = ""
+                try:
+                    query = f"{signal.direction} {signal.strategy} {regime} intraday"
+                    strat_results = self.knowledge_rag.query_strategies(query, n_results=3)
+                    if strat_results:
+                        lines = []
+                        for sr in strat_results:
+                            lines.append(f"- {sr['title']} ({sr['category']}): "
+                                          f"regimes={sr['regimes']}, ATR={sr['atr_preference']}")
+                        strategy_context = "\n".join(lines)
+                except Exception:
+                    pass
 
-                    await self._enter_trade(ws, signal)
+                # Inject Menthor Q regime context into AI filter
+                mq_context = ""
+                try:
+                    from core.menthorq_feed import get_snapshot, to_prompt_context
+                    mq_snap = get_snapshot()
+                    mq_context = to_prompt_context(mq_snap, market_snap.get("price", 0))
+                    if strategy_context:
+                        strategy_context = mq_context + "\n\n" + strategy_context
+                    else:
+                        strategy_context = mq_context
+                except Exception:
+                    pass
+
+                # Inject Continuation/Reversal assessment (Quinn-style)
+                try:
+                    if hasattr(self, "_last_cr") and self._last_cr is not None:
+                        from core.continuation_reversal import to_prompt_context as cr_prompt
+                        cr_block = cr_prompt(self._last_cr)
+                        strategy_context = cr_block + "\n\n" + (strategy_context or "")
+                except Exception:
+                    pass
+
+                verdict = await pretrade_filter.check(
+                    signal=signal.to_dict() if hasattr(signal, 'to_dict') else {
+                        "direction": signal.direction,
+                        "strategy": signal.strategy,
+                        "reason": signal.reason,
+                        "confluences": signal.confluences,
+                        "confidence": signal.confidence,
+                        "entry_score": signal.entry_score,
+                        "stop_ticks": signal.stop_ticks,
+                        "target_rr": signal.target_rr,
+                    },
+                    market=market_snap,
+                    recent_trades=recent,
+                    regime=regime,
+                    strategy_context=strategy_context,
+                )
+                self._filter_verdict = {
+                    "action": verdict.action,
+                    "reason": verdict.reason,
+                    "confidence": verdict.confidence,
+                    "latency_ms": verdict.latency_ms,
+                    "source": verdict.source,
+                    "timestamp": datetime.now().isoformat(),
+                }
+                logger.info(f"[FILTER] {verdict.action} ({verdict.confidence:.0f}%) "
+                            f"in {verdict.latency_ms:.0f}ms: {verdict.reason}")
+
+                if verdict.action == "SIT_OUT":
+                    logger.info(f"[FILTER] SIT_OUT — skipping trade")
+                    self.last_rejection = f"AI filter: {verdict.reason}"
+                    try:
+                        sig_dict = {
+                            "direction": signal.direction, "strategy": signal.strategy,
+                            "confidence": signal.confidence, "entry_score": signal.entry_score,
+                            "reason": signal.reason,
+                        }
+                        self.history.log_near_miss(sig_dict, market_snap, f"filter_sit_out: {verdict.reason}")
+                        self.trade_rag.add_near_miss(sig_dict, market_snap)
+                    except Exception:
+                        pass
+                    return
+                # CAUTION handled in _enter_trade via self._filter_verdict
+            except Exception as e:
+                logger.warning(f"[FILTER] Error (defaulting to CLEAR): {e}")
+                self._filter_verdict = {"action": "CLEAR", "reason": f"Error: {e}", "source": "default"}
+
+        try:
+            await self._enter_trade(ws, signal)
+        except Exception as e:
+            logger.error(f"[ENTRY ERROR] _enter_trade crashed: {e}")
+            self.last_rejection = f"Entry error: {e}"
 
     # ─── Bar Event Handler ──────────────────────────────────────────
     def _on_bar(self, timeframe: str, bar):
@@ -512,6 +777,99 @@ class BaseBot:
             except Exception as e:
                 logger.debug(f"[CHART PATTERNS] Update error (non-blocking): {e}")
 
+            # ─── NEW Apr 2026 modules: close footprint bars + feed reversal/sweep ───
+            # All wrapped in try/except — SHADOW MODE must never break live trading.
+            if timeframe == "1m":
+                try:
+                    self.footprint_1m.close_bar()
+                    self.volume_profile.on_bar_close()
+                except Exception as e:
+                    logger.debug(f"[FOOTPRINT 1m] close error: {e}")
+
+            if timeframe == "5m":
+                try:
+                    fp_bar = self.footprint_5m.close_bar()
+                    if fp_bar is not None:
+                        history = self.footprint_5m.completed_bars[:-1]
+                        signals = scan_footprint_bar(fp_bar, history)
+                        self._last_footprint_signals = [s.to_dict() for s in signals]
+                        for s in signals:
+                            logger.info(f"[FOOTPRINT 5m] {s.pattern} {s.direction} "
+                                        f"sev={s.severity:.2f} @ {s.price:.2f}")
+                except Exception as e:
+                    logger.debug(f"[FOOTPRINT 5m] close error: {e}")
+
+                # Feed swing detector on 5m bars (ATR-ZigZag)
+                try:
+                    atr_5m = self.aggregator.atr.get("5m", 5.0) or 5.0
+                    bar_idx = len(self.swing_state_5m.pivots) + 100  # Running index
+                    new_pivot = self.swing_state_5m.update(bar, bar_idx, atr_5m)
+                    if new_pivot:
+                        logger.info(f"[SWING 5m] {new_pivot.classification} "
+                                    f"@ {new_pivot.price:.2f}")
+                        # Feed sweep watcher with pivot breaks
+                        try:
+                            # On a new HIGH pivot, the prior UP move may have broken a prior LOW pivot
+                            # (simplified: we track the pivot extremes for sweep watcher)
+                            # The full mechanism requires pivot break event detection; simplified here.
+                            pass
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logger.debug(f"[SWING] update error: {e}")
+
+                # Feed climax/reversal detector on 5m bars
+                try:
+                    atr_5m = self.aggregator.atr.get("5m", 5.0) or 5.0
+                    session_cvd = getattr(self.aggregator, "cvd_session", 0)
+                    bar_idx_rev = len(self.aggregator.bars_5m.completed)
+                    warning, signal = self.reversal_detector.update(
+                        bar, atr_5m, session_cvd, bar_idx_rev
+                    )
+                    if warning:
+                        self._last_climax_warning = {
+                            "direction": warning.direction,
+                            "climax_extreme": warning.climax_extreme,
+                            "bars_ago": 0,
+                        }
+                    if signal:
+                        logger.info(f"[REVERSAL CONFIRMED] {signal.direction} "
+                                    f"@ {signal.entry_price:.2f} "
+                                    f"(stop {signal.stop_price:.2f})")
+                except Exception as e:
+                    logger.debug(f"[REVERSAL] update error: {e}")
+
+                # Feed sweep watcher — check for failed-BOS sweeps
+                try:
+                    bar_idx_sw = len(self.aggregator.bars_5m.completed)
+                    sweep = self.sweep_watcher.check_sweep(bar, bar_idx_sw)
+                    if sweep:
+                        self._last_sweep_event = {
+                            "direction": sweep.reversal_direction,
+                            "pivot_price": sweep.pivot_price,
+                            "sweep_extreme": sweep.sweep_extreme,
+                        }
+                except Exception as e:
+                    logger.debug(f"[SWEEP] check error: {e}")
+
+                # Feed gamma flip detector on 5m bars
+                try:
+                    from core.menthorq_feed import get_snapshot as _mq_snap
+                    _mq = _mq_snap()
+                    _hvl = getattr(_mq, "hvl", 0) or 0
+                    flip = self.gamma_flip_detector.update(bar, _hvl, news_event_recent=False)
+                    if flip:
+                        self._last_gamma_flip_event = {
+                            "direction": flip.direction,
+                            "hvl": flip.hvl_level,
+                            "breach_price": flip.breach_price,
+                            "ts": flip.ts.isoformat(),
+                        }
+                        logger.warning(f"[GAMMA FLIP] {flip.direction} confirmed at "
+                                       f"HVL {flip.hvl_level:.2f}")
+                except Exception as e:
+                    logger.debug(f"[GAMMA FLIP] update error: {e}")
+
         # Feed RSI divergence detector on every 1m bar close
         if timeframe == "1m":
             div = self.rsi_divergence.update(bar.close)
@@ -521,6 +879,20 @@ class BaseBot:
                             f"strength={div['strength']:.0f} "
                             f"RSI={div['rsi_current']:.1f} "
                             f"bars_apart={div['bars_apart']}")
+
+            # Feed trend stall detector bar history (keep last 10)
+            try:
+                bar_high  = getattr(bar, "high",  bar.close)
+                bar_low   = getattr(bar, "low",   bar.close)
+                self._stall_detector.update_bar(bar_high, bar_low, bar.close)
+                self._price_bar_highs.append(bar_high)
+                self._price_bar_lows.append(bar_low)
+                # Trim to keep only the last 10 bars
+                if len(self._price_bar_highs) > 10:
+                    self._price_bar_highs = self._price_bar_highs[-10:]
+                    self._price_bar_lows  = self._price_bar_lows[-10:]
+            except Exception:
+                pass
 
         # Phase 7: Feed HMM regime detector on 5m bar completions
         if timeframe == "5m":
@@ -601,6 +973,22 @@ class BaseBot:
             self._debrief_ran_today = True
             asyncio.ensure_future(self._run_debrief())
 
+        # Record daily momentum score at CLOSE_CHOP→AFTERHOURS transition (EOD)
+        # This captures the day's final momentum state for multi-day trajectory tracking
+        if regime == "AFTERHOURS" and self._last_regime not in ("AFTERHOURS", None):
+            try:
+                from core.momentum_score import record_daily
+                from core.menthorq_feed import get_snapshot
+                _eod_mq = get_snapshot()
+                _eod_market = self.aggregator.snapshot()
+                eod_rec = record_daily(_eod_market, _eod_mq)
+                logger.info(
+                    f"[MOMENTUM SCORE] EOD recorded: {eod_rec.get('detail', '')} "
+                    f"(price={eod_rec.get('price', 0):.2f})"
+                )
+            except Exception as e:
+                logger.warning(f"[MOMENTUM SCORE] EOD record failed: {e}")
+
         # Phase 8: Run edge miner at AFTERHOURS transition (once per day)
         if (regime == "AFTERHOURS" and self._last_regime != "AFTERHOURS"):
             try:
@@ -661,9 +1049,18 @@ class BaseBot:
         if not self.positions.is_flat:
             return  # Already in a trade
 
-        # Enforce prod trading window — prod bot only trades during defined session
-        if self.bot_name == "prod" and not self.session.is_prod_trading_window():
-            return  # Prod bot: outside trading window, skip evaluation
+        # Enforce prod trading window — prod bot only trades during defined session.
+        # Exception: TREND days with session_unrestricted=True bypass window checks —
+        # high-conviction trend days should be traded all session, not just 2 windows.
+        if self.bot_name == "prod":
+            _session_unrestricted = self._day_classifier.params.get("session_unrestricted", False)
+            if _session_unrestricted:
+                pass  # TREND day — trade all day, no window restriction
+            else:
+                _cr_verdict = getattr(self._last_cr, "verdict", None) if self._last_cr else None
+                _cr_score   = getattr(self._last_cr, "momentum_score", 0) if self._last_cr else 0
+                if not self.session.is_prod_trading_window(cr_verdict=_cr_verdict, cr_score=_cr_score):
+                    return  # Prod bot: outside all trading windows, skip evaluation
 
         # Apply runtime profile overrides to strategy configs
         # (Safe/Balanced/Aggressive buttons on dashboard)
@@ -786,6 +1183,77 @@ class BaseBot:
         except Exception:
             pass
 
+        # MenthorQ gamma regime — enrich market snapshot for strategies
+        # gamma_regime: "POSITIVE" (above HVL, suppress vol) | "NEGATIVE" (below HVL, amplify)
+        # above_hvl: bool — real-time price vs HVL flip line
+        # mq_day_min/max: gamma-implied range for today
+        _mq_snap = None
+        try:
+            from core.menthorq_feed import get_snapshot, regime_for_price
+            _mq_snap = get_snapshot()
+            _mq_regime = regime_for_price(_mq_snap, market.get("price", 0))
+            market["gamma_regime"] = _mq_regime.get("gamma_regime", "UNKNOWN")
+            market["above_hvl"]    = _mq_regime.get("above_hvl", True)
+            market["mq_hvl"]       = _mq_regime.get("hvl", 0.0)
+            market["mq_day_min"]   = _mq_regime.get("day_min", 0.0)
+            market["mq_day_max"]   = _mq_regime.get("day_max", 0.0)
+            market["mq_nearest_resistance"] = _mq_regime.get("nearest_resistance", 0.0)
+            market["mq_nearest_support"]    = _mq_regime.get("nearest_support", 0.0)
+            market["mq_direction_bias"]     = _mq_snap.direction_bias if _mq_snap else "NEUTRAL"
+        except Exception as _mq_err:
+            import traceback as _tb
+            logger.warning(f"[MQ] Snapshot load error (mq_direction_bias=NEUTRAL): "
+                           f"{_mq_err} | {_tb.format_exc().splitlines()[-1]}")
+            market["gamma_regime"] = "UNKNOWN"
+            market["above_hvl"] = True
+            market["mq_direction_bias"] = "NEUTRAL"
+
+        # Continuation/Reversal Assessment (Quinn-style)
+        # Runs every bar — lightweight trajectory lookup + level proximity check
+        try:
+            from core.continuation_reversal import assess as cr_assess
+            from core.momentum_score import get_trajectory
+            _cr_traj = get_trajectory(10)
+            _cr = cr_assess(market, _mq_snap, _cr_traj)
+            market["cr_verdict"]   = _cr.verdict        # "CONTINUATION"|"REVERSAL"|"CONTESTED"
+            market["cr_confidence"]= _cr.confidence     # "LOW"|"MEDIUM"|"HIGH"
+            market["cr_direction"] = _cr.direction_bias # "LONG"|"SHORT"|"NEUTRAL"
+            market["cr_mom_score"] = _cr.momentum_score
+            market["cr_at_resistance"] = _cr.at_call_resistance or _cr.at_day_max
+            market["cr_at_support"]    = _cr.at_put_support or _cr.at_day_min
+            self._last_cr = _cr  # Store for dashboard and pre-trade prompt
+        except Exception:
+            market["cr_verdict"] = "UNKNOWN"
+            self._last_cr = None
+
+        # ── Day Type Classification ────────────────────────────────────
+        # Classify the session as TREND / RANGE / VOLATILE and apply
+        # day-appropriate parameter overrides (spacing, targets, size).
+        # Runs every bar so it adapts if character changes mid-session.
+        try:
+            _cr_v = market.get("cr_verdict", "UNKNOWN")
+            _cr_s = market.get("cr_mom_score", 0) or 0
+            _atr  = market.get("atr_5m", 0) or 0
+            _vix  = market.get("vix", 0) or 0
+            _day  = self._day_classifier.classify(_cr_v, _cr_s, _atr, _vix)
+
+            if _day.day_type != self._day_type:
+                self._day_type = _day.day_type
+                # Adjust trade spacing dynamically
+                self.risk.set_trade_spacing(_day.params["trade_spacing_min"])
+                logger.info(
+                    f"[DAY TYPE] {_day.day_type} | {_day.reason} | "
+                    f"spacing={_day.params['trade_spacing_min']}min "
+                    f"target={_day.params['default_target_rr']}:1 "
+                    f"size={_day.params['size_multiplier']}x "
+                    f"rider={'ON' if _day.params['trend_rider_enabled'] else 'OFF'}"
+                )
+            market["day_type"] = _day.day_type
+            market["day_type_reason"] = _day.reason
+        except Exception as e:
+            logger.debug(f"[DAY TYPE] Non-blocking classification error: {e}")
+            market["day_type"] = "UNKNOWN"
+
         # Risk gate (pass ATR as volatility proxy since VIX requires external feed)
         atr_5m = market.get("atr_5m", 0)
         vix_proxy = min(50, atr_5m / 4) if atr_5m > 0 else 0
@@ -823,6 +1291,118 @@ class BaseBot:
         except Exception as e:
             logger.debug(f"[CROWDING] Update error (non-blocking): {e}")
 
+        # ─── NEW Apr 2026 SHADOW: compute structural_bias composite ─────
+        # Runs alongside old tf_bias. Dual-write — does NOT gate strategies.
+        try:
+            # Enrich market snapshot with new-module outputs
+            _enriched = dict(market)
+            _enriched["swing_state"] = self.swing_state_5m.to_dict()
+            _enriched["volume_profile"] = self.volume_profile.to_dict()
+            _enriched["climax_state"] = self.reversal_detector.get_state()
+            _enriched["sweep_state"] = self.sweep_watcher.get_state()
+            _enriched["footprint_signals"] = self._last_footprint_signals
+            # Chart patterns v1: wrap existing detector output with context weighting
+            try:
+                _cp_state = {"active_5m": [], "active_15m": [], "active_60m": []}
+                _chart_pats_v1 = extract_v1_patterns(_cp_state, _enriched)
+                self._last_chart_patterns_v1 = [p.to_dict() for p in _chart_pats_v1]
+                _enriched["chart_patterns_v1"] = self._last_chart_patterns_v1
+            except Exception:
+                _enriched["chart_patterns_v1"] = []
+
+            # MenthorQ context enrichment
+            try:
+                from core.menthorq_feed import get_snapshot as _mq_snap_fn, regime_for_price
+                _mq_snap = _mq_snap_fn()
+                _mq_price = float(market.get("close", 0) or 0)
+                _mq_regime = regime_for_price(_mq_snap, _mq_price) if _mq_snap else {}
+                _enriched["menthorq"] = {
+                    "gex_regime": getattr(_mq_snap, "gex_regime", "UNKNOWN") if _mq_snap else "UNKNOWN",
+                    "hvl": getattr(_mq_snap, "hvl", 0),
+                    "call_resistance_all": getattr(_mq_snap, "call_resistance_all", 0),
+                    "put_support_all": getattr(_mq_snap, "put_support_all", 0),
+                    "call_resistance_0dte": getattr(_mq_snap, "call_resistance_0dte", 0),
+                    "put_support_0dte": getattr(_mq_snap, "put_support_0dte", 0),
+                    "gamma_wall_0dte": getattr(_mq_snap, "gamma_wall_0dte", 0),
+                    "allow_longs": _mq_regime.get("allow_long", True),
+                    "allow_shorts": _mq_regime.get("allow_short", True),
+                    "age_hours": 0.0,  # MQBridge refreshes every 60s
+                }
+            except Exception:
+                _enriched["menthorq"] = {}
+
+            # Gamma flip state
+            _enriched["gamma_flip_state"] = self.gamma_flip_detector.get_state()
+
+            # VIX term structure (cached, refreshes every 10 min)
+            try:
+                _vix = get_vix_term_cached()
+                self._last_vix_term = _vix.to_dict()
+                _enriched["vix_term_structure"] = self._last_vix_term
+            except Exception:
+                _enriched["vix_term_structure"] = {}
+
+            # Pinning state (last 90 min of RTH)
+            try:
+                _last_5m = list(self.aggregator.bars_5m.completed)[-1] if self.aggregator.bars_5m.completed else None
+                _vol_ma = self.aggregator.atr.get("5m", 0) * 1000  # Rough volume baseline
+                _pin = self.pinning_detector.update(
+                    datetime.now(), _mq_price, _enriched.get("menthorq", {}),
+                    _last_5m, _vol_ma
+                )
+                self._last_pinning_state = {
+                    "pin_risk_active": _pin.pin_risk_active,
+                    "pinning_level": _pin.pinning_level,
+                    "pin_level_name": _pin.pin_level_name,
+                    "distance_ticks": _pin.distance_ticks,
+                    "reasoning": _pin.reasoning,
+                }
+                _enriched["pinning_state"] = self._last_pinning_state
+            except Exception:
+                _enriched["pinning_state"] = {}
+
+            # OpEx status
+            try:
+                _opex = get_opex_status()
+                self._last_opex_status = {
+                    "is_opex_day": _opex.is_opex_day,
+                    "is_triple_witching": _opex.is_triple_witching,
+                    "size_reduction_factor": _opex.size_reduction_factor,
+                    "veto_continuation_patterns": _opex.veto_continuation_patterns,
+                    "reasoning": _opex.reasoning,
+                }
+                _enriched["opex_status"] = self._last_opex_status
+            except Exception:
+                _enriched["opex_status"] = {}
+
+            # ES confirmation
+            try:
+                _es = check_es_confirmation(_enriched.get("menthorq", {}).get("gex_regime", "UNKNOWN"))
+                self._last_es_confirmation = {
+                    "aligned": _es.aligned,
+                    "confluence_adjust": _es.confluence_adjust,
+                    "es_data_available": _es.es_data_available,
+                    "reasoning": _es.reasoning,
+                    "es_regime": _es.es_regime,
+                    "nq_regime": _es.nq_regime,
+                }
+                _enriched["es_confirmation"] = self._last_es_confirmation
+            except Exception:
+                _enriched["es_confirmation"] = {}
+
+            # Compute the composite
+            bias = compute_structural_bias(_enriched)
+            self._last_structural_bias = bias.to_dict()
+            # Log periodically (every 10 calls) to avoid noise
+            if not hasattr(self, "_bias_log_counter"):
+                self._bias_log_counter = 0
+            self._bias_log_counter += 1
+            if self._bias_log_counter % 10 == 0:
+                logger.info(f"[STRUCTURAL BIAS] {bias.label} score={bias.score:+d} "
+                            f"conf={bias.confidence}% vetoes={len(bias.vetoes)}")
+        except Exception as e:
+            logger.debug(f"[STRUCTURAL BIAS] compute error (non-blocking): {e}")
+
         # Phase 8: Apply playbook strategy overrides based on HMM regime
         try:
             for strat in self.strategies:
@@ -831,6 +1411,12 @@ class BaseBot:
                     strat.config[k] = v
         except Exception:
             pass
+
+        # ── Day-type strategy suppression ─────────────────────────────
+        # On RANGE days bias_momentum underperforms; on VOLATILE days breakouts fail.
+        # DayClassifier sets which strategies to suppress for the current day type.
+        _day_suppressed = set(self._day_classifier.params.get("suppressed_strategies", []))
+        _day_target_rr  = self._day_classifier.params.get("default_target_rr", 0)
 
         best_signal = None
         for strat in self.strategies:
@@ -841,6 +1427,14 @@ class BaseBot:
             if not self.session.is_strategy_allowed(strat.name):
                 logger.debug(f"  [{strat.name}] SKIP — not allowed in {session_info.get('regime')}")
                 self._last_eval["strategies"].append({"name": strat.name, "result": "SKIP_REGIME"})
+                continue
+            # Day-type suppression (RANGE suppresses bias_momentum, VOLATILE suppresses breakouts)
+            if strat.name in _day_suppressed:
+                logger.info(f"  [{strat.name}] SKIP — suppressed on {self._day_type} day")
+                self._last_eval["strategies"].append({
+                    "name": strat.name, "result": "SKIP_DAY_TYPE",
+                    "reason": f"{self._day_type} day"
+                })
                 continue
             # Phase 8: Playbook suppression check
             if self.playbook_mgr.is_strategy_suppressed(strat.name):
@@ -856,6 +1450,27 @@ class BaseBot:
                     # confluence override needed — that was comparing wrong dimensions.
                     logger.info(f"  [{strat.name}] SIGNAL: {signal.direction} conf={signal.confidence:.0f} "
                                  f"score={signal.entry_score:.0f} — {signal.reason}")
+                    # ── Rider strategies: unlimited target on ALL days ─────────
+                    # Target 20:1 = 800 ticks (200 pts) from entry. The OCO bracket
+                    # exists as a safety net, not a profit target. Real exits come from:
+                    #   - Reversal exit (DOM + wick both confirmed, 10pt+ profit)
+                    #   - Stall detector STRONG (trend genuinely exhausted)
+                    #   - BE stop → stop_loss at breakeven (worst case: no loss)
+                    # Goal: 20-50 pts on range/volatile days, 100+ on trend days.
+                    # Not 3-point scalps that leave 100 points on the table.
+                    _RIDER_STRATEGIES = {"bias_momentum", "dom_pullback"}
+                    if (signal.strategy in _RIDER_STRATEGIES and
+                            signal.target_rr < 20.0):
+                        signal.target_rr = 20.0
+                        signal.confluences.append(
+                            "RIDER — target 20:1, reversal+stall exits (not OCO)"
+                        )
+                    # Standard day-type override for non-rider strategies
+                    elif _day_target_rr > 0 and _day_target_rr > signal.target_rr:
+                        signal.target_rr = _day_target_rr
+                        signal.confluences.append(
+                            f"Target widened to {_day_target_rr}:1 ({self._day_type} day)"
+                        )
                     self._last_eval["strategies"].append({
                         "name": strat.name,
                         "result": "SIGNAL",
@@ -878,6 +1493,99 @@ class BaseBot:
             except Exception as e:
                 logger.error(f"  [{strat.name}] ERROR: {e}")
                 self._last_eval["strategies"].append({"name": strat.name, "result": "ERROR", "reason": str(e)})
+
+        # ── Always capture HTF scanner state (even when no signal fires) ──
+        try:
+            htf_state = self.htf_scanner.get_state()
+            self._last_eval["htf_state"] = htf_state
+        except Exception:
+            pass
+
+        # ── C/R Day Bias Filter ───────────────────────────────────────
+        # On strong CONTINUATION/BULLISH C/R days (score >= 4), suppress
+        # unconfirmed SHORT signals from counter-trend-prone strategies.
+        # These strategies (spring, high_precision) can still fire LONG but
+        # should not fade a strong up-day without explicit bearish C/R verdict.
+        # Strategies with their own TF gates (bias_momentum, ib_breakout) are exempt.
+        _CR_SUPPRESSED_STRATEGIES = {"spring_setup", "high_precision_only"}
+        if best_signal and best_signal.direction == "SHORT":
+            try:
+                cr_verdict = market.get("cr_verdict", "UNKNOWN")
+                # Get numeric momentum score from last CR result
+                cr_mom_score = 0
+                if self._last_cr is not None:
+                    cr_mom_score = getattr(self._last_cr, "momentum_score", 0) or 0
+                if (cr_verdict == "CONTINUATION" and
+                        cr_mom_score >= 4 and
+                        best_signal.strategy in _CR_SUPPRESSED_STRATEGIES):
+                    block_reason = (f"C/R bias filter: BULLISH CONTINUATION day "
+                                    f"(score={cr_mom_score}) — SHORT from {best_signal.strategy} suppressed")
+                    logger.info(f"[CR BIAS FILTER] {block_reason}")
+                    self.last_rejection = block_reason
+                    try:
+                        sig_dict = {"direction": best_signal.direction,
+                                    "strategy": best_signal.strategy,
+                                    "confidence": best_signal.confidence,
+                                    "entry_score": best_signal.entry_score,
+                                    "reason": best_signal.reason}
+                        self.history.log_near_miss(sig_dict, market, f"cr_bias: {block_reason}")
+                    except Exception:
+                        pass
+                    best_signal = None
+            except Exception as e:
+                logger.debug(f"[CR BIAS FILTER] Non-blocking error: {e}")
+
+        if best_signal:
+            # ── Menthor Q Direction Gate ─────────────────────────────
+            # Check HVL + GEX regime BEFORE any confidence boosts.
+            # This is a hard gate — Menthor Q regime overrides strategy direction.
+            try:
+                from core.menthorq_feed import get_snapshot, regime_for_price
+                mq_snap = get_snapshot()
+                mq_regime = regime_for_price(mq_snap, market.get("price", 0))
+                self._last_mq_regime = mq_regime  # Store for dashboard
+
+                mq_blocks = False
+                if best_signal.direction == "LONG" and not mq_regime.get("allow_long", True):
+                    mq_blocks = True
+                    block_reason = (f"MenthorQ HVL gate: price below HVL {mq_snap.hvl} "
+                                    f"in {mq_snap.gex_regime} gamma regime — LONGs blocked")
+                elif best_signal.direction == "SHORT" and not mq_regime.get("allow_short", True):
+                    mq_blocks = True
+                    block_reason = (f"MenthorQ gate: {mq_snap.gex_regime} gamma, "
+                                    f"shorts blocked — regime={mq_snap.direction_bias}")
+
+                if mq_blocks:
+                    logger.info(f"[MQ GATE] {block_reason}")
+                    self.last_rejection = block_reason
+                    try:
+                        sig_dict = {"direction": best_signal.direction,
+                                    "strategy": best_signal.strategy,
+                                    "confidence": best_signal.confidence,
+                                    "entry_score": best_signal.entry_score,
+                                    "reason": best_signal.reason}
+                        self.history.log_near_miss(sig_dict, market, f"mq_gate: {block_reason}")
+                    except Exception:
+                        pass
+                    best_signal = None
+                else:
+                    # Apply MQ stop multiplier to the signal (wider stops in negative gamma)
+                    if mq_regime.get("stop_multiplier", 1.0) > 1.0:
+                        best_signal.stop_ticks = int(
+                            best_signal.stop_ticks * mq_regime["stop_multiplier"]
+                        )
+                        best_signal.confluences.append(
+                            f"MQ stop widened {mq_regime['stop_multiplier']}x "
+                            f"({mq_snap.gex_regime} gamma)"
+                        )
+                    # Log MQ context as confluence info
+                    if mq_snap.gex_regime != "UNKNOWN":
+                        best_signal.confluences.append(
+                            f"MQ: GEX {mq_snap.gex_regime} ({mq_snap.net_gex_bn:+.1f}B), "
+                            f"HVL {mq_snap.hvl}, {mq_snap.direction_bias} bias"
+                        )
+            except Exception as e:
+                logger.debug(f"[MQ GATE] Non-blocking error: {e}")
 
         if best_signal:
             # Phase 6: Apply regime transition bonus to best signal's confidence
@@ -1094,6 +1802,7 @@ class BaseBot:
             logger.info(f"[{tid}] Regime size_mult={size_mult:.1f}x → risk=${risk_dollars:.2f}")
 
         # Phase 6: Apply regime transition size boost
+        regime = self.session.get_current_regime()
         transition_bonus = self.regime_transitions.get_transition_bonus(regime)
         if transition_bonus.get("active") and transition_bonus["size_boost"] != 1.0:
             old_risk = risk_dollars
@@ -1107,7 +1816,30 @@ class BaseBot:
             risk_dollars *= 0.5
             logger.info(f"[{tid}:FILTER] CAUTION — risk reduced to ${risk_dollars:.2f}")
 
-        # Adjust stop for volatility
+        # ── ATR-Based Stop Loss ──────────────────────────────────────
+        # Derive stop distance from current ATR rather than a fixed strategy value.
+        # Skipped when signal.atr_stop_override=True — strategy already computed
+        # its own ATR stop (e.g. spring_setup anchors to wick extreme, not entry).
+        if ATR_STOP_ENABLED and not getattr(signal, "atr_stop_override", False):
+            atr_key = f"atr_{ATR_STOP_TF}"
+            atr_val = market.get(atr_key, 0) or 0
+            if atr_val > 0:
+                raw_atr_ticks = atr_val / TICK_SIZE
+                atr_stop = int(raw_atr_ticks * ATR_STOP_MULTIPLIER)
+                atr_stop = max(ATR_STOP_MIN_TICKS, min(ATR_STOP_MAX_TICKS, atr_stop))
+                logger.info(f"[{tid}:ATR_STOP] {ATR_STOP_TF} ATR={atr_val:.2f}pts "
+                            f"→ {raw_atr_ticks:.1f}t × {ATR_STOP_MULTIPLIER} "
+                            f"= {atr_stop}t (clamped {ATR_STOP_MIN_TICKS}-{ATR_STOP_MAX_TICKS}t) "
+                            f"[strategy default was {signal.stop_ticks}t]")
+                signal.stop_ticks = atr_stop
+            else:
+                logger.debug(f"[{tid}:ATR_STOP] {atr_key} not ready — using strategy default "
+                             f"({signal.stop_ticks}t)")
+        elif getattr(signal, "atr_stop_override", False):
+            logger.info(f"[{tid}:ATR_STOP] Skipped — {signal.strategy} computed own ATR stop "
+                        f"({signal.stop_ticks}t anchored to wick extreme)")
+
+        # Further adjust stop for volatility regime (HIGH/VERY_HIGH = widen 20-50%)
         stop_ticks = self.risk.calculate_stop_ticks(signal.stop_ticks, atr_5m)
 
         # Phase 8: Calendar risk stop widening (post-event volatility expansion)
@@ -1123,7 +1855,6 @@ class BaseBot:
         contracts = self.risk.calculate_contracts(risk_dollars, stop_ticks)
 
         # Phase 5: Position scaler — cap contracts by account equity and conditions
-        regime = self.session.get_current_regime()
         max_contracts = self.position_scaler.get_max_contracts(
             account_equity=self.risk._risk_per_trade * 50,  # Approximate equity from risk setting
             entry_score=signal.entry_score,
@@ -1173,6 +1904,26 @@ class BaseBot:
 
         # Send trade command to bridge (bridge writes OIF with OCO brackets)
         action = "ENTER_LONG" if signal.direction == "LONG" else "ENTER_SHORT"
+
+        # Determine order type and compute limit price if needed
+        use_limit = ENTRY_ORDER_TYPE == "LIMIT"
+        if use_limit:
+            offset = LIMIT_OFFSET_TICKS * TICK_SIZE
+            if signal.direction == "LONG":
+                limit_price = round(price + offset, 2)  # Buy limit above current for aggressive fill
+            else:
+                limit_price = round(price - offset, 2)  # Sell limit below current
+            # When using limit orders, entry_price IS the limit price (fills at limit or better)
+            # Adjust stop/target relative to limit price (not signal price) to avoid misalignment
+            if signal.direction == "LONG":
+                stop_price = round(limit_price - (stop_ticks * TICK_SIZE), 2)
+                target_price = round(limit_price + (stop_ticks * TICK_SIZE * signal.target_rr), 2)
+            else:
+                stop_price = round(limit_price + (stop_ticks * TICK_SIZE), 2)
+                target_price = round(limit_price - (stop_ticks * TICK_SIZE * signal.target_rr), 2)
+        else:
+            limit_price = 0.0
+
         try:
             await ws.send(json.dumps({
                 "type": "trade",
@@ -1182,6 +1933,8 @@ class BaseBot:
                 "stop_price": round(stop_price, 2),
                 "target_price": round(target_price, 2),
                 "reason": signal.reason,
+                "order_type": "LIMIT" if use_limit else "MARKET",
+                "limit_price": limit_price,
             }))
         except Exception as e:
             logger.error(f"[{tid}] Failed to send trade command: {e}")
@@ -1215,10 +1968,13 @@ class BaseBot:
         market["fill_latency_ms"] = fill_result.get("latency_ms", 0)
 
         # NOW open position locally (after fill confirmation)
+        # For LIMIT orders, entry_price = limit_price (fills at limit or better — no slippage)
+        # For MARKET orders, entry_price = tick price at signal time (approximate, may have slippage)
+        effective_entry_price = limit_price if (use_limit and limit_price > 0) else price
         self.positions.open_position(
             trade_id=tid,
             direction=signal.direction,
-            entry_price=price,
+            entry_price=effective_entry_price,
             contracts=contracts,
             stop_price=stop_price,
             target_price=target_price,
@@ -1226,6 +1982,41 @@ class BaseBot:
             reason=signal.reason,
             market_snapshot=market,
         )
+
+        # Reset stall detector for fresh rider tracking on this trade
+        self._stall_detector.reset()
+        self._rider_active = False
+
+        # ── Rider mode: active on ALL days for rider-eligible strategies ──────
+        # bias_momentum and dom_pullback always use rider mode — stall detector
+        # + reversal exit (DOM + wick confirmed) are the exit mechanism.
+        # Smart exit is disabled for these strategies on every day type.
+        # Goal: hold for 20-50 pts on range days, 100+ on trend days.
+        _RIDER_STRATEGIES = {"bias_momentum", "dom_pullback"}
+        if TREND_RIDER_ENABLED and signal.strategy in _RIDER_STRATEGIES:
+            _pos = self.positions.position
+            if _pos:
+                _pos.rider_mode = True
+                _be_level = (_pos.entry_price + abs(_pos.entry_price - _pos.stop_price)
+                             if _pos.direction == "LONG"
+                             else _pos.entry_price - abs(_pos.entry_price - _pos.stop_price))
+                logger.info(f"[{tid}] RIDER ON ({self._day_type} day) — "
+                            f"smart exit OFF, reversal+stall exit driving. "
+                            f"Entry={_pos.entry_price:.2f} stop={_pos.stop_price:.2f} "
+                            f"BE@{_be_level:.2f} (+{abs(_pos.entry_price-_pos.stop_price)/TICK_SIZE:.0f}t = "
+                            f"{abs(_pos.entry_price-_pos.stop_price):.2f}pts)")
+        else:
+            # Non-rider strategies (spring_setup, ib_breakout, etc.) — fixed target mode
+            _mom_score = getattr(self._last_cr, "momentum_score", 0) if self._last_cr else 0
+            _cr_verdict = getattr(self._last_cr, "verdict", "UNKNOWN") if self._last_cr else "UNKNOWN"
+            if SCALE_OUT_ENABLED and contracts >= 2:
+                logger.info(f"[{tid}] Scale-out eligible: contracts={contracts} "
+                            f"cr_verdict={_cr_verdict} mom_score={_mom_score} "
+                            f"(rider triggers at RR={SCALE_OUT_RR})")
+            else:
+                logger.info(f"[{tid}] Fixed target mode ({signal.strategy}): "
+                            f"{contracts}ct, target_rr={signal.target_rr:.1f}")
+
         self.status = "IN_TRADE"
 
         # Phase 6: Start expectancy tracking
@@ -1262,6 +2053,109 @@ class BaseBot:
             price=price, stop=stop_price, target=target_price,
             contracts=contracts, risk_dollars=risk_dollars, tier=tier,
             regime=self.session.get_current_regime(),
+        ))
+
+    async def _scale_out_trade(self, ws, price: float):
+        """
+        Trend rider scale-out: exit 1 contract at SCALE_OUT_RR, keep runner.
+
+        1. Cancel NT8 OCO brackets
+        2. Write partial exit OIF (sell/buy 1 contract at market)
+        3. Record partial P&L
+        4. Move stop to break-even
+        5. Place new BE stop order in NT8
+        6. Activate rider mode — stall detector now owns the exit
+        """
+        pos = self.positions.position
+        if not pos or pos.scaled_out or pos.contracts < 2:
+            return
+
+        tid = pos.trade_id
+        n_exit = 1   # Always exit 1 contract, keep remainder running
+
+        # Check momentum score — only ride when score >= threshold
+        mom_score = 0
+        try:
+            if self._last_cr:
+                mom_score = self._last_cr.momentum_score
+        except Exception:
+            pass
+
+        rider_eligible = (mom_score >= TREND_RIDER_MIN_SCORE or
+                          (self._last_cr and self._last_cr.verdict == "CONTINUATION"))
+
+        if not rider_eligible:
+            logger.info(f"[SCALE_OUT:{tid}] Score {mom_score} < {TREND_RIDER_MIN_SCORE} "
+                        f"— using full exit instead of scale-out")
+            # Fall through to normal target_hit exit; don't scale
+            return
+
+        logger.info(f"[SCALE_OUT:{tid}] Initiating: price={price:.2f} "
+                    f"dir={pos.direction} contracts={pos.contracts} "
+                    f"mom_score={mom_score}")
+
+        # STEP 1: Cancel existing OCO brackets in NT8
+        try:
+            await ws.send(json.dumps({
+                "type": "trade", "trade_id": tid,
+                "action": "CANCEL_ALL", "qty": 0,
+                "reason": "scale_out_cancel_oco",
+            }))
+            await asyncio.sleep(0.1)  # Brief pause before sending new orders
+        except Exception as e:
+            logger.warning(f"[SCALE_OUT:{tid}] CANCEL_ALL failed (non-blocking): {e}")
+
+        # STEP 2: Write partial exit OIF (exit n_exit contracts at market)
+        try:
+            from bridge.oif_writer import write_partial_exit
+            write_partial_exit(
+                direction=pos.direction,
+                n_contracts=n_exit,
+                trade_id=f"{tid}_scale1",
+            )
+        except Exception as e:
+            logger.error(f"[SCALE_OUT:{tid}] Partial exit OIF failed: {e}")
+            return
+
+        # STEP 3: Record partial P&L in Python position manager
+        partial = self.positions.scale_out_partial(price, n_exit, "scale_out_target")
+        if partial:
+            self.risk.record_trade(partial["pnl_dollars"])
+            self.trade_memory.record(partial)
+            logger.info(f"[SCALE_OUT:{tid}] Partial P&L: ${partial['pnl_dollars']:.2f} "
+                        f"({partial['pnl_ticks']:.1f}t)")
+
+        # STEP 4: Move stop to break-even in Python
+        be_price = pos.entry_price
+        self.positions.move_stop_to_be(be_price)
+
+        # STEP 5: Place new BE stop order in NT8 for remaining contract
+        try:
+            from bridge.oif_writer import write_be_stop
+            write_be_stop(
+                direction=pos.direction,
+                stop_price=be_price,
+                n_contracts=pos.contracts,  # After scale-out, remaining count
+                trade_id=f"{tid}_be",
+            )
+        except Exception as e:
+            logger.warning(f"[SCALE_OUT:{tid}] BE stop OIF failed (non-blocking): {e}")
+
+        # STEP 6: Activate rider mode — stall detector now owns the exit
+        pos.rider_mode = True
+        self._rider_active = True
+        self._stall_detector.reset()  # Fresh stall tracking for the runner
+
+        self.status = "IN_TRADE"
+        logger.info(f"[SCALE_OUT:{tid}] Complete — {pos.contracts}x running "
+                    f"BE@{be_price:.2f}, stall detector active")
+
+        asyncio.ensure_future(tg.notify_alert(
+            "SCALE OUT - RIDER ACTIVE",
+            f"{pos.direction} partial exit {n_exit}x @ {price:.2f} "
+            f"(+${partial['pnl_dollars']:.2f})\n"
+            f"Runner: {pos.contracts}x | BE stop @ {be_price:.2f} | "
+            f"Momentum score: {mom_score}"
         ))
 
     async def _exit_trade(self, ws, price: float, reason: str):
@@ -1306,6 +2200,10 @@ class BaseBot:
                     f"MANUAL EXIT REQUIRED."))
 
         # STEP 2: NOW close Python position (after NT8 command sent)
+        # Reset rider state regardless of outcome
+        self._rider_active = False
+        pos.rider_mode = False if self.positions.position else False
+
         trade = self.positions.close_position(price, reason)
         if trade:
             self.risk.record_trade(trade["pnl_dollars"])
@@ -1494,6 +2392,74 @@ class BaseBot:
             logger.error(f"[DEBRIEF] Failed (non-blocking): {e}")
 
     # ─── Dashboard State ────────────────────────────────────────────
+    def _menthorq_to_dict(self) -> dict:
+        """Expose MenthorQ gamma regime and all levels for dashboard."""
+        try:
+            from core.menthorq_feed import get_snapshot, regime_for_price
+            snap = get_snapshot()
+            price = self.aggregator.snapshot().get("price", 0)
+            regime = regime_for_price(snap, price)
+            return {
+                "gamma_regime": regime.get("gamma_regime", "UNKNOWN"),
+                "live_gamma":   regime.get("live_gamma", "UNKNOWN"),
+                "above_hvl":    regime.get("above_hvl", True),
+                "hvl":          snap.hvl,
+                "hvl_0dte":     snap.hvl_0dte,
+                "gamma_wall_0dte": snap.gamma_wall_0dte,
+                "call_resistance": snap.call_resistance_all,
+                "put_support":     snap.put_support_all,
+                "call_resistance_0dte": snap.call_resistance_0dte,
+                "put_support_0dte":     snap.put_support_0dte,
+                "day_min":      snap.day_min,
+                "day_max":      snap.day_max,
+                "nearest_resistance": regime.get("nearest_resistance", 0.0),
+                "nearest_support":    regime.get("nearest_support", 0.0),
+                "gex_levels": [
+                    snap.gex_level_1, snap.gex_level_2, snap.gex_level_3,
+                    snap.gex_level_4, snap.gex_level_5, snap.gex_level_6,
+                    snap.gex_level_7, snap.gex_level_8, snap.gex_level_9,
+                    snap.gex_level_10,
+                ],
+                "stop_multiplier": regime.get("stop_multiplier", 1.0),
+                "allow_long":  regime.get("allow_long", True),
+                "allow_short": regime.get("allow_short", True),
+                "dex":    snap.dex,
+                "vanna":  snap.vanna,
+                "cta":    snap.cta_positioning,
+                "net_gex_bn": snap.net_gex_bn,
+                "source": snap.source,
+                "is_stale": snap.is_stale,
+                "summary": regime.get("summary", ""),
+            }
+        except Exception as e:
+            return {"gamma_regime": "UNKNOWN", "error": str(e)}
+
+    def _cr_to_dict(self) -> dict:
+        """Expose continuation/reversal assessment for dashboard."""
+        cr = getattr(self, "_last_cr", None)
+        if cr is None:
+            return {"verdict": "UNKNOWN", "confidence": "LOW"}
+        return {
+            "verdict":           cr.verdict,
+            "confidence":        cr.confidence,
+            "direction_bias":    cr.direction_bias,
+            "momentum_score":    cr.momentum_score,
+            "momentum_direction":cr.momentum_direction,
+            "consecutive_days":  cr.consecutive_days,
+            "momentum_trend":    cr.momentum_trend,
+            "exhaustion_warning":cr.exhaustion_warning,
+            "at_day_max":        cr.at_day_max,
+            "at_day_min":        cr.at_day_min,
+            "at_call_resistance":cr.at_call_resistance,
+            "at_put_support":    cr.at_put_support,
+            "gamma_regime":      cr.gamma_regime,
+            "above_hvl":         cr.above_hvl,
+            "iv_regime":         cr.iv_regime,
+            "continuation_factors": cr.continuation_factors,
+            "reversal_factors":  cr.reversal_factors,
+            "summary_table":     cr.summary_table,
+        }
+
     def to_dict(self) -> dict:
         market = self.aggregator.snapshot()
         # Core fields — must always succeed
@@ -1505,6 +2471,7 @@ class BaseBot:
             "last_signal": self.last_signal,
             "last_rejection": self.last_rejection,
             "last_eval": self._last_eval,
+            "day_type": self._day_classifier.get_state(),   # TREND/RANGE/VOLATILE + params
             "council": self._council_result,
             "filter_verdict": self._filter_verdict,
             "clustering": self._clustering_result,
@@ -1534,6 +2501,8 @@ class BaseBot:
             "trade_rag":             lambda: self.trade_rag.to_dict(),
             "smc_patterns":          lambda: self.smc.to_dict(),
             "calendar_risk":         lambda: self.calendar_risk.to_dict(),
+            "menthorq":              lambda: self._menthorq_to_dict(),
+            "cr_assessment":         lambda: self._cr_to_dict(),
             "playbook":              lambda: self.playbook_mgr.to_dict(),
             "intermarket":           lambda: self.intermarket.to_dict(),
             "edge_miner":            lambda: self.edge_miner.to_dict(),
@@ -1541,6 +2510,27 @@ class BaseBot:
             "pandas_ta":             lambda: self.pandas_ta.to_dict(),
             "chart_patterns":        lambda: self.chart_patterns.to_dict(),
             "cot_feed":              lambda: self.cot_feed.to_dict(),
+            # ─── NEW Apr 2026 SHADOW modules ───────────────────────────
+            "structural_bias":       lambda: self._last_structural_bias,
+            "footprint_signals":     lambda: self._last_footprint_signals,
+            "footprint_current":     lambda: (self.footprint_5m.current_bar().__dict__
+                                              if self.footprint_5m.current_bar() else {}),
+            "footprint_last_completed": lambda: (self.footprint_5m.last_completed().__dict__
+                                                  if self.footprint_5m.last_completed() else {}),
+            "swing_state":           lambda: self.swing_state_5m.to_dict(),
+            "volume_profile":        lambda: self.volume_profile.to_dict(),
+            "climax_state":          lambda: self.reversal_detector.get_state(),
+            "sweep_state":           lambda: self.sweep_watcher.get_state(),
+            "chart_patterns_v1":     lambda: self._last_chart_patterns_v1,
+            "gamma_flip_state":      lambda: self.gamma_flip_detector.get_state(),
+            "vix_term_structure":    lambda: self._last_vix_term,
+            "pinning_state":         lambda: self._last_pinning_state,
+            "opex_status":           lambda: self._last_opex_status,
+            "es_confirmation":       lambda: self._last_es_confirmation,
+            "decay_monitor_summary": lambda: self.decay_monitor.summary(),
+            "tca_weekly_report":     lambda: self.tca_tracker.weekly_report(),
+            "circuit_breakers_state": lambda: self.circuit_breakers.get_state(),
+            "sizing_config":         lambda: self.simple_sizer.config,
         }
         for key, fn in _safe.items():
             try:
