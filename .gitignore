@@ -10,3 +10,16 @@ tmp_*
 dist/
 build/
 .claude/
+
+# Scratch directories (see SCRATCH_DIRS.md)
+Phoenix Rising Project/
+
+# Runtime data — keep folder shape only, ignore contents
+data/*.json
+data/knowledge_vectors/
+data/trade_vectors/
+# Pre-emptive: cover future binary formats anywhere under data/
+data/**/*.sqlite
+data/**/*.db
+data/**/*.parquet
+!data/.gitkeep
