@@ -1,0 +1,56 @@
+# Phoenix Bot — Small Account Configuration
+#
+# Active when account_balance < 1500.
+# core/simple_sizing.py reads this YAML via PyYAML.
+# Strategies + circuit breakers also consume these values.
+#
+# Why fixed sizing: below ~$1500 account you can't fractionally size MNQ
+# contracts (minimum 1), so Kelly math becomes cosmetic. Fixed discipline
+# + tight risk = best you can do until account grows.
+
+small_account_mode:
+  # Risk limits — extremely tight for $300 account
+  max_loss_per_trade_usd: 5.0       # 1.7% of $300
+  max_daily_loss_usd: 15.0          # 5% of $300 = 3 max-loss trades
+  recovery_mode_trigger_usd: -10.0  # At -$10 daily: cut size, raise thresholds
+
+  # Sizing
+  contracts_per_trade: 1            # MNQ only allows whole contracts
+  max_trades_per_day: 4             # Forces patience, only A+ setups
+
+  # Signal conviction
+  veto_low_conviction_threshold: 80 # Need 80+ composite score (vs 65 default)
+                                    # Filters most non-A-setup signals
+
+  # Cooldowns
+  loss_streak_cooldown_minutes: 5   # After 2 consecutive losses → 5 min pause
+  min_trade_spacing_minutes: 15     # Mandatory gap between trades
+
+  # Target performance (60% WR + 1:1.5 R:R → PF 2.25)
+  min_rr: 1.5                        # R:R ratio enforced in strategy execution
+  preferred_rr: 2.0                  # Sweet spot
+
+# Auto-upgrade thresholds — when account grows, different configs apply
+# These are the INTENDED future states, not currently wired.
+# Saturday/Sunday builds don't use these yet — they're a reminder.
+account_tier_thresholds:
+  # Tier 1: $0-1500 (current) — this file's `small_account_mode` section
+  # Tier 2: $1500-3000 — moderate_account_config.yaml (not yet created)
+  #   - Quarter Kelly sizing active (core/kelly_sizing.py to be built)
+  #   - max_loss_per_trade $15, max_daily $45
+  #   - Veto threshold 75 (slightly looser)
+  # Tier 3: $3000-5000 — standard_account_config.yaml
+  #   - Half Kelly sizing
+  #   - Can scale up to 2 contracts on A+ setups
+  # Tier 4: $5000+ — full_account_config.yaml
+  #   - Full fractional Kelly
+  #   - All strategies active (including currently lab-only ones that prove out)
+
+  tier_1_max_usd: 1500
+  tier_2_max_usd: 3000
+  tier_3_max_usd: 5000
+
+  # Activation policy: bot reads live account balance from NT8 at startup.
+  # If balance crosses a tier threshold, LOG the transition but DO NOT
+  # auto-upgrade — user must approve moving to looser config.
+  auto_upgrade_policy: "alert_only"   # vs "auto_apply" (dangerous)

@@ -1,0 +1,91 @@
+# Phoenix Bot — Regime-Specific Parameters
+#
+# Multipliers applied to stop/target/sizing based on gamma × VIX regime.
+# Core strategies + trade_executor consume these values.
+#
+# Research basis:
+# - Pos GEX: dealer counter-trend flow → tight stops (noise rejected), small targets
+# - Neg GEX: dealer procyclical flow → wide stops (moves overshoot), large targets
+# - High VIX: amplified moves regardless of GEX sign → wider everything, reduce sizing
+#
+# Edit this file to adjust — no code rebuild needed.
+
+regimes:
+  # ─── POSITIVE GEX, LOW VIX (today's regime 2026-04-17) ─────────────
+  POS_GEX_LOW_VIX:
+    # Stop/target multipliers applied to ATR-based base stop
+    stop_multiplier: 0.8             # Tight stops — dealers revert quickly
+    target_multiplier: 1.0           # Small targets — reach mean fast
+    # Expected range for the session (for range-exhaustion filter)
+    expected_daily_range_nq_pts: 250
+    # Strategy-type biases (multiply strategy composite score)
+    breakout_probability_bias: 0.3   # Strong: fade breakouts
+    mean_reversion_bias: 1.3         # Favor mean-reversion setups
+    # Trail aggressiveness after T1 (Chandelier multiplier)
+    chandelier_atr_mult: 2.5         # Tight trail — lock profit fast
+    # Time-of-day modifiers
+    pin_risk_last_90_min: true       # 0DTE pinning near strikes likely
+    # Notes
+    notes: "Compressed range, mean-rev dominant, breakouts fade. Ideal for vwap_pullback + spring + climax-at-wall."
+
+  # ─── POSITIVE GEX, HIGH VIX ───────────────────────────────────────
+  POS_GEX_HIGH_VIX:
+    stop_multiplier: 1.0             # Normal stops — wider swings but still mean-rev
+    target_multiplier: 1.2
+    expected_daily_range_nq_pts: 400
+    breakout_probability_bias: 0.5   # Moderate fade bias
+    mean_reversion_bias: 1.1
+    chandelier_atr_mult: 3.0
+    pin_risk_last_90_min: true
+    notes: "Positive gamma but elevated VIX — mean-rev works but wider swings. Reduce frequency."
+
+  # ─── NEGATIVE GEX, LOW VIX ─────────────────────────────────────────
+  NEG_GEX_LOW_VIX:
+    stop_multiplier: 1.3             # Wider stops — moves overshoot
+    target_multiplier: 2.0           # Let winners run
+    expected_daily_range_nq_pts: 450
+    breakout_probability_bias: 1.4   # Join breakouts
+    mean_reversion_bias: 0.7         # Mean-rev dangerous
+    chandelier_atr_mult: 3.5         # Give trends room
+    pin_risk_last_90_min: false      # Less pinning in neg gamma
+    notes: "Trending, volatility rising. Favor bias_momentum + ib_breakout + compression_breakout."
+
+  # ─── NEGATIVE GEX, HIGH VIX (most dangerous) ───────────────────────
+  NEG_GEX_HIGH_VIX:
+    stop_multiplier: 1.8             # Wide stops — whip risk high
+    target_multiplier: 3.0           # Rides big
+    expected_daily_range_nq_pts: 700
+    breakout_probability_bias: 1.2
+    mean_reversion_bias: 0.5         # Mean-rev often fatal
+    chandelier_atr_mult: 4.0
+    pin_risk_last_90_min: false
+    # IMPORTANT: small_account_config reduces position size further in this regime
+    sizing_reduction_mult: 0.5       # Cut size in half on top of normal
+    notes: "Amplified trends, whip risk extreme. One strategy at a time. Size down."
+
+  # ─── UNKNOWN (MQ stale or error) ───────────────────────────────────
+  UNKNOWN:
+    stop_multiplier: 1.0
+    target_multiplier: 1.5
+    expected_daily_range_nq_pts: 300
+    breakout_probability_bias: 1.0
+    mean_reversion_bias: 1.0
+    chandelier_atr_mult: 3.0
+    pin_risk_last_90_min: false
+    notes: "MenthorQ data unavailable. Conservative defaults. Small account config veto threshold applies."
+
+# ─── Regime detection rules ────────────────────────────────────────────
+# How base_bot classifies the current regime each cycle.
+
+detection:
+  # GEX regime from menthorq_feed
+  # Staleness: if MQ file age > this, force UNKNOWN regardless of gex_regime value
+  menthorq_staleness_hours: 24
+
+  # VIX thresholds (VIX absolute value)
+  vix_low_max: 20.0      # VIX < 20 = LOW
+  vix_high_min: 20.0     # VIX >= 20 = HIGH
+
+  # Price vs HVL check (from research: HVL = the true gamma flip line)
+  # If price is below HVL, even POSITIVE manual regime flips to effective NEG
+  respect_live_hvl: true
