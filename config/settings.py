@@ -6,7 +6,18 @@ STRATEGY_DEFAULTS at runtime (session-only unless "Save to Config" is clicked).
 """
 
 # ─── Instrument & Account ───────────────────────────────────────────
-INSTRUMENT = "MNQM6 06-26"
+# NOTE on contract codes: CME quarterly cycle for NQ/MNQ
+#   H = March   (3rd Friday)
+#   M = June    (3rd Friday)
+#   U = September (3rd Friday)
+#   Z = December  (3rd Friday)
+# Front-month typically rolls ~8 trading days before expiration.
+INSTRUMENT = "MNQM6 06-26"           # Current front month = June 2026
+CONTRACT_EXPIRATION = "2026-06-19"   # 3rd Friday of June 2026
+NEXT_CONTRACT = "MNQU6 09-26"        # Roll target: September 2026
+NEXT_CONTRACT_EXPIRATION = "2026-09-18"  # 3rd Friday of September 2026
+ROLL_DAYS_BEFORE_EXPIRATION = 8      # Auto-switch N trading days before expiration
+
 ACCOUNT = "Sim101"
 LIVE_TRADING = False  # Flip to True for real money (requires ATI enabled in NT8)
 TICK_SIZE = 0.25
@@ -35,8 +46,11 @@ DAILY_LOSS_LIMIT = 45.0         # Stop trading for the day ($)
 WEEKLY_LOSS_LIMIT = 150.0       # Stop trading for the week ($)
 RECOVERY_MODE_TRIGGER = 30.0    # At -$30 daily: cut size 50%, raise thresholds
 MAX_TRADES_PER_SESSION = 999  # Uncapped — don't limit winning days
-COOLOFF_AFTER_CONSECUTIVE_LOSSES = 3   # Pause 5 min after N consecutive losses
-COOLOFF_DURATION_MIN = 5
+COOLOFF_AFTER_CONSECUTIVE_LOSSES = 2   # Pause after N consecutive losses (was 3)
+COOLOFF_DURATION_MIN = 10              # 10 min cooloff (was 5)
+MIN_TRADE_SPACING_MIN = 15             # Minimum minutes between any two trades.
+                                       # Prevents cluster-trading on marginal setups.
+                                       # Yesterday: 28 trades = ~1/10min. Goal: 2-5/day.
 
 # ─── VIX Thresholds ────────────────────────────────────────────────
 VIX_LOW = 15.0       # Below: can be aggressive
@@ -68,8 +82,19 @@ SESSION_WINDOWS = {
 }
 
 # ─── Production Bot Session (when prod_bot trades) ──────────────────
+# Primary window: open momentum + mid-morning (highest edge)
 PROD_PRIMARY_START = "08:30"
-PROD_PRIMARY_END = "10:00"
+PROD_PRIMARY_END   = "11:00"   # Extended from 10:00 — MID_MORNING is a gold regime
+
+# Secondary window: institutional repositioning (late afternoon trend trades)
+# Today's example: +300pt move ran 13:00–14:30 CST — prod was completely dark
+PROD_SECONDARY_START = "13:00"
+PROD_SECONDARY_END   = "14:30"
+
+# C/R Adaptive Session: on strong CONTINUATION days (score >= 4), extend secondary
+# window to CR_EXTENDED_END to ride institutional trend flow into close
+CR_ADAPTIVE_SESSION = True
+CR_EXTENDED_END     = "15:00"  # On score 4+ days, trade until 3 PM CST
 
 # ─── Phase 4: AI Agents ────────────────────────────────────────────
 # Requires GEMINI_API_KEY in .env or environment variable
@@ -77,6 +102,59 @@ AGENT_COUNCIL_ENABLED = True        # 7-voter bias consensus at session open
 AGENT_PRETRADE_FILTER_ENABLED = True  # Fast AI sanity check before entry
 AGENT_DEBRIEF_ENABLED = True        # End-of-session coaching debrief
 AGENT_MODEL = "gemini-2.5-flash"    # Model for all agents
+
+# ─── Commission & Execution ─────────────────────────────────────────
+COMMISSION_PER_SIDE = 0.86      # $ per contract per side (NT8 Sim101 / Rithmic rate)
+                                 # Derivation: $531.25 gap / 310 trades / 2 sides ≈ $0.855
+
+# Entry order type: "LIMIT" fills at your price (no slippage), "MARKET" fills immediately
+ENTRY_ORDER_TYPE = "LIMIT"       # Recommended: LIMIT reduces slippage to ~0
+LIMIT_OFFSET_TICKS = 1           # Ticks beyond current price for aggressive fills
+                                 # LONG entry: limit = price + (offset * TICK_SIZE)
+                                 # SHORT entry: limit = price - (offset * TICK_SIZE)
+
+# ─── Tick Bar Configuration ──────────────────────────────────────────
+# Tick bars complete every N trades (not seconds). Used for entry precision.
+# Time bars (1m/5m) still drive TF bias and trend direction.
+# Tick bars drive entry timing — faster resolution, noise-filtered.
+TICK_BAR_SIZE = 300              # Trades per bar. 233=fast, 300=precise, 512=medium
+                                 # 300t matches the user's NT8 chart for DOM precision.
+                                 # At MNQ open (~500 trades/min): 300t ≈ 36s per bar
+                                 # At MNQ lunch (~100 trades/min): 300t ≈ 3 min per bar
+TICK_BAR_ENABLED = True          # Disable to fall back to time-only bars
+
+# ─── ATR-Based Stop Loss ────────────────────────────────────────────
+# Instead of fixed stop_ticks per strategy, derive stop from current ATR.
+# Adapts automatically: wider stops in fast/volatile markets, tighter in slow.
+#
+# MNQ ATR reference:
+#   ATR_1m typically: 4-15 pts (16-60 ticks) — use for responsive stops
+#   ATR_tick typically: similar to ATR_1m scaled to 512 tick bars
+#   ATR_5m typically: 15-45 pts (60-180 ticks) — use for swing stops
+#
+# Stop = max(ATR_STOP_MIN_TICKS, min(ATR_STOP_MAX_TICKS, ATR × multiplier / TICK_SIZE))
+ATR_STOP_ENABLED     = True       # If False: use strategy's fixed stop_ticks
+ATR_STOP_TF          = "5m"       # ATR timeframe: "5m" validated for intraday futures
+                                  # Research: 5m ATR > 1m ATR for stop placement
+                                  # (1m too noisy — generates whipsaws on MNQ)
+                                  # "1m" = more responsive, "tick" = most adaptive
+ATR_STOP_MULTIPLIER  = 1.1        # Stop = 1.1 × ATR. Research-validated for futures:
+                                  #   1.0 = at the volatility boundary (tight, high WR needed)
+                                  #   1.1 = balanced — avoids most noise without wide exposure
+                                  #   1.5+ = too wide for intraday; better for swing
+                                  # Note: spring_setup overrides this with wick-anchored ATR
+ATR_STOP_MIN_TICKS   = 8          # Floor: never less than 8t ($4 risk/contract)
+ATR_STOP_MAX_TICKS   = 40         # Ceiling: never more than 40t ($20 risk/contract)
+
+# ─── Scale-Out / Trend Rider ─────────────────────────────────────────
+# On CONTINUATION HIGH days (C/R score >= TREND_RIDER_MIN_SCORE):
+#   Exit 1 contract at SCALE_OUT_RR, move stop to BE on remaining, ride until stall.
+# On normal days: use fixed target for all contracts (no scale-out).
+SCALE_OUT_ENABLED = True          # Enable partial exit at first target
+SCALE_OUT_RR = 1.5                # Exit contract 1 when this R:R is reached
+TREND_RIDER_ENABLED = True        # Hold remaining contract until trend stalls
+TREND_RIDER_MIN_SCORE = 4         # Only ride trend when daily momentum score >= N
+                                  # Score 4 = DEVELOPING, Score 5 = INSTITUTIONAL
 
 # ─── Logging ────────────────────────────────────────────────────────
 LOG_DIR = "logs"

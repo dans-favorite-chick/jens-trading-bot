@@ -34,7 +34,7 @@ def _is_configured() -> bool:
     return bool(TOKEN) and bool(CHAT_ID)
 
 
-def send_sync(text: str, parse_mode: str = "Markdown") -> bool:
+def send_sync(text: str, parse_mode: str = "HTML") -> bool:
     """
     Send a Telegram message synchronously. Non-blocking safe.
     Returns True if sent, False on failure.
@@ -75,7 +75,7 @@ def send_sync(text: str, parse_mode: str = "Markdown") -> bool:
         return False
 
 
-async def send(text: str, parse_mode: str = "Markdown") -> bool:
+async def send(text: str, parse_mode: str = "HTML") -> bool:
     """Async wrapper — runs send_sync in executor to avoid blocking."""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, send_sync, text, parse_mode)
@@ -89,14 +89,15 @@ async def notify_entry(trade_id: str, direction: str, strategy: str,
                        regime: str):
     """Send trade entry notification."""
     emoji = "\U0001F7E2" if direction == "LONG" else "\U0001F534"  # green/red circle
+    # HTML parse mode — no need to escape underscores in strategy names
     msg = (
-        f"{emoji} *ENTRY: {direction}*\n"
-        f"Strategy: `{strategy}`\n"
-        f"Price: `{price:.2f}`\n"
-        f"Stop: `{stop:.2f}` | Target: `{target:.2f}`\n"
+        f"{emoji} <b>ENTRY: {direction}</b>\n"
+        f"Strategy: <code>{strategy}</code>\n"
+        f"Price: <code>{price:.2f}</code>\n"
+        f"Stop: <code>{stop:.2f}</code> | Target: <code>{target:.2f}</code>\n"
         f"Size: {contracts}x | Risk: ${risk_dollars:.2f} ({tier})\n"
         f"Regime: {regime}\n"
-        f"ID: `{trade_id}`"
+        f"ID: <code>{trade_id}</code>"
     )
     await send(msg)
 
@@ -115,13 +116,13 @@ async def notify_exit(trade_id: str, direction: str, strategy: str,
 
     hold_min = hold_time_s / 60
     msg = (
-        f"{emoji} *EXIT: {direction} {result}*\n"
-        f"Strategy: `{strategy}`\n"
-        f"Entry: `{entry_price:.2f}` | Exit: `{exit_price:.2f}`\n"
-        f"*P&L: {pnl_str}* ({pnl_ticks:+.1f} ticks)\n"
+        f"{emoji} <b>EXIT: {direction} {result}</b>\n"
+        f"Strategy: <code>{strategy}</code>\n"
+        f"Entry: <code>{entry_price:.2f}</code> | Exit: <code>{exit_price:.2f}</code>\n"
+        f"<b>P&amp;L: {pnl_str}</b> ({pnl_ticks:+.1f} ticks)\n"
         f"Reason: {exit_reason}\n"
         f"Hold: {hold_min:.1f} min\n"
-        f"ID: `{trade_id}`"
+        f"ID: <code>{trade_id}</code>"
     )
     await send(msg)
 
@@ -135,8 +136,8 @@ async def notify_daily_summary(daily_pnl: float, trades: int, wins: int,
     status = "\U000026A0 RECOVERY MODE" if recovery_mode else "Normal"
 
     msg = (
-        f"{emoji} *DAILY SUMMARY*\n"
-        f"P&L: *{pnl_str}*\n"
+        f"{emoji} <b>DAILY SUMMARY</b>\n"
+        f"P&amp;L: <b>{pnl_str}</b>\n"
         f"Trades: {trades} ({wins}W / {losses}L)\n"
         f"Win Rate: {win_rate:.0f}%\n"
         f"Status: {status}"
@@ -152,17 +153,21 @@ async def notify_council(bias: str, vote_count: str, summary: str):
         "NEUTRAL": "\U0001F7E1",   # yellow
     }.get(bias, "\U00002753")      # question mark
 
+    # Escape HTML special chars in summary (user-generated text)
+    safe_summary = summary[:200].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     msg = (
-        f"{emoji} *COUNCIL: {bias}*\n"
+        f"{emoji} <b>COUNCIL: {bias}</b>\n"
         f"Vote: {vote_count}\n"
-        f"{summary[:200]}"
+        f"{safe_summary}"
     )
     await send(msg)
 
 
 async def notify_alert(alert_type: str, message: str):
     """Send general alert (recovery mode, kill switch, news gate, etc.)."""
-    msg = f"\U000026A0 *ALERT: {alert_type}*\n{message}"
+    # Escape HTML special chars in alert message
+    safe_message = message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    msg = f"\U000026A0 <b>ALERT: {alert_type}</b>\n{safe_message}"
     await send(msg)
 
 

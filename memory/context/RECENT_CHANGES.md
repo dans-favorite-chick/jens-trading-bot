@@ -1,0 +1,96 @@
+# Phoenix Bot — Recent Changes
+
+_Dated log of what's been changed, by whom, why. Newest first._
+_Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
+
+---
+
+### 2026-04-17 19:04 Central Daylight Time — Friday Session 1 complete: MQBridge deployed + verified (55 draw objects, real levels flowing), Telegram HTML fix, memory architecture scaffolded with atomic writes + hooks, NT8 arrow + contract rollover + Level 2 all diagnosed, git tag v-pre-rebuild-2026-04-17 + rollback runbook, WFO replay harness (multi-window + Monte Carlo + cost model), simple_sizing.py with loss-streak cooldown, bias_momentum hotfix VERIFIED working, BOM fix for utf-8-sig MQ bridge file read, bots restarted cleanly with real MQ values flowing
+
+**Files changed:**
+- `core/telegram_notifier.py`
+- `core/menthorq_feed.py`
+- `core/simple_sizing.py`
+- `core/contract_rollover.py`
+- `config/settings.py`
+- `tools/memory_writeback.py`
+- `tools/replay_harness.py`
+- `memory/context/CURRENT_STATE.md`
+- `memory/context/RECENT_CHANGES.md`
+- `memory/context/KNOWN_ISSUES.md`
+- `memory/context/OPEN_QUESTIONS.md`
+- `memory/context/ROLLBACK_RUNBOOK.md`
+- `memory/semantic/lessons_learned.md`
+- `memory/procedural/targets.yaml`
+- `memory/procedural/strategy_params.yaml`
+- `memory/audit_log.jsonl`
+- `~/.claude/settings.json (hooks)`
+- `~/.claude/projects/C--Trading-Project/memory/MEMORY.md`
+
+**Decisions:**
+- All 10 Friday Tier 1 items complete
+- MQBridge verified with 55 draw objects writing today real MQ levels
+- Telegram now HTML instead of Markdown fixes 22 of 29 dropped lab messages
+- Memory architecture operational with atomic writes file lock audit log
+- Hooks installed: SessionStart auto-loads memory SessionEnd auto-writeback Stop checks pending
+- Git tag v-pre-rebuild-2026-04-17 created as rollback baseline
+- WFO harness tested: placeholder strategy 50% WR 10.8% risk of ruin correctly identifies overfitting OOS
+- simple_sizing uses fixed 1-contract 80 conviction threshold 5 min loss-streak cooldown
+- bias_momentum hotfix verified 0 errors 109 clean rejections correct gates firing
+- BOM fix for utf-8-sig MenthorQ bridge file fixed zero-values bug at restart
+
+---
+### 2026-04-17 18:43 Central Daylight Time — Test write — memory architecture bootstrap
+
+**Files changed:**
+- `core/telegram_notifier.py`
+- `memory/context/CURRENT_STATE.md`
+
+**Decisions:**
+- Switched Telegram to HTML parse mode
+- Memory architecture scaffolded
+
+---
+## 2026-04-17 — Friday rebuild Session 1 (in progress)
+
+### 17:30 CDT — Telegram notifier: Markdown → HTML
+
+**What:** `core/telegram_notifier.py` converted from `parse_mode="Markdown"` to `parse_mode="HTML"`. All 5 formatters (entry, exit, daily summary, council, alert) updated to use `<b>` and `<code>` HTML tags instead of `*bold*` / `` `code` ``.
+
+**Why:** 22 of 29 lab trade messages today were silently dropped by Telegram API returning 400 "can't parse entities" on underscores in strategy names (e.g., `bias_momentum`, `high_precision_only`). Created survivorship bias — user saw winning trades but not losing ones.
+
+**Effect:** Next bot restart (tonight at session close) — all trade notifications will be delivered reliably.
+
+### 17:20 CDT — MQBridge.cs redeployment instructions delivered
+
+**What:** Diagnosed that `MQBridge.cs` source exists at `C:\Trading Project\phoenix_bot\ninjatrader\MQBridge.cs` but is NOT installed in NT8 Indicators folder (`C:\Users\Trading PC\OneDrive\Documents\NinjaTrader 8\bin\Custom\Indicators\`). Walked user through NT8 NinjaScript Editor reinstall procedure.
+
+**Why:** `C:\temp\menthorq_levels.json` has not been updated by NT8 since 2026-04-15 — indicator was removed/uninstalled from NT8. Every morning since has used stale gamma levels.
+
+**Status:** User deploying. Verify timestamp updates post-install.
+
+### 11:09 CDT — Hotfix: bias_momentum missing `price` and `vwap` variables
+
+**What:** Added 2 lines in `strategies/bias_momentum.py` (near line 66):
+```python
+price = market.get("close", 0.0)
+vwap = market.get("vwap", 0.0)
+```
+
+**Why:** Variables referenced throughout the method but only defined inside the non-TREND `else` branch. On TREND days, code crashed with `NameError: name 'price' is not defined`. Had been crashing continuously since the bot started today.
+
+**Effect:** Bot back to operational. Zero signals fired in secondary window 13:00-14:30 but also zero errors — either no qualifying setups or needs further investigation (see `OPEN_QUESTIONS.md`).
+
+### 11:07 CDT — Manual write of MQ levels for today
+
+**What:** Directly wrote today's MenthorQ values to `C:\temp\menthorq_levels.json`:
+- HVL 25,290, CR 26,500, PS 24,000, Day range 26,172-26,802
+- GEX 1-10 levels from today's dashboard analysis
+
+**Why:** NT8 MQBridge indicator not running (see above). Bot needs today's regime to operate properly.
+
+**Status:** Temporary workaround. Permanent fix is MQBridge redeployment.
+
+---
+
+## Earlier entries will be appended above this line as SessionEnd hook runs.
