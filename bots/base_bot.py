@@ -73,7 +73,7 @@ from core.reversal_detector import ReversalDetector
 from core.liquidity_sweep import SweepWatcher
 from core.strategy_decay_monitor import DecayMonitor
 from core.tca_tracker import TCATracker
-from core.circuit_breakers import CircuitBreakers
+from core.circuit_breakers import CircuitBreakers, HALT_MARKER_FILE
 from core.chart_patterns_v1 import extract_v1_patterns
 from core.vix_term_structure import get_cached as get_vix_term_cached
 from core.gamma_flip_detector import GammaFlipDetector
@@ -1085,6 +1085,29 @@ class BaseBot:
         """Run all enabled strategies, pick best signal."""
         if not self.positions.is_flat:
             return  # Already in a trade
+
+        # ── HALT gates — checked BEFORE anything else (P3) ────────────
+        # Two independent signals:
+        #   (1) .HALT marker file (user-managed emergency halt; always enforced)
+        #   (2) CircuitBreakers.should_halt() (breaker-managed; honors observe_mode)
+        # Either triggering skips the entire evaluation cycle and records the
+        # reason in _last_eval for dashboard visibility.
+        _halt_reason = None
+        if HALT_MARKER_FILE.exists():
+            _halt_reason = f"HALTED — emergency marker file at {HALT_MARKER_FILE}"
+        elif self.circuit_breakers.should_halt():
+            _halt_reason = f"HALTED — circuit breaker: {self.circuit_breakers.halted_reason or 'active'}"
+        if _halt_reason is not None:
+            logger.warning(f"[HALT] {_halt_reason} — blocking strategy evaluation")
+            self.last_rejection = _halt_reason
+            self._last_eval = {
+                "ts": datetime.now().isoformat(),
+                "regime": self.session.to_dict().get("regime", "?"),
+                "risk_blocked": _halt_reason,
+                "strategies": [],
+                "best_signal": None,
+            }
+            return
 
         # Enforce prod trading window — prod bot only trades during defined session.
         # Exception: TREND days with session_unrestricted=True bypass window checks —
@@ -2195,6 +2218,34 @@ class BaseBot:
             f"Momentum score: {mom_score}"
         ))
 
+    def _on_trade_closed(self, trade: dict) -> None:
+        """
+        Shadow-module wiring at trade close (P3 stub for P10a full wiring).
+
+        Feeds circuit_breakers' rolling counters so breaker detection
+        (slippage spike, WR crash) has data to work with on the next tick.
+        Called from _exit_trade after positions.close_position() returns.
+
+        Currently wires 2 of 5 shadow-module consumers. The remaining 3
+        (decay_monitor.record_trade, sweep_watcher.track_pivot_break,
+        tca_tracker.record_fill) will wire here during P10a/b/c on Day 7+.
+
+        trade.get('slippage_ticks', 0) is a placeholder — the trade dict
+        does not yet carry a slippage field. P10a will compute slippage
+        from (entry_price vs market_snapshot['signal_price']) and attach
+        it to the trade dict before this method is called.
+        """
+        if not trade:
+            return
+        try:
+            self.circuit_breakers.record_slippage(trade.get("slippage_ticks", 0))
+        except Exception as e:
+            logger.debug(f"[_on_trade_closed] record_slippage error (non-blocking): {e}")
+        try:
+            self.circuit_breakers.record_trade_outcome(trade.get("result", "UNKNOWN"))
+        except Exception as e:
+            logger.debug(f"[_on_trade_closed] record_trade_outcome error (non-blocking): {e}")
+
     async def _exit_trade(self, ws, price: float, reason: str):
         """Execute exit: send to NT8 FIRST, then close Python state."""
         if self.positions.is_flat:
@@ -2246,6 +2297,7 @@ class BaseBot:
             self.risk.record_trade(trade["pnl_dollars"])
             self.trade_memory.record(trade)
             self.tracker.record_trade(trade)
+            self._on_trade_closed(trade)  # P3: wire circuit breakers (stub; P10a completes wiring)
 
             # Phase 6: Close expectancy tracking BEFORE log_exit so MAE/MFE is included
             exp_analysis = self.expectancy.close_trade(
