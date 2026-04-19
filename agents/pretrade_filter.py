@@ -6,8 +6,8 @@ Called by base_bot.py AFTER a strategy generates a signal but BEFORE
 the order is placed.
 
 Design constraints:
-  - 3-second hard timeout → defaults to CLEAR (never blocks a trade)
-  - Non-blocking: AI failure = CLEAR
+  - 3-second hard timeout → defaults to SIT_OUT (fail-closed: blocks trade when AI unavailable)
+  - AI failure (timeout/unparseable/exception) = SIT_OUT (was CLEAR pre-2026-04-19; see P11)
   - Returns: CLEAR | CAUTION | SIT_OUT
   - CAUTION reduces position size by 50% but still enters
   - SIT_OUT skips this trade entirely
@@ -238,10 +238,10 @@ async def check(
         latency = (time.time() - start) * 1000
 
         if response is None:
-            logger.info(f"[Filter] No response in {latency:.0f}ms — defaulting to CLEAR")
+            logger.warning(f"[Filter] No response in {latency:.0f}ms — defaulting to SIT_OUT (fail-closed)")
             return FilterVerdict(
-                action="CLEAR",
-                reason="AI timeout/error — defaulting to safe pass-through",
+                action="SIT_OUT",
+                reason="AI timeout/no response — fail-closed block (safer than bypassing the filter)",
                 confidence=0,
                 latency_ms=latency,
                 source="default",
@@ -250,10 +250,10 @@ async def check(
         # Parse response
         parsed = extract_json(response)
         if parsed is None:
-            logger.warning(f"[Filter] Could not parse response — defaulting to CLEAR")
+            logger.warning(f"[Filter] Could not parse response — defaulting to SIT_OUT (fail-closed)")
             return FilterVerdict(
-                action="CLEAR",
-                reason=f"Unparseable AI response — defaulting to pass-through",
+                action="SIT_OUT",
+                reason="Unparseable AI response — fail-closed block",
                 confidence=0,
                 latency_ms=latency,
                 source="default",
@@ -277,10 +277,10 @@ async def check(
 
     except Exception as e:
         latency = (time.time() - start) * 1000
-        logger.error(f"[Filter] Exception: {e} — defaulting to CLEAR")
+        logger.error(f"[Filter] Exception: {e} — defaulting to SIT_OUT (fail-closed)")
         return FilterVerdict(
-            action="CLEAR",
-            reason=f"Filter error: {str(e)[:80]}",
+            action="SIT_OUT",
+            reason=f"Filter error (fail-closed): {str(e)[:80]}",
             confidence=0,
             latency_ms=latency,
             source="default",
