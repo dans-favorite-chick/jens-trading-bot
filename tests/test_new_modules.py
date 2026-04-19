@@ -55,7 +55,7 @@ class TestSimpleSizing(unittest.TestCase):
     def test_consecutive_losses_trigger_cooldown(self):
         self.sizer.record_trade_outcome("LOSS")
         self.sizer.record_trade_outcome("LOSS")
-        self.assertTrue(self.sizer.in_cooldown())
+        self.assertTrue(self.sizer.is_in_cooldown())
         r = self.sizer.size_trade(signal_score=90, daily_pnl=-10, trades_today=2)
         self.assertFalse(r["take_trade"])
         self.assertIn("cooldown", r["reason"])

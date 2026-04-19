@@ -93,18 +93,32 @@ class SimpleSizer:
                     f"{self.config['loss_streak_cooldown_minutes']} min"
                 )
 
-    def in_cooldown(self) -> bool:
-        """Returns True if currently in loss-streak cooldown."""
+    def is_in_cooldown(self) -> bool:
+        """
+        Pure query — True iff loss-streak cooldown is currently active.
+
+        Does NOT mutate state. If you want expired cooldowns cleared first
+        (so the answer reflects current wall-clock time rather than stale
+        state), call tick_cooldown() before this. size_trade() does that
+        automatically via its Gate 1.
+        """
         if self._cooldown_until is None:
             return False
-        if time.time() >= self._cooldown_until:
+        return time.time() < self._cooldown_until
+
+    def tick_cooldown(self) -> None:
+        """
+        Mutator — clear expired cooldown so is_in_cooldown() returns False.
+        Idempotent: safe to call repeatedly. Called from size_trade() before
+        the cooldown gate is evaluated.
+        """
+        if self._cooldown_until is not None and time.time() >= self._cooldown_until:
             self._cooldown_until = None
-            return False
-        return True
 
     def cooldown_remaining_s(self) -> float:
-        """Seconds remaining in cooldown, or 0."""
-        if not self.in_cooldown():
+        """Seconds remaining in cooldown, or 0. Ticks expiry first."""
+        self.tick_cooldown()
+        if not self.is_in_cooldown():
             return 0
         return max(0, self._cooldown_until - time.time())
 
@@ -129,8 +143,9 @@ class SimpleSizer:
         """
         cfg = self.config
 
-        # Gate 1: cooldown
-        if self.in_cooldown():
+        # Gate 1: cooldown — tick first to clear expired state, then query
+        self.tick_cooldown()
+        if self.is_in_cooldown():
             return {
                 "take_trade": False,
                 "contracts": 0,
