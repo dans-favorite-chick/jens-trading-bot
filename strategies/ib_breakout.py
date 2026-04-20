@@ -187,6 +187,19 @@ class IBBreakout(BaseStrategy):
             return None
 
         stop_ticks = max(4, int(stop_distance / TICK_SIZE))
+
+        # Fix 8 (2026-04-20): NQ research ceiling guard. Structural stop from
+        # opposite IB boundary can produce 80-320t stops on normal-to-high vol
+        # days. Skip the signal rather than trade with an over-ceiling stop.
+        max_stop = self.config.get("max_stop_ticks", 120)
+        if stop_ticks > max_stop:
+            logger.info(
+                f"[EVAL] {self.name}: SKIP "
+                f"stop_too_wide ({stop_ticks}t > {max_stop}t max) "
+                f"— IB too wide for current risk tier"
+            )
+            return None
+
         target_distance = abs(target_price - price)
         target_rr = target_distance / stop_distance if stop_distance > 0 else 1.5
 

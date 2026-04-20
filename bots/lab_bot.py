@@ -69,8 +69,9 @@ LAB_STRATEGY_OVERRIDES = {
         "stop_multiplier": 1.5,         # Fallback only — ATR stop runs if ATR_5m available
         "target_rr": 5.0,              # Raised from 1.5 — spring setups can run 20-50pts
         "atr_stop_multiplier": 1.1,
-        "max_stop_ticks": 40,
-        "min_stop_ticks": 8,
+        # NQ research clamps aligned with Fix 7 main config (2026-04-20)
+        "max_stop_ticks": 120,
+        "min_stop_ticks": 40,
     },
     "vwap_pullback": {
         "min_confluence": 0.0,
@@ -96,6 +97,7 @@ LAB_STRATEGY_OVERRIDES = {
         "target_rr": 5.0,            # IB breakouts naturally run 50-200pts — let them
         "ib_minutes": 15,
         "max_ib_width_atr_mult": 5.0,
+        "max_stop_ticks": 120,       # Fix 8 ceiling guard — skip signal if structural stop > 120t
         "all_regimes": True,
         "require_cvd_confirm": False,
     },

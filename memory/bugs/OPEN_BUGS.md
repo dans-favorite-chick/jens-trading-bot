@@ -44,8 +44,40 @@ be stop-hunted by NQ noise similarly to what Fix 6 addressed.
 anchor, likely correct), compression_breakout (ATR-pure, verify
 multiplier), ib_breakout (structural, verify buffer), orb
 (structural, verify buffer), noise_area (structural, verify buffer).
-**Fix owner**: TBD. Schedule after 50 lab trades per Fix 6 strategy
-to get empirical baseline.
+**Resolution**: 2026-04-20 Fix 7 + Fix 8.
+- compression_breakout + spring_setup clamps raised 8/40 → 40/120
+  (Fix 7, commit 645b097).
+- ib_breakout gains max_stop_ticks=120 skip-guard mirroring ORB
+  pattern (Fix 8, commit 7e0dab1).
+- orb already compliant (min_or_size_points=10 floor,
+  max_stop_points=25pt/100t ceiling skip).
+- noise_area uses managed exit; stop_ticks inflation tracked
+  separately as B21.
+**Status**: RESOLVED
+
+## B20 — ib_breakout structural stop exceeds NQ ceiling
+**Discovered**: 2026-04-20 during Fix 6 follow-up audit
+**Severity**: Medium
+**Root cause**: Structural stop at opposite IB boundary produced
+80-320 tick stops on normal-to-high vol days.
+**Resolution**: 2026-04-20 Fix 8. Added max_stop_ticks=120
+skip-signal guard. Commit: 7e0dab1.
+**Status**: RESOLVED
+
+## B21 — noise_area stop_ticks inflates risk manager position sizing
+**Discovered**: 2026-04-20 during Fix 6 follow-up audit
+**Severity**: Low-Medium
+**Root cause**: noise_area reports 150-600 tick "stops" to risk
+manager, but actual strategy uses managed-exit (momentum/
+reversal/EoD), not stop orders. Inflated stop_ticks feeds
+into position_manager sizing logic and may reduce position
+sizes inappropriately.
+**Impact**: Positions may be sized smaller than intended on
+noise_area trades.
+**Fix owner**: TBD. Architectural — not a parameter tweak.
+Needs investigation of whether position sizing should read
+"disaster stop" or a different risk reference.
+**Status**: OPEN
 
 ## B19 — simple_sizing.py stale default
 **Discovered**: 2026-04-20 during Task D / daily cap audit
