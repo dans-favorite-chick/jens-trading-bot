@@ -36,13 +36,22 @@ _oif_counter = int(time.time() * 1000) % 1000000  # Start from timestamp to avoi
 def _build_entry_line(side: str, qty: int, order_type: str,
                       limit_price: float, stop_price: float,
                       oco_id: str = "") -> str:
-    """side: BUY or SELL. Returns OIF line (no newline)."""
+    """side: BUY or SELL. Returns OIF line (no newline).
+
+    B3 compliance: stop-loss orders route via _build_stop_line() and emit
+    STOPMARKET. The "STOP" branch here is for stop-limit entries (a
+    distinct order type — requires both stop trigger + limit fill), kept
+    for backwards-compat on callers that historically passed "STOP".
+    """
     ot = order_type.upper()
     if ot == "LIMIT":
         lp, sp = f"{limit_price:.2f}", "0"
     elif ot == "STOPMARKET":
+        # Triggers at stop_price, fills at market — correct form per NT8 ATI.
         lp, sp = "0", f"{stop_price:.2f}"
-    elif ot == "STOP":  # stop-limit; backwards compat
+    elif ot == "STOP":
+        # Stop-limit (NOT stop-loss). Triggers at stop_price, fills at limit_price.
+        # For stop-LOSS protection use _build_stop_line() which emits STOPMARKET.
         lp, sp = f"{limit_price:.2f}", f"{stop_price:.2f}"
     else:  # MARKET
         lp, sp = "0", "0"
@@ -51,7 +60,10 @@ def _build_entry_line(side: str, qty: int, order_type: str,
 
 def _build_stop_line(side: str, qty: int, stop_price: float,
                      oco_id: str = "", tif: str = "GTC") -> str:
-    """Universal stop = STOPMARKET. side = SELL (protect LONG) or BUY (protect SHORT)."""
+    """Universal stop-loss = STOPMARKET. B3 fix: NT8 rejects bare "STOP" for
+    stop-loss orders; "STOPMARKET" is the ATI-accepted form that triggers at
+    stop_price and fills at market. side = SELL (protect LONG) or BUY (protect SHORT).
+    """
     return f"PLACE;{ACCOUNT};{INSTRUMENT};{side};{qty};STOPMARKET;0;{stop_price:.2f};{tif};{oco_id};;;"
 
 
@@ -59,6 +71,69 @@ def _build_target_line(side: str, qty: int, target_price: float,
                        oco_id: str = "", tif: str = "GTC") -> str:
     """Universal target = LIMIT."""
     return f"PLACE;{ACCOUNT};{INSTRUMENT};{side};{qty};LIMIT;{target_price:.2f};0;{tif};{oco_id};;;"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# CANCEL builders — B4 (account-scoped) + B5 (single-order)
+# ═══════════════════════════════════════════════════════════════════════
+
+def cancel_all_orders_line(account: str = None) -> str:
+    """Build account-scoped CANCELALLORDERS OIF line (B2 + B4 fix).
+
+    NT8 ATI spec: CANCELALLORDERS has 13 semicolons (was 15 in the legacy
+    broken form that included INSTRUMENT — which both over-scoped and
+    rejected at parse time). The account field MUST be populated; the
+    no-args form `CANCELALLORDERS;;;;;;;;;;;;;` cancels across EVERY
+    NT8-connected account (including live brokerage accounts — verified
+    2026-04-19 in test_05).
+
+    Args:
+        account: Target account name. Defaults to config.settings.ACCOUNT
+                 (the bot's currently-connected account). NEVER permitted
+                 to be empty or None — will raise ValueError.
+
+    Returns:
+        OIF line like `CANCELALLORDERS;Sim101;;;;;;;;;;;;` (13 semicolons).
+
+    Raises:
+        ValueError: if `account` resolves to empty string.
+    """
+    if account is None:
+        account = ACCOUNT
+    if not account or not str(account).strip():
+        raise ValueError(
+            "cancel_all_orders_line requires a non-empty account. "
+            "The no-args form cancels across ALL NT8-connected accounts "
+            "(including live brokerage) and is never an acceptable default."
+        )
+    # 13 semicolons total: 1 after CANCELALLORDERS + 12 after {account}
+    return f"CANCELALLORDERS;{account};;;;;;;;;;;;"
+
+
+def cancel_single_order_line(order_id: str) -> str:
+    """Build single-order CANCEL OIF line (B5 fix).
+
+    NT8 ATI spec: `CANCEL;;;;;;;;;;<ORDER ID>;;<[STRATEGY ID]>` — ORDER ID
+    at field position 10 (see Phase 1 verification findings). Returns the
+    12-field form with ORDER ID populated and STRATEGY ID empty.
+
+    Example: `cancel_single_order_line("oif_abc123")` →
+             `"CANCEL;;;;;;;;;;oif_abc123;;"`
+
+    Args:
+        order_id: The ORDER ID of the order to cancel. Typically the
+                  `trade_id` used as field 10 in the original PLACE OIF.
+
+    Returns:
+        OIF line ready to be written to NT8's incoming folder.
+
+    Raises:
+        ValueError: if `order_id` is empty — blank order_id would match
+                    all NT8-tracked orders, same failure mode as B4.
+    """
+    if not order_id or not str(order_id).strip():
+        raise ValueError("cancel_single_order_line requires a non-empty order_id")
+    return f"CANCEL;;;;;;;;;;{order_id};;"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -258,7 +333,16 @@ def write_oif(action: str, qty: int = 1, stop_price: float = None,
         if stop_price:
             cmds.append(_build_stop_line("BUY", qty, stop_price) + "\n")
     elif action == "CANCEL_ALL":
-        cmds.append(f"CANCELALLORDERS;{ACCOUNT};{INSTRUMENT};;;;;;;;;;;;\n")
+        # B2 + B4 fix: 13-semi account-scoped CANCELALLORDERS (was 15-semi
+        # CANCELALLORDERS;{ACCOUNT};{INSTRUMENT};;;;;;;;;;;; which both
+        # exceeded the spec and cross-accounted when parsed).
+        cmds.append(cancel_all_orders_line() + "\n")
+    elif action == "CANCEL":
+        # B5: single-order cancel. trade_id doubles as ORDER ID here.
+        if not trade_id:
+            logger.error("[OIF] CANCEL action requires trade_id (maps to ORDER ID)")
+            return []
+        cmds.append(cancel_single_order_line(trade_id) + "\n")
     else:
         logger.warning(f"Unknown OIF action: {action}")
         return []
