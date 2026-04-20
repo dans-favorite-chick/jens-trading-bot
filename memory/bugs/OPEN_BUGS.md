@@ -26,10 +26,11 @@ _state["lab"]["trades"] never refreshed despite 40 fresh trades in
 trade_memory.json. Dashboard /api/trades returned 07:45 data as of
 09:07 (1h22m stale).
 **Impact**: Dashboard P&L panel shows stale data after any reboot.
-**Related**: Possibly connected to TL1 (dashboard datetime
-serialize) which has a fix on fix/tl1-dashboard-datetime-serialize
-branch — not yet merged.
-**Fix owner**: TBD. Not scheduled.
+**Resolution**: 2026-04-20. Merged fix/tl1-dashboard-datetime-serialize
+(base_bot.py + tests/test_dashboard_serialize.py). Datetime fields
+now serialize to ISO strings; state-push warnings eliminated.
+Merge commit: f4647b1.
+**Status**: RESOLVED
 
 ## B18 — Stop placement audit: remaining fixed-tick strategies
 **Discovered**: 2026-04-20 during Fix 6 research
@@ -88,3 +89,18 @@ line 33 default is dead code.
 **Impact**: None in production, but misleading if someone reads
 the module and assumes 15.0 applies.
 **Fix owner**: TBD. Cleanup task.
+
+## B22 — EVAL debug logs invisible at lab INFO level
+**Discovered**: 2026-04-20 during Phase 5 restart R5 observation
+**Severity**: Low-Medium
+**Root cause**: Fix 5 logs [EVAL] BLOCKED/SKIP/NO_SIGNAL events at
+`logger.debug()` level. Lab bot ran at logging.INFO, so those
+reject-reason events never surfaced in the log — defeating Fix 5's
+observability goal for lab data collection. Only SIGNAL events
+(logger.info) were visible.
+**Impact**: Could not see *why* strategies passed on setups in lab
+— only that they did or didn't fire.
+**Resolution**: 2026-04-20. Lab bot log level raised INFO → DEBUG.
+Prod stays INFO (production logs stay quiet). Commit e22a4a1,
+merge fbe215d.
+**Status**: RESOLVED
