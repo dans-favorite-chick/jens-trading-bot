@@ -25,11 +25,19 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from enum import Enum
 
 logger = logging.getLogger("MenthorQGamma")
+
+
+# ─── Constants (Phase 5 moves these to config/settings.py) ──────────
+
+TICK_SIZE = 0.25  # MNQ
+HVL_TRANSITION_BUFFER_TICKS = 8
+WALL_PROXIMITY_BUFFER_TICKS = 8
+NO_TRADE_INTO_WALL_BUFFER_TICKS = 12
 
 
 # ─── Data model ──────────────────────────────────────────────────────
@@ -364,3 +372,245 @@ def load_latest_gamma(
         return None
 
     return load_gamma_for_date(data_dir, target_date)
+
+
+# ─── Phase 3: regime classification + decision functions ────────────
+
+# Wall-set attribute names, in preference order (0DTE preferred).
+_LONG_WALL_ATTRS = (
+    "call_resistance_0dte",
+    "gamma_wall_0dte",
+    "call_resistance",
+    "one_d_max",
+)
+_SHORT_WALL_ATTRS = (
+    "put_support_0dte",
+    "put_support",
+    "one_d_min",
+)
+# Preferred protective-stop walls by direction (0DTE first).
+_LONG_STOP_ATTRS = ("put_support_0dte", "put_support")
+_SHORT_STOP_ATTRS = ("call_resistance_0dte", "call_resistance")
+
+
+def _pts_to_ticks(points: float) -> float:
+    return points / TICK_SIZE
+
+
+def _effective_hvl(levels: GammaLevels) -> Optional[float]:
+    """0DTE HVL preferred; monthly HVL fallback."""
+    if levels.hvl_0dte is not None:
+        return levels.hvl_0dte
+    return levels.hvl
+
+
+def classify_regime(
+    price: float, levels: Optional[GammaLevels]
+) -> GammaRegime:
+    """
+    price >= hvl + buffer → POSITIVE_GAMMA (mean-revert bias)
+    price <= hvl - buffer → NEGATIVE_GAMMA (momentum bias)
+    else                  → TRANSITION_ZONE
+    No levels / no HVL    → UNKNOWN
+    """
+    if levels is None:
+        return GammaRegime.UNKNOWN
+    hvl = _effective_hvl(levels)
+    if hvl is None:
+        return GammaRegime.UNKNOWN
+
+    buffer_pts = HVL_TRANSITION_BUFFER_TICKS * TICK_SIZE
+    if price >= hvl + buffer_pts:
+        return GammaRegime.POSITIVE_GAMMA
+    if price <= hvl - buffer_pts:
+        return GammaRegime.NEGATIVE_GAMMA
+    return GammaRegime.TRANSITION_ZONE
+
+
+def distance_to_nearest_wall(
+    price: float, direction: str, levels: Optional[GammaLevels]
+) -> Tuple[str, float]:
+    """
+    Distance (in ticks) to the nearest wall the trade would approach.
+
+    LONG  → scans walls ABOVE price (resistance-family).
+    SHORT → scans walls BELOW price (support-family).
+
+    Returns (wall_attr_name, distance_in_ticks). When no opposing
+    wall exists in the correct direction, returns ("none", 9999).
+    """
+    if levels is None:
+        return ("none", 9999.0)
+
+    direction = direction.upper()
+    if direction == "LONG":
+        attrs = _LONG_WALL_ATTRS
+        above = True
+    elif direction == "SHORT":
+        attrs = _SHORT_WALL_ATTRS
+        above = False
+    else:
+        raise ValueError(f"direction must be LONG or SHORT, got {direction!r}")
+
+    best_name = "none"
+    best_ticks = 9999.0
+    for attr in attrs:
+        val = getattr(levels, attr, None)
+        if val is None:
+            continue
+        if above and val <= price:
+            continue
+        if not above and val >= price:
+            continue
+        ticks = _pts_to_ticks(abs(val - price))
+        if ticks < best_ticks:
+            best_ticks = ticks
+            best_name = attr
+
+    return (best_name, best_ticks)
+
+
+def is_entry_into_wall(
+    price: float, direction: str, levels: Optional[GammaLevels]
+) -> Optional[str]:
+    """
+    Entry filter. If the next opposing wall is within
+    NO_TRADE_INTO_WALL_BUFFER_TICKS of price, return its attr name
+    (caller logs + rejects). None means entry is safe.
+    """
+    if levels is None:
+        return None
+    name, ticks = distance_to_nearest_wall(price, direction, levels)
+    if name == "none":
+        return None
+    if ticks < NO_TRADE_INTO_WALL_BUFFER_TICKS:
+        return name
+    return None
+
+
+def natural_stop_for_entry(
+    direction: str,
+    entry_price: float,
+    levels: Optional[GammaLevels],
+    min_stop_ticks: int = 8,
+    max_stop_ticks: int = 40,
+) -> Optional[float]:
+    """
+    Stop just past the protective wall on the opposite side of entry.
+    LONG: 1 tick BELOW put_support_0dte (or put_support).
+    SHORT: 1 tick ABOVE call_resistance_0dte (or call_resistance).
+
+    Returns None if no protective wall sits within
+    [min_stop_ticks, max_stop_ticks] of entry.
+    """
+    if levels is None:
+        return None
+    direction = direction.upper()
+
+    if direction == "LONG":
+        attrs = _LONG_STOP_ATTRS
+        sign = -1  # stop below entry
+    elif direction == "SHORT":
+        attrs = _SHORT_STOP_ATTRS
+        sign = +1  # stop above entry
+    else:
+        raise ValueError(f"direction must be LONG or SHORT, got {direction!r}")
+
+    for attr in attrs:
+        wall = getattr(levels, attr, None)
+        if wall is None:
+            continue
+        # Wall must be on the correct side of entry.
+        if sign < 0 and wall >= entry_price:
+            continue
+        if sign > 0 and wall <= entry_price:
+            continue
+        stop = wall + sign * TICK_SIZE  # 1 tick past the wall
+        distance_ticks = _pts_to_ticks(abs(entry_price - stop))
+        if min_stop_ticks <= distance_ticks <= max_stop_ticks:
+            return stop
+    return None
+
+
+def find_level_clusters(
+    levels: Optional[GammaLevels], tolerance_ticks: int = 5
+) -> List[dict]:
+    """
+    Find clusters of levels within tolerance_ticks of each other.
+    Returns list sorted by cluster size descending; 2+ members →
+    conviction="HIGH", single → "LOW" (but singletons are excluded).
+    """
+    if levels is None:
+        return []
+
+    points: List[Tuple[str, float]] = []
+    for attr in (
+        "call_resistance", "put_support", "hvl",
+        "one_d_min", "one_d_max",
+        "call_resistance_0dte", "put_support_0dte", "hvl_0dte",
+        "gamma_wall_0dte",
+    ):
+        val = getattr(levels, attr, None)
+        if val is not None:
+            points.append((attr, float(val)))
+    for i, val in enumerate(levels.gex_levels, start=1):
+        points.append((f"gex_{i}", float(val)))
+    for i, val in enumerate(levels.blind_spots, start=1):
+        points.append((f"bl_{i}", float(val)))
+
+    if not points:
+        return []
+
+    points.sort(key=lambda x: x[1])
+    tolerance_pts = tolerance_ticks * TICK_SIZE
+
+    # Single-pass grouping: adjacent values within tolerance go in
+    # the same group (transitive — typical for narrow clusters).
+    groups: List[List[Tuple[str, float]]] = []
+    current: List[Tuple[str, float]] = [points[0]]
+    for name, val in points[1:]:
+        if val - current[-1][1] <= tolerance_pts:
+            current.append((name, val))
+        else:
+            groups.append(current)
+            current = [(name, val)]
+    groups.append(current)
+
+    clusters = []
+    for group in groups:
+        if len(group) < 2:
+            continue
+        vals = [v for _, v in group]
+        clusters.append({
+            "center": sum(vals) / len(vals),
+            "members": [name for name, _ in group],
+            "values": vals,
+            "conviction": "HIGH" if len(group) >= 2 else "LOW",
+        })
+    clusters.sort(key=lambda c: len(c["members"]), reverse=True)
+    return clusters
+
+
+def is_at_hvl_gravity(
+    price: float,
+    levels: Optional[GammaLevels],
+    buffer_ticks: int = 12,
+) -> bool:
+    """Within buffer_ticks of HVL (0DTE preferred) → positive-gamma pin."""
+    if levels is None:
+        return False
+    hvl = _effective_hvl(levels)
+    if hvl is None:
+        return False
+    return _pts_to_ticks(abs(price - hvl)) <= buffer_ticks
+
+
+def regime_multipliers(regime: GammaRegime) -> Dict[str, float]:
+    """Size / stop-width / target-RR multipliers per regime."""
+    if regime is GammaRegime.POSITIVE_GAMMA:
+        return {"size": 1.0, "stop": 0.8, "target_rr": 0.7}
+    if regime is GammaRegime.NEGATIVE_GAMMA:
+        return {"size": 1.0, "stop": 1.2, "target_rr": 1.3}
+    if regime is GammaRegime.TRANSITION_ZONE:
+        return {"size": 0.5, "stop": 1.0, "target_rr": 1.0}
+    return {"size": 1.0, "stop": 1.0, "target_rr": 1.0}
