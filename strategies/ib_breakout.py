@@ -11,8 +11,13 @@ REGIME-AWARE: Only trades during OPEN_MOMENTUM and MID_MORNING.
 """
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
 from strategies.base_strategy import BaseStrategy, Signal
 from config.settings import TICK_SIZE
+
+# Explicit ET zone — daily IB reset is anchored to the ET calendar day.
+_ET = ZoneInfo("America/New_York")
 from core.candlestick_patterns import CandlestickAnalyzer, get_pattern_confluence
 
 # Regime-specific overrides — only fire in morning windows
@@ -72,12 +77,12 @@ class IBBreakout(BaseStrategy):
         if price <= 0:
             return None
 
-        # Use last 1m bar timestamp to determine date
+        # Use last 1m bar timestamp to determine date (ET-anchored)
         last_bar = bars_1m[-1]
         try:
-            bar_dt = datetime.fromtimestamp(last_bar.end_time)
+            bar_dt = datetime.fromtimestamp(last_bar.end_time, tz=_ET)
         except (OSError, ValueError, TypeError):
-            bar_dt = datetime.now()
+            bar_dt = datetime.now(tz=_ET)
         today = bar_dt.strftime("%Y-%m-%d")
 
         if self._ib_date != today:

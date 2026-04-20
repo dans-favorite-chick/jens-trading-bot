@@ -359,6 +359,21 @@ class BaseBot:
             enriched = dict(config)
             enriched["is_prod_bot"] = is_prod
             strat = strategy_classes[name](enriched)
+
+            # Defensive: strategies that don't inherit BaseStrategy (e.g. v2
+            # rewrites emitting their own Signal class — bias_momentum_v2,
+            # vwap_pullback v2) won't have .validated / .params / .check_exit
+            # and can't be driven by the main loop. Skip them with a clear
+            # warning instead of crashing the whole bot on startup.
+            if not isinstance(strat, BaseStrategy):
+                logger.warning(
+                    f"[LOAD] Skipping '{name}' — class {type(strat).__name__} "
+                    f"does not inherit BaseStrategy (no .validated / canonical "
+                    f"Signal). Needs an adapter before promotion — see "
+                    f"memory/context/OPEN_QUESTIONS.md for the promotion gate."
+                )
+                continue
+
             self.strategies.append(strat)
 
             # Noise Area: seed sigma_open_table from data/sigma_open_table.json.
@@ -638,8 +653,12 @@ class BaseBot:
                                 _trail_stop(pos, price)
 
                         elif SCALE_OUT_ENABLED and not pos.scaled_out and pos.original_contracts >= 2:
-                            # Original multi-contract scale-out path (unchanged)
-                            if _should_scale_out(pos, price, SCALE_OUT_RR):
+                            # Original multi-contract scale-out path.
+                            # Per-signal override: ORB et al. can supply
+                            # Signal.scale_out_rr (stashed on Position) to
+                            # override the global (Zarattini ORB = 1.0R).
+                            _scale_rr = getattr(pos, "scale_out_rr", None) or SCALE_OUT_RR
+                            if _should_scale_out(pos, price, _scale_rr):
                                 await self._scale_out_trade(ws, price)
 
                     # ── Smart Exit: EMA extension + DOM reversal + candle wick ──
@@ -667,6 +686,51 @@ class BaseBot:
                             if smart["exit_signal"]:
                                 logger.info(f"[SMART EXIT:{_pos.trade_id}] {smart['reason']}")
                                 await self._exit_trade(ws, price, "ema_dom_exit")
+
+                    # ── Universal EoD flat hook ─────────────────────────────────
+                    # Any position whose Signal set eod_flat_time_et gets
+                    # auto-flattened when current ET time >= that value.
+                    # Single code path — works for ORB, Noise Area, and any
+                    # future strategy that opts in.
+                    if self.positions.position and getattr(self.positions.position, "eod_flat_time_et", None):
+                        try:
+                            from zoneinfo import ZoneInfo
+                            now_et = datetime.now(ZoneInfo("America/New_York"))
+                            eod_str = self.positions.position.eod_flat_time_et
+                            if now_et.strftime("%H:%M") >= eod_str:
+                                logger.info(
+                                    f"[EOD_FLAT:{self.positions.position.trade_id}] "
+                                    f"{now_et.strftime('%H:%M')} ET >= {eod_str} — closing"
+                                )
+                                await self._exit_trade(ws, price, "eod_flat_universal")
+                        except Exception as e:
+                            logger.debug(f"[EOD_FLAT] check error (non-blocking): {e}")
+
+                    # ── Chandelier trail update + exit ──────────────────────────
+                    # Strategies with exit_trigger starting "chandelier_trail"
+                    # get a trail-state update each bar; bracket stop stays
+                    # ALSO active as a disaster stop (whichever fires first).
+                    if (self.positions.position
+                            and getattr(self.positions.position, "trail_state", None) is not None
+                            and str(getattr(self.positions.position, "exit_trigger", "")).startswith("chandelier_trail")):
+                        try:
+                            _pos = self.positions.position
+                            _cfg = _pos.trail_config or {}
+                            _atr_key = f"atr_{_cfg.get('atr_timeframe', '5m')}"
+                            _atr = market.get(_atr_key, 0) or 0
+                            # Use the most recent completed 1m bar for high/low
+                            _bars = list(self.aggregator.bars_1m.completed)
+                            if _bars and _atr > 0:
+                                _last = _bars[-1]
+                                _pos.trail_state.update(_last.high, _last.low, _atr)
+                                if _pos.trail_state.should_exit(price):
+                                    logger.info(
+                                        f"[CHANDELIER:{_pos.trade_id}] price {price:.2f} "
+                                        f"violated trail {_pos.trail_state.current_trail:.2f} — exiting"
+                                    )
+                                    await self._exit_trade(ws, price, "chandelier_trail_hit")
+                        except Exception as e:
+                            logger.debug(f"[CHANDELIER] update error (non-blocking): {e}")
 
                     # Managed-exit hook — strategies with dynamic exits (Noise Area)
                     # get a chance to close the position on their own signal flip
@@ -2115,6 +2179,8 @@ class BaseBot:
             exit_trigger=getattr(signal, "exit_trigger", None),
             eod_flat_time_et=getattr(signal, "eod_flat_time_et", None),
             metadata=dict(getattr(signal, "metadata", {}) or {}),
+            scale_out_rr=getattr(signal, "scale_out_rr", None),
+            trail_config=getattr(signal, "trail_config", None),
         )
 
         # Reset stall detector for fresh rider tracking on this trade

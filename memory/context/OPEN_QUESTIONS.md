@@ -27,26 +27,72 @@ User chose "informed generalist across 7 strategies" in earlier session. April 2
 ## 🟡 Deferred from roadmap v4 sprint (2026-04-19)
 
 Items consciously skipped / simplified during the Apr 19 6-day condensed sprint.
-All within the 4%-deviation budget — flagged here so they don't get forgotten.
+Updated 2026-04-19 after Option B ORB Chandelier implementation. All within the
+4%-deviation budget — flagged here so they don't get forgotten.
 
-- **bias_momentum_v2 adapter** — `strategies/bias_momentum_v2.py` emits its own
-  `BiasMomentumV2Signal` dataclass rather than the canonical `Signal`. Per-strategy
-  entry_type wiring couldn't apply. Not in prod (`bias_momentum` is). Needs an
-  adapter layer before v2 can replace v1. Low priority — v1 is shipping.
-- **ORB chandelier trail on runner** — roadmap v4 matrix says "Partial 1R + trail".
-  Phoenix's global `SCALE_OUT_RR=1.5` applies (exits partial at 1.5R, not 1.0R).
-  Within tolerance. Revisit if ORB shows pattern-specific trade-quality drag.
-- **Finnhub blackout window** — roadmap says "±2 min Tier-1 blackout"; existing
-  `core/calendar_risk.py` uses ±5 min (30min reduce / 5min block / 15min widen).
-  Functionally identical lock-out; not narrowing to ±2 min.
-- **Unused warmup artifacts** — after switching to `tools/load_sigma_open_warmup.py`
-  + `data/sigma_open_table.json` (27 real MNQ 1m sessions), these became
-  unreferenced: `tools/warmup_noise_area.py`, `tools/backfill_noise_area.py`,
-  `memory/noise_area_warmup.json`. Kept in tree as fallback / reference; delete
-  when confident the main path is stable.
-- **ORB missing v3 doc** — v3 roadmap referenced in v4 was missing. ORB built
-  from the PARAMS block + matrix + `strategies/ib_breakout.py` precedent. Review
-  after first 10 live trades for spec drift.
+1. **Non-conforming strategy rewrites (v2 adapter debt)** — multiple strategy
+   files have been rewritten as standalone classes that no longer inherit
+   `BaseStrategy` and emit their own Signal shape:
+   - `strategies/bias_momentum_v2.py` → `BiasMomentumV2Signal`
+   - `strategies/vwap_pullback.py` → `VWAPPullbackSignal`
+     (discovered 2026-04-19 when lab bot crashed on startup with
+     `AttributeError: 'VWAPPullback' object has no attribute 'validated'`).
+
+   The base_bot `load_strategies()` loader now **defensively skips** any class
+   that doesn't inherit `BaseStrategy` with a WARN log — the lab bot stays up
+   with the conforming strategies rather than crashing on startup. Any skipped
+   strategy is silently out of service until an adapter is written.
+
+   **Promotion Gate (MUST READ before any v2 prod promotion):**
+   Before any of these v2 rewrites replaces its v1 in prod — or is re-enabled
+   in lab — a Signal adapter must be written that translates the v2 Signal
+   shape to the Phoenix canonical `Signal` (including `entry_type`, `stop_type`,
+   `target_type`, `entry_price`, `stop_price`, `target_price`, `scale_out_rr`,
+   `exit_trigger`, `trail_config`, `eod_flat_time_et`, `metadata`). Without
+   this, entry_type wiring silently breaks, bracket orders won't receive their
+   correct order types, and managed exits (Chandelier, Noise Area, universal
+   EoD) will never fire for these strategies' trades.
+   **Do not promote these without resolving this item.**
+
+2. *(Removed 2026-04-19 — resolved by Option B Chandelier implementation.)*
+   ORB now runs the spec-accurate path: partial 50% at 1.0R (via Signal.scale_out_rr)
+   + Chandelier 3×ATR trail on runner (`core/chandelier_exit.py`) + universal EoD
+   flat hook. Verified by `tests/test_orb_chandelier.py` (18 tests).
+
+3. **Finnhub blackout window** — roadmap says "±2 min Tier-1 blackout"; existing
+   `core/calendar_risk.py` uses ±5 min (30min reduce / 5min block / 15min widen).
+   Functionally identical lock-out; not narrowing to ±2 min.
+
+   **Decision (2026-04-19):** Keep ±5min (wider is strictly safer). Revisit only
+   if trade log shows a pattern of would-have-won trades blocked by the wider
+   window. No action required pre-Monday.
+
+4. **Unused warmup artifacts** — after switching to `tools/load_sigma_open_warmup.py`
+   + `data/sigma_open_table.json` (27 real MNQ 1m sessions), these became
+   unreferenced: `tools/warmup_noise_area.py`, `tools/backfill_noise_area.py`,
+   `memory/noise_area_warmup.json`. Moved to `archive/pre_load_sigma_open/`
+   2026-04-19. Safe to delete after 2 weeks of stable operation.
+
+5. **ORB missing v3 doc** — v3 roadmap referenced in v4 was missing. ORB built
+   from the PARAMS block + v4 matrix + `strategies/ib_breakout.py` precedent.
+   Audit against paper after first 10 live trades for spec drift.
+
+6. **ORB clock anchor** — ORB uses "first 15 bars received" not a literal 9:30 ET
+   clock. Phoenix's session-window gate covers this indirectly, but ORB itself has
+   no clock guard. Audit if bot restart behavior ever violates this assumption.
+
+7. **ORB stop cap behavior** — Spec says 25pt stop is a CLAMP (clamp stop distance
+   to 25pt max, still take trade). Phoenix REJECTS the trade if stop > 25pt
+   (`orb.py:148-149`). More conservative but loses trades the paper would take on
+   gap/high-vol days. Revisit after 10+ live trades to see if we're missing
+   meaningful setups.
+
+### Promotion runbook — add to any future runbook file
+
+Before promoting ANY strategy from lab (`validated: False`) to prod
+(`validated: True`), review `memory/context/OPEN_QUESTIONS.md` and resolve any
+items tagged to that strategy. The bias_momentum_v2 gate (item #1 above) is the
+canonical example.
 
 ## 🟢 Deferred to later weeks / months
 

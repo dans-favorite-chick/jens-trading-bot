@@ -40,8 +40,16 @@ class Position:
 
     # ── Managed-exit state (Noise Area, strategies with dynamic exits) ──
     exit_trigger: Optional[str] = None   # e.g. "price_returns_inside_noise_area"
+                                         #      "chandelier_trail_3atr"
     eod_flat_time_et: Optional[str] = None
     metadata: dict = field(default_factory=dict)  # Strategy-specific (UB/LB for Noise Area)
+
+    # ── Per-signal scale-out override (ORB=1.0R per Zarattini 2024) ─────
+    scale_out_rr: Optional[float] = None
+
+    # ── Chandelier trail config + live state ────────────────────────────
+    trail_config: Optional[dict] = None           # {"atr_mult": 3.0, ...}
+    trail_state: object = None                    # ChandelierTrailState instance
 
 
 class PositionManager:
@@ -65,11 +73,25 @@ class PositionManager:
                       contracts: int, stop_price: float, target_price: float,
                       strategy: str, reason: str, market_snapshot: dict = None,
                       exit_trigger: str = None, eod_flat_time_et: str = None,
-                      metadata: dict = None):
+                      metadata: dict = None,
+                      scale_out_rr: float = None, trail_config: dict = None):
         """Open a new position. Raises if already in a position."""
         if self.position is not None:
             logger.warning(f"[{trade_id}] Cannot open position — already in trade")
             return False
+
+        # Lazy-instantiate the Chandelier trail if the Signal asked for one.
+        trail_state = None
+        if exit_trigger and exit_trigger.startswith("chandelier_trail") and trail_config:
+            try:
+                from core.chandelier_exit import ChandelierTrailState
+                trail_state = ChandelierTrailState(
+                    direction=direction.upper(),
+                    entry_price=entry_price,
+                    atr_mult=float(trail_config.get("atr_mult", 3.0)),
+                )
+            except Exception as e:
+                logger.warning(f"[{trade_id}] Chandelier trail init failed (non-blocking): {e}")
 
         self.position = Position(
             trade_id=trade_id,
@@ -86,6 +108,9 @@ class PositionManager:
             exit_trigger=exit_trigger,
             eod_flat_time_et=eod_flat_time_et,
             metadata=metadata or {},
+            scale_out_rr=scale_out_rr,
+            trail_config=trail_config,
+            trail_state=trail_state,
         )
         logger.info(f"[OPEN:{trade_id}] {direction} {contracts}x @ {entry_price} "
                      f"SL={stop_price} TP={target_price} strat={strategy}")

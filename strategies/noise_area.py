@@ -23,15 +23,16 @@ MNQ adaptations from published SPY spec:
 - Prod mode uses 10:55 ET EoD flat; lab mode uses 15:55 ET (full-day Zarattini)
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from strategies.base_strategy import BaseStrategy, Signal
 from config.settings import TICK_SIZE
 
 
-# US Central → Eastern: ET = CT + 1 hour (standard, and during DST the offset
-# stays 1 hour because both observe DST together).
-_CT_TO_ET_HOURS = 1
+# Explicit ET zone — DST-correct via zoneinfo. Prior versions used a
+# hardcoded CT→ET offset which silently broke on UTC-hosted VPS instances.
+_ET = ZoneInfo("America/New_York")
 
 
 class NoiseAreaMomentum(BaseStrategy):
@@ -64,7 +65,7 @@ class NoiseAreaMomentum(BaseStrategy):
         """Called once per completed 1m bar. Records |close/open - 1|."""
         if today_open_price <= 0:
             return
-        bar_dt_et = datetime.fromtimestamp(bar.end_time) + timedelta(hours=_CT_TO_ET_HOURS)
+        bar_dt_et = datetime.fromtimestamp(bar.end_time, tz=_ET)
         minute_of_day = self._minute_of_day(bar_dt_et)
         if minute_of_day < 0 or minute_of_day > 390:  # 6.5h session = 390 min
             return
@@ -110,13 +111,12 @@ class NoiseAreaMomentum(BaseStrategy):
             "10:55" if self.is_prod_bot else "15:55",
         )
 
-        # ── Resolve current time (bars are CT; convert to ET) ────────
+        # ── Resolve current time (bars hold Unix epoch; interpret in ET) ─
         last_bar = bars_1m[-1]
         try:
-            bar_dt_ct = datetime.fromtimestamp(last_bar.end_time)
+            bar_dt_et = datetime.fromtimestamp(last_bar.end_time, tz=_ET)
         except (OSError, ValueError, TypeError):
             return None
-        bar_dt_et = bar_dt_ct + timedelta(hours=_CT_TO_ET_HOURS)
         today_str = bar_dt_et.strftime("%Y-%m-%d")
 
         # Daily reset (clears today_open_price for fresh detection)
@@ -128,7 +128,7 @@ class NoiseAreaMomentum(BaseStrategy):
         # ── Determine today's open (first bar at/after 9:30 ET) ──────
         if self._today_open_price is None:
             for b in bars_1m:
-                b_dt_et = datetime.fromtimestamp(b.end_time) + timedelta(hours=_CT_TO_ET_HOURS)
+                b_dt_et = datetime.fromtimestamp(b.end_time, tz=_ET)
                 if b_dt_et.strftime("%Y-%m-%d") != today_str:
                     continue
                 if self._minute_of_day(b_dt_et) >= 0:
@@ -265,7 +265,7 @@ class NoiseAreaMomentum(BaseStrategy):
             return (False, "")
         last_bar = bars_1m[-1]
         try:
-            bar_dt_et = datetime.fromtimestamp(last_bar.end_time) + timedelta(hours=_CT_TO_ET_HOURS)
+            bar_dt_et = datetime.fromtimestamp(last_bar.end_time, tz=_ET)
         except (OSError, ValueError, TypeError):
             return (False, "")
 

@@ -20,9 +20,15 @@ Mechanics:
 """
 
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from strategies.base_strategy import BaseStrategy, Signal
 from config.settings import TICK_SIZE
+
+# Explicit ET zone — session boundaries + entry cutoff are clock-anchored
+# to the cash-equity day. Using zoneinfo means bots can run on any host TZ
+# (including UTC-hosted cloud VMs) without drift.
+_ET = ZoneInfo("America/New_York")
 
 
 class OpeningRangeBreakout(BaseStrategy):
@@ -71,12 +77,12 @@ class OpeningRangeBreakout(BaseStrategy):
         stop_buffer_ticks = int(self.config.get("stop_buffer_ticks", 2))
         target_rr = float(self.config.get("target_rr", 2.0))
 
-        # ── Detect date, reset daily ─────────────────────────────────
+        # ── Detect date, reset daily (anchored to ET calendar) ───────
         last_bar = bars_1m[-1]
         try:
-            bar_dt = datetime.fromtimestamp(last_bar.end_time)
+            bar_dt = datetime.fromtimestamp(last_bar.end_time, tz=_ET)
         except (OSError, ValueError, TypeError):
-            bar_dt = datetime.now()
+            bar_dt = datetime.now(tz=_ET)
         today = bar_dt.strftime("%Y-%m-%d")
         if self._or_date != today:
             self._reset_daily(today)
@@ -109,7 +115,7 @@ class OpeningRangeBreakout(BaseStrategy):
         # ── Step 3: Check entry window cutoff ───────────────────────
         # Session start = first OR bar start. Cutoff = start + max_entry_delay.
         try:
-            session_start = datetime.fromtimestamp(self._or_bars_1m[0].start_time)
+            session_start = datetime.fromtimestamp(self._or_bars_1m[0].start_time, tz=_ET)
             minutes_since_open = (bar_dt - session_start).total_seconds() / 60
             if minutes_since_open > max_entry_delay_min:
                 return None  # Missed the window — no new OR trades
@@ -195,6 +201,11 @@ class OpeningRangeBreakout(BaseStrategy):
             stop_price=stop_price,
             target_price=target_price,
             eod_flat_time_et=eod_time,
+            # Zarattini 2024 spec: partial 50% at 1.0R, remainder rides
+            # with a Chandelier 3×ATR(14) trail on 5m bars.
+            scale_out_rr=1.0,
+            exit_trigger="chandelier_trail_3atr",
+            trail_config={"atr_mult": 3.0, "atr_period": 14, "atr_timeframe": "5m"},
             metadata={
                 "or_high": self._or_high,
                 "or_low": self._or_low,

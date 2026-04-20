@@ -41,7 +41,17 @@ class Signal:
     # When set, base_bot calls strategy.check_exit() each bar instead of
     # relying solely on bracketed stop/target.
     exit_trigger: Optional[str] = None   # e.g. "price_returns_inside_noise_area"
+                                         #      "chandelier_trail_3atr" (ORB)
     eod_flat_time_et: Optional[str] = None  # e.g. "15:55" or "10:55"
+
+    # ─── Per-signal scale-out override ─────────────────────────────────
+    # Strategies with a research-backed partial-exit multiple that
+    # differs from the global config.SCALE_OUT_RR. None = use global.
+    scale_out_rr: Optional[float] = None   # e.g. 1.0 for Zarattini ORB
+
+    # ─── Chandelier trail parameters (when exit_trigger starts with "chandelier_trail") ──
+    # {"atr_mult": 3.0, "atr_period": 14, "atr_timeframe": "5m"}
+    trail_config: Optional[dict] = None
 
     # ─── Strategy-specific diagnostics (UB/LB/vwap/sigma_open for Noise Area, OR hi/lo for ORB) ──
     metadata: dict = field(default_factory=dict)
@@ -65,6 +75,8 @@ class Signal:
             "target_price": self.target_price,
             "exit_trigger": self.exit_trigger,
             "eod_flat_time_et": self.eod_flat_time_et,
+            "scale_out_rr": self.scale_out_rr,
+            "trail_config": self.trail_config,
             "metadata": self.metadata,
         }
 

@@ -160,6 +160,9 @@ ATR_STOP_MAX_TICKS   = 40         # Ceiling: never more than 40t ($20 risk/contr
 # On normal days: use fixed target for all contracts (no scale-out).
 SCALE_OUT_ENABLED = True          # Enable partial exit at first target
 SCALE_OUT_RR = 1.5                # Exit contract 1 when this R:R is reached
+                                  # Per-signal override: strategies can set
+                                  # Signal.scale_out_rr to a research-backed
+                                  # multiple (e.g. ORB=1.0 per Zarattini 2024).
 TREND_RIDER_ENABLED = True        # Hold remaining contract until trend stalls
 TREND_RIDER_MIN_SCORE = 4         # Only ride trend when daily momentum score >= N
                                   # Score 4 = DEVELOPING, Score 5 = INSTITUTIONAL

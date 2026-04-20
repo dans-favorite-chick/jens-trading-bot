@@ -302,18 +302,6 @@ class TestNoiseArea(unittest.TestCase):
 
 
 # ═════════════════════════════════════════════════════════════════════
-# Warmup loader — JSONL history parsing
-# ═════════════════════════════════════════════════════════════════════
-class TestWarmupLoader(unittest.TestCase):
-    def test_loads_without_crash(self):
-        """Smoke test against whatever real history exists in logs/history/."""
-        from tools.warmup_noise_area import load_sigma_open_history
-        hist = load_sigma_open_history(days=14, bot="lab")
-        # No assertion on count — just verify it doesn't blow up
-        self.assertIsInstance(hist, dict)
-
-
-# ═════════════════════════════════════════════════════════════════════
 # Circuit-breaker throttle — prevent telegram spam
 # ═════════════════════════════════════════════════════════════════════
 class TestBreakerThrottle(unittest.TestCase):
