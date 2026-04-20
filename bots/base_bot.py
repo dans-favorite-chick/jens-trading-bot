@@ -14,7 +14,7 @@ import json
 import logging
 import time
 import urllib.request
-from datetime import datetime
+from datetime import datetime, date
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -169,6 +169,32 @@ def _trail_stop(pos, price: float):
     elif pos.direction == "SHORT" and mid < pos.stop_price:
         pos.stop_price = round(mid, 2)
         logger.info(f"[TRAIL:{pos.trade_id}] Stop trailed to {pos.stop_price:.2f} (mid)")
+
+
+# ── Dashboard push JSON default (BUG-TL1) ────────────────────────────────
+def _json_default_safe(obj):
+    """
+    json.dumps default= handler — called only for non-JSON-serializable values.
+
+    Historically the dashboard-push path raised "Object of type datetime is
+    not JSON serializable" whenever a `to_dict()` producer leaked a raw
+    datetime or date into the snapshot. This helper coerces those at the
+    push boundary so producer code doesn't have to hunt-and-ISO-encode
+    every field path. Any other exotic type falls back to str() so we
+    never re-raise into the dashboard loop.
+    """
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if hasattr(obj, "isoformat") and callable(obj.isoformat):
+        # Covers pandas.Timestamp, time, and similar date/time-like objects.
+        try:
+            return obj.isoformat()
+        except Exception:
+            pass
+    try:
+        return str(obj)
+    except Exception:
+        return f"<unserializable {type(obj).__name__}>"
 
 
 class BaseBot:
@@ -439,8 +465,10 @@ class BaseBot:
             try:
                 if _use_aiohttp:
                     async with aiohttp.ClientSession() as sess:
-                        # Push state
-                        state_json = json.dumps(self.to_dict())
+                        # Push state. default=_json_default_safe coerces
+                        # any leaked datetime/date in sub-component to_dict()
+                        # outputs to ISO strings (BUG-TL1 fix).
+                        state_json = json.dumps(self.to_dict(), default=_json_default_safe)
                         async with sess.post(url_state, data=state_json,
                                              headers={"Content-Type": "application/json"},
                                              timeout=aiohttp.ClientTimeout(total=2)):
@@ -458,7 +486,9 @@ class BaseBot:
                     # Fallback: run blocking urllib in thread pool so it doesn't
                     # starve the event loop
                     loop = asyncio.get_event_loop()
-                    state_json = json.dumps(self.to_dict()).encode("utf-8")
+                    state_json = json.dumps(
+                        self.to_dict(), default=_json_default_safe
+                    ).encode("utf-8")
                     req = urllib.request.Request(
                         url_state, data=state_json,
                         headers={"Content-Type": "application/json"},
