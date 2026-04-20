@@ -67,6 +67,8 @@ class CircuitBreakers:
         self._recent_slippages: deque[float] = deque(maxlen=20)
         self._recent_trade_outcomes: deque[str] = deque(maxlen=10)  # "WIN" | "LOSS"
         self._total_trades_lifetime: int = 0
+        # Telegram alert throttle: {breaker_type: last_alert_ts_epoch}
+        self._alert_throttle: dict[str, float] = {}
 
     def _is_rth(self, ts: datetime) -> bool:
         """Is timestamp during RTH (08:30-15:00 CDT)?"""
@@ -239,9 +241,11 @@ class CircuitBreakers:
             self.check_emergency_halt(),
         ]
         critical = [e for e in events if e and e.severity == "CRITICAL"]
+        was_halted = self.halted
         if critical:
             for ev in critical:
                 logger.error(f"[BREAKER {ev.breaker_type}] {ev.reason}")
+            self._alert_new_criticals(critical)
             if self.observe_mode:
                 logger.warning("[BREAKERS] OBSERVE MODE — not halting despite critical breakers")
                 return False
@@ -249,11 +253,49 @@ class CircuitBreakers:
             self.halted = True
             self.halted_at = datetime.now()
             self.halted_reason = ", ".join(e.breaker_type for e in critical)
+            if not was_halted:
+                self._alert_halt_transition(critical)
             return True
         # Just log warnings
         for ev in [e for e in events if e and e.severity == "WARN"]:
             logger.warning(f"[BREAKER {ev.breaker_type}] {ev.reason}")
         return self.halted  # stay halted if previously halted
+
+    def _alert_new_criticals(self, events: list) -> None:
+        """
+        Fire a Telegram alert for critical breakers, rate-limited to once per
+        (breaker_type, 1h window). Keeps observe-mode transparent without spam.
+        """
+        now_s = datetime.now().timestamp()
+        for ev in events:
+            last = self._alert_throttle.get(ev.breaker_type, 0)
+            if now_s - last < 3600:  # 1h dedup
+                continue
+            self._alert_throttle[ev.breaker_type] = now_s
+            mode_label = "OBSERVE" if self.observe_mode else "ACTIVE"
+            try:
+                import asyncio
+                from core import telegram_notifier as _tg
+                asyncio.ensure_future(_tg.notify_alert(
+                    f"BREAKER ({mode_label})",
+                    f"{ev.breaker_type}: {ev.reason}",
+                ))
+            except Exception as e:
+                logger.debug(f"[BREAKER TG] alert dispatch failed: {e}")
+
+    def _alert_halt_transition(self, events: list) -> None:
+        """One-shot Telegram alert the moment we flip from running → halted."""
+        try:
+            import asyncio
+            from core import telegram_notifier as _tg
+            types = ", ".join(e.breaker_type for e in events)
+            asyncio.ensure_future(_tg.notify_alert(
+                "BOT HALTED",
+                f"Trading halted. Triggers: {types}. Clear memory/.HALT or run "
+                f"circuit_breakers.acknowledge_halt() to resume.",
+            ))
+        except Exception as e:
+            logger.debug(f"[BREAKER TG] halt alert failed: {e}")
 
     def acknowledge_halt(self) -> None:
         """User has reviewed and cleared the halt."""

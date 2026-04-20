@@ -39,7 +39,13 @@ DEFAULT_CONFIG = {
 
 
 def _load_config() -> dict:
-    """Read small_account_config.yaml with fallback to defaults."""
+    """
+    Read small_account_config.yaml with fallback to defaults.
+
+    If small_account_mode.enabled == False, fall back to the full-account
+    limits from config/settings.py (MAX_LOSS_PER_TRADE, DAILY_LOSS_LIMIT).
+    The user flips this flag after loading >= $1500 into Sim101.
+    """
     if not CONFIG_PATH.exists():
         logger.debug(f"[SIZING] Config not found at {CONFIG_PATH}, using defaults")
         return DEFAULT_CONFIG.copy()
@@ -48,14 +54,37 @@ def _load_config() -> dict:
             import yaml
             with open(CONFIG_PATH, "r") as f:
                 full = yaml.safe_load(f) or {}
-            # Accept either flat dict or nested "small_account_mode" key
             cfg = full.get("small_account_mode", full)
-            # Merge with defaults for any missing keys
+            # Master switch — if explicitly disabled, use settings.py defaults
+            if cfg.get("enabled", True) is False:
+                try:
+                    from config.settings import (
+                        MAX_LOSS_PER_TRADE, DAILY_LOSS_LIMIT,
+                        RECOVERY_MODE_TRIGGER, MAX_TRADES_PER_SESSION,
+                        COOLOFF_DURATION_MIN,
+                    )
+                    full_account = {
+                        "max_loss_per_trade_usd": float(MAX_LOSS_PER_TRADE),
+                        "max_daily_loss_usd": float(DAILY_LOSS_LIMIT),
+                        "recovery_mode_trigger_usd": -float(RECOVERY_MODE_TRIGGER),
+                        "contracts_per_trade": 1,
+                        "max_trades_per_day": int(MAX_TRADES_PER_SESSION),
+                        "veto_low_conviction_threshold": 65,  # Loosened from 80
+                        "loss_streak_cooldown_minutes": int(COOLOFF_DURATION_MIN),
+                        "min_trade_spacing_minutes": 15,
+                        "min_rr": 1.5,
+                        "preferred_rr": 2.0,
+                    }
+                    logger.info("[SIZING] small_account_mode=disabled — using settings.py defaults")
+                    return full_account
+                except ImportError as e:
+                    logger.warning(f"[SIZING] settings.py defaults unavailable: {e}")
+                    return DEFAULT_CONFIG.copy()
+            # Enabled: merge YAML values over defaults
             merged = DEFAULT_CONFIG.copy()
-            merged.update({k: v for k, v in cfg.items() if v is not None})
+            merged.update({k: v for k, v in cfg.items() if v is not None and k != "enabled"})
             return merged
         except ImportError:
-            # YAML not installed — parse minimally for the flat key=value lines we need
             logger.warning("[SIZING] PyYAML not installed, using defaults")
             return DEFAULT_CONFIG.copy()
     except Exception as e:

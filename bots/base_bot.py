@@ -329,6 +329,8 @@ class BaseBot:
         from strategies.ib_breakout import IBBreakout
         from strategies.compression_breakout import CompressionBreakout
         from strategies.dom_pullback import DOMPullback
+        from strategies.orb import OpeningRangeBreakout
+        from strategies.noise_area import NoiseAreaMomentum
 
         strategy_classes = {
             "bias_momentum": BiasMomentumFollow,
@@ -338,7 +340,11 @@ class BaseBot:
             "ib_breakout": IBBreakout,
             "compression_breakout": CompressionBreakout,
             "dom_pullback": DOMPullback,
+            "orb": OpeningRangeBreakout,
+            "noise_area": NoiseAreaMomentum,
         }
+
+        is_prod = (self.bot_name == "prod")
 
         for name, config in STRATEGIES.items():
             if name not in strategy_classes:
@@ -348,8 +354,25 @@ class BaseBot:
             if not config.get("enabled", True):
                 continue
 
-            strat = strategy_classes[name](config)
+            # Prod vs lab session-window flag (ORB + Noise Area use this
+            # to pick eod_flat_time_et = 10:55 ET vs 15:55 ET).
+            enriched = dict(config)
+            enriched["is_prod_bot"] = is_prod
+            strat = strategy_classes[name](enriched)
             self.strategies.append(strat)
+
+            # Noise Area: seed sigma_open_table from data/sigma_open_table.json.
+            # Loader returns None on any failure; strategy still works (it will
+            # accrue sigma_open live until 14 sessions pass the min_noise_history gate).
+            if isinstance(strat, NoiseAreaMomentum):
+                from tools.load_sigma_open_warmup import load_sigma_open_warmup
+                _warmup = load_sigma_open_warmup()
+                if _warmup is not None:
+                    strat.seed_history(_warmup)
+                    logger.info(f"[noise_area] seeded {len(_warmup)} minute-buckets from data/sigma_open_table.json")
+                else:
+                    logger.info("[noise_area] no warmup — will accrue live")
+
             logger.info(f"Loaded strategy: {name} (validated={strat.validated})")
 
     # ─── Main Loop ──────────────────────────────────────────────────
@@ -644,6 +667,30 @@ class BaseBot:
                             if smart["exit_signal"]:
                                 logger.info(f"[SMART EXIT:{_pos.trade_id}] {smart['reason']}")
                                 await self._exit_trade(ws, price, "ema_dom_exit")
+
+                    # Managed-exit hook — strategies with dynamic exits (Noise Area)
+                    # get a chance to close the position on their own signal flip
+                    # before bracket-based checks fire.
+                    if self.positions.position and getattr(self.positions.position, "exit_trigger", None):
+                        _strat_name = self.positions.position.strategy
+                        _strat_obj = next((s for s in self.strategies if s.name == _strat_name), None)
+                        if _strat_obj is not None:
+                            try:
+                                _snap = self.aggregator.snapshot()
+                                _sess = self.session.to_dict()
+                                should_exit, exit_reason_mgd = _strat_obj.check_exit(
+                                    self.positions.position, _snap,
+                                    list(self.aggregator.bars_1m.completed),
+                                    _sess,
+                                )
+                                if should_exit:
+                                    logger.info(
+                                        f"[MANAGED_EXIT:{self.positions.position.trade_id}] "
+                                        f"{_strat_name} → {exit_reason_mgd}"
+                                    )
+                                    await self._exit_trade(ws, price, exit_reason_mgd)
+                            except Exception as e:
+                                logger.debug(f"[MANAGED_EXIT] check_exit error (non-blocking): {e}")
 
                     # Normal stop/target/time exits
                     _max_hold = None
@@ -1938,13 +1985,20 @@ class BaseBot:
                 pass
             return
 
-        # Calculate prices
+        # Calculate prices — honor signal's explicit prices if set (ORB, Noise Area)
         tick_value = TICK_SIZE
-        if signal.direction == "LONG":
+        if getattr(signal, "stop_price", None) is not None:
+            stop_price = signal.stop_price
+        elif signal.direction == "LONG":
             stop_price = price - (stop_ticks * tick_value)
-            target_price = price + (stop_ticks * tick_value * signal.target_rr)
         else:
             stop_price = price + (stop_ticks * tick_value)
+
+        if getattr(signal, "target_price", None) is not None:
+            target_price = signal.target_price
+        elif signal.direction == "LONG":
+            target_price = price + (stop_ticks * tick_value * signal.target_rr)
+        else:
             target_price = price - (stop_ticks * tick_value * signal.target_rr)
 
         # Phase 6b: Microstructure filter check (advisory only -- does NOT block)
@@ -1965,23 +2019,38 @@ class BaseBot:
         # Send trade command to bridge (bridge writes OIF with OCO brackets)
         action = "ENTER_LONG" if signal.direction == "LONG" else "ENTER_SHORT"
 
-        # Determine order type and compute limit price if needed
-        use_limit = ENTRY_ORDER_TYPE == "LIMIT"
-        if use_limit:
-            offset = LIMIT_OFFSET_TICKS * TICK_SIZE
-            if signal.direction == "LONG":
-                limit_price = round(price + offset, 2)  # Buy limit above current for aggressive fill
+        # Determine order type — signal override wins over global config
+        signal_entry_type = getattr(signal, "entry_type", None) or ENTRY_ORDER_TYPE
+        signal_entry_type = signal_entry_type.upper()
+
+        # Signal may provide an explicit entry_price (ORB STOPMARKET at OR, Noise Area LIMIT at break)
+        sig_entry_price = getattr(signal, "entry_price", None)
+
+        if signal_entry_type == "LIMIT":
+            if sig_entry_price is not None:
+                limit_price = round(sig_entry_price, 2)
             else:
-                limit_price = round(price - offset, 2)  # Sell limit below current
-            # When using limit orders, entry_price IS the limit price (fills at limit or better)
-            # Adjust stop/target relative to limit price (not signal price) to avoid misalignment
-            if signal.direction == "LONG":
-                stop_price = round(limit_price - (stop_ticks * TICK_SIZE), 2)
-                target_price = round(limit_price + (stop_ticks * TICK_SIZE * signal.target_rr), 2)
-            else:
-                stop_price = round(limit_price + (stop_ticks * TICK_SIZE), 2)
-                target_price = round(limit_price - (stop_ticks * TICK_SIZE * signal.target_rr), 2)
-        else:
+                offset = LIMIT_OFFSET_TICKS * TICK_SIZE
+                if signal.direction == "LONG":
+                    limit_price = round(price + offset, 2)
+                else:
+                    limit_price = round(price - offset, 2)
+            # Realign stop/target to the limit fill price ONLY if the signal didn't
+            # compute them itself (ORB + Noise Area pre-compute exact prices).
+            if getattr(signal, "stop_price", None) is None:
+                if signal.direction == "LONG":
+                    stop_price = round(limit_price - (stop_ticks * TICK_SIZE), 2)
+                else:
+                    stop_price = round(limit_price + (stop_ticks * TICK_SIZE), 2)
+            if getattr(signal, "target_price", None) is None:
+                if signal.direction == "LONG":
+                    target_price = round(limit_price + (stop_ticks * TICK_SIZE * signal.target_rr), 2)
+                else:
+                    target_price = round(limit_price - (stop_ticks * TICK_SIZE * signal.target_rr), 2)
+        elif signal_entry_type == "STOPMARKET":
+            # Breakout entry: trigger when price crosses entry_price, fills at market.
+            limit_price = round(sig_entry_price if sig_entry_price is not None else price, 2)
+        else:  # MARKET
             limit_price = 0.0
 
         try:
@@ -1993,7 +2062,7 @@ class BaseBot:
                 "stop_price": round(stop_price, 2),
                 "target_price": round(target_price, 2),
                 "reason": signal.reason,
-                "order_type": "LIMIT" if use_limit else "MARKET",
+                "order_type": signal_entry_type,
                 "limit_price": limit_price,
             }))
         except Exception as e:
@@ -2028,9 +2097,11 @@ class BaseBot:
         market["fill_latency_ms"] = fill_result.get("latency_ms", 0)
 
         # NOW open position locally (after fill confirmation)
-        # For LIMIT orders, entry_price = limit_price (fills at limit or better — no slippage)
-        # For MARKET orders, entry_price = tick price at signal time (approximate, may have slippage)
-        effective_entry_price = limit_price if (use_limit and limit_price > 0) else price
+        # LIMIT / STOPMARKET entries fill at limit_price; MARKET fills near tick price.
+        effective_entry_price = (
+            limit_price if (signal_entry_type in ("LIMIT", "STOPMARKET") and limit_price > 0)
+            else price
+        )
         self.positions.open_position(
             trade_id=tid,
             direction=signal.direction,
@@ -2041,6 +2112,9 @@ class BaseBot:
             strategy=signal.strategy,
             reason=signal.reason,
             market_snapshot=market,
+            exit_trigger=getattr(signal, "exit_trigger", None),
+            eod_flat_time_et=getattr(signal, "eod_flat_time_et", None),
+            metadata=dict(getattr(signal, "metadata", {}) or {}),
         )
 
         # Reset stall detector for fresh rider tracking on this trade

@@ -9,6 +9,11 @@
 # + tight risk = best you can do until account grows.
 
 small_account_mode:
+  # Master switch — set enabled: false once Sim101 is loaded with >= $1500.
+  # When disabled, core/simple_sizing.py falls back to settings.py defaults
+  # (MAX_LOSS_PER_TRADE=20, DAILY_LOSS_LIMIT=45, etc.), matching the $2K tier.
+  enabled: true
+
   # Risk limits — extremely tight for $300 account
   max_loss_per_trade_usd: 5.0       # 1.7% of $300
   max_daily_loss_usd: 15.0          # 5% of $300 = 3 max-loss trades

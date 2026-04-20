@@ -38,6 +38,11 @@ class Position:
     be_stop_active: bool = False   # True once stop moved to break-even
     rider_mode: bool = False       # True when holding remaining contract for trend
 
+    # ── Managed-exit state (Noise Area, strategies with dynamic exits) ──
+    exit_trigger: Optional[str] = None   # e.g. "price_returns_inside_noise_area"
+    eod_flat_time_et: Optional[str] = None
+    metadata: dict = field(default_factory=dict)  # Strategy-specific (UB/LB for Noise Area)
+
 
 class PositionManager:
     def __init__(self):
@@ -58,7 +63,9 @@ class PositionManager:
 
     def open_position(self, trade_id: str, direction: str, entry_price: float,
                       contracts: int, stop_price: float, target_price: float,
-                      strategy: str, reason: str, market_snapshot: dict = None):
+                      strategy: str, reason: str, market_snapshot: dict = None,
+                      exit_trigger: str = None, eod_flat_time_et: str = None,
+                      metadata: dict = None):
         """Open a new position. Raises if already in a position."""
         if self.position is not None:
             logger.warning(f"[{trade_id}] Cannot open position — already in trade")
@@ -76,6 +83,9 @@ class PositionManager:
             reason=reason,
             market_snapshot=market_snapshot or {},
             original_contracts=contracts,  # Capture for scale-out math
+            exit_trigger=exit_trigger,
+            eod_flat_time_et=eod_flat_time_et,
+            metadata=metadata or {},
         )
         logger.info(f"[OPEN:{trade_id}] {direction} {contracts}x @ {entry_price} "
                      f"SL={stop_price} TP={target_price} strat={strategy}")

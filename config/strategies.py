@@ -144,6 +144,38 @@ STRATEGIES = {
         # Without this: SHORT at IB low with CVD=+6.05M → -164t loss (buyers absorbing)
         "require_cvd_confirm": True,   # CVD > 0 for LONG, CVD < 0 for SHORT — hard gate
     },
+    # ─── New strategies per roadmap v4 (Apr 23 2026) ───────────────────
+
+    "orb": {
+        # Opening Range Breakout — Zarattini, Barbon, Aziz (2024) SSRN 4729284
+        # Published: QQQ 46% annual, Sharpe 2.4; NQ backtest 74% WR, PF 2.51.
+        "enabled": True,
+        "validated": False,         # Lab only until 20+ live trades collected
+        "or_duration_minutes": 15,
+        "confirmation_close_minutes": 5,
+        "max_entry_delay_minutes": 60,     # Cutoff at 10:30 ET / 9:30 CST
+        "min_or_size_points": 10,          # Skip low-vol days
+        "max_or_size_points": 60,          # Skip news-gap days
+        "max_stop_points": 25,             # Hard cap = $50 on MNQ
+        "stop_buffer_ticks": 2,
+        "target_rr": 2.0,                  # Partial 1R + runner (SCALE_OUT handles partial)
+        # Session window: eod_flat_time_et picked by strategy based on is_prod_bot
+    },
+
+    "noise_area": {
+        # Noise Area Intraday Momentum — Zarattini, Aziz, Barbon (2024) SSRN 4824172
+        # Published: SPY 19.6% annual, Sharpe 1.33; NQ 24.3% annual, Sharpe 1.67.
+        "enabled": True,
+        "validated": False,         # Lab only — new strategy, 10+ day warmup needed
+        "lookback_days": 14,
+        "band_mult": 1.0,
+        "trade_freq_minutes": 30,
+        "require_vwap_confluence": True,
+        "min_noise_history_days": 10,
+        "eod_flat_time_et": "15:55",       # Lab full session
+        "prod_eod_flat_time_et": "10:55",  # Prod 90-min window
+    },
+
     "compression_breakout": {
         "enabled": True,
         "validated": False,   # Lab only — PRE-explosion entry, build sample before prod promotion

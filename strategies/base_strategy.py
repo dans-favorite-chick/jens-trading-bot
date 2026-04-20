@@ -7,6 +7,7 @@ Prod bot only runs strategies where `validated=True`.
 
 import uuid
 from dataclasses import dataclass, field
+from typing import Optional
 
 
 @dataclass
@@ -23,9 +24,27 @@ class Signal:
     trade_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
     # Set True when the strategy has already computed an ATR-based stop internally.
     # base_bot will skip its own ATR override so the strategy's calculation is used.
-    # Use this for patterns that need stop anchored to a specific price (wick extreme)
-    # rather than from entry price.
     atr_stop_override: bool = False
+
+    # ─── Per-signal order type matrix (roadmap v4 Part C) ──────────────
+    entry_type: str = "LIMIT"          # "LIMIT" | "STOPMARKET" | "MARKET"
+    stop_type: str = "STOPMARKET"      # Universal rule: all stops = STOPMARKET
+    target_type: str = "LIMIT"         # Universal rule: all targets = LIMIT
+
+    # ─── Explicit price overrides (used when strategy computes prices directly) ──
+    # If None, base_bot computes from current price + stop_ticks + target_rr.
+    entry_price: Optional[float] = None
+    stop_price: Optional[float] = None
+    target_price: Optional[float] = None
+
+    # ─── Managed exit (Noise Area, trend riders with dynamic exits) ─────
+    # When set, base_bot calls strategy.check_exit() each bar instead of
+    # relying solely on bracketed stop/target.
+    exit_trigger: Optional[str] = None   # e.g. "price_returns_inside_noise_area"
+    eod_flat_time_et: Optional[str] = None  # e.g. "15:55" or "10:55"
+
+    # ─── Strategy-specific diagnostics (UB/LB/vwap/sigma_open for Noise Area, OR hi/lo for ORB) ──
+    metadata: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -38,6 +57,15 @@ class Signal:
             "entry_score": self.entry_score,
             "stop_ticks": self.stop_ticks,
             "target_rr": self.target_rr,
+            "entry_type": self.entry_type,
+            "stop_type": self.stop_type,
+            "target_type": self.target_type,
+            "entry_price": self.entry_price,
+            "stop_price": self.stop_price,
+            "target_price": self.target_price,
+            "exit_trigger": self.exit_trigger,
+            "eod_flat_time_et": self.eod_flat_time_et,
+            "metadata": self.metadata,
         }
 
 
@@ -77,6 +105,16 @@ class BaseStrategy:
             Signal if entry conditions met, None otherwise.
         """
         raise NotImplementedError
+
+    def check_exit(self, position, market: dict, bars_1m: list,
+                   session_info: dict) -> tuple[bool, str]:
+        """
+        Optional managed-exit hook. Called every bar for positions where
+        Signal.exit_trigger was set. Default: never exits (bracket handles it).
+
+        Returns (should_exit, reason).
+        """
+        return (False, "")
 
     @property
     def params(self) -> dict:

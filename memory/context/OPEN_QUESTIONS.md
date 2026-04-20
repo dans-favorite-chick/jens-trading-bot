@@ -24,6 +24,30 @@ User chose "informed generalist across 7 strategies" in earlier session. April 2
 - Kelly sizing activation gate (if account reaches $1500)
 - 2-week shadow validation review
 
+## 🟡 Deferred from roadmap v4 sprint (2026-04-19)
+
+Items consciously skipped / simplified during the Apr 19 6-day condensed sprint.
+All within the 4%-deviation budget — flagged here so they don't get forgotten.
+
+- **bias_momentum_v2 adapter** — `strategies/bias_momentum_v2.py` emits its own
+  `BiasMomentumV2Signal` dataclass rather than the canonical `Signal`. Per-strategy
+  entry_type wiring couldn't apply. Not in prod (`bias_momentum` is). Needs an
+  adapter layer before v2 can replace v1. Low priority — v1 is shipping.
+- **ORB chandelier trail on runner** — roadmap v4 matrix says "Partial 1R + trail".
+  Phoenix's global `SCALE_OUT_RR=1.5` applies (exits partial at 1.5R, not 1.0R).
+  Within tolerance. Revisit if ORB shows pattern-specific trade-quality drag.
+- **Finnhub blackout window** — roadmap says "±2 min Tier-1 blackout"; existing
+  `core/calendar_risk.py` uses ±5 min (30min reduce / 5min block / 15min widen).
+  Functionally identical lock-out; not narrowing to ±2 min.
+- **Unused warmup artifacts** — after switching to `tools/load_sigma_open_warmup.py`
+  + `data/sigma_open_table.json` (27 real MNQ 1m sessions), these became
+  unreferenced: `tools/warmup_noise_area.py`, `tools/backfill_noise_area.py`,
+  `memory/noise_area_warmup.json`. Kept in tree as fallback / reference; delete
+  when confident the main path is stable.
+- **ORB missing v3 doc** — v3 roadmap referenced in v4 was missing. ORB built
+  from the PARAMS block + matrix + `strategies/ib_breakout.py` precedent. Review
+  after first 10 live trades for spec drift.
+
 ## 🟢 Deferred to later weeks / months
 
 - Context-aware candlestick scoring (v2)
