@@ -135,6 +135,10 @@ class HistoryLogger:
                   stop_price: float, target_price: float,
                   risk_dollars: float, tier: str, market: dict):
         """Log a trade entry with full context."""
+        # B14 Phase 4: first-class gamma fields for post-hoc analysis.
+        _gr = market.get("gamma_regime")
+        _gr_str = _gr.value if hasattr(_gr, "value") else str(_gr)
+        _gw = market.get("gamma_nearest_wall") or ("none", 9999.0)
         self._write({
             "event":        "entry",
             "ts":           datetime.now().isoformat(),
@@ -153,14 +157,22 @@ class HistoryLogger:
             "tier":         tier,
             "stop_ticks":   signal.stop_ticks,
             "target_rr":    signal.target_rr,
-            # Full market at entry
+            # B14 gamma context
+            "gamma_regime":         _gr_str,
+            "gamma_wall_proximity": {"wall": _gw[0], "ticks": _gw[1]},
+            "gamma_in_pin_zone":    bool(market.get("gamma_in_pin_zone", False)),
+            # Full market at entry — strip non-JSON fields (GammaLevels, enum).
             "market":       {k: v for k, v in market.items()
-                             if k not in ("tf_bias",)},  # keep it compact
+                             if k not in ("tf_bias", "gamma_levels", "gamma_regime")},
             "tf_bias":      market.get("tf_bias"),
         })
 
     def log_exit(self, trade: dict, market: dict):
         """Log a trade exit with P&L and full context."""
+        # B14 Phase 4: gamma state at exit (for regime-change analysis).
+        _gr = market.get("gamma_regime")
+        _gr_str = _gr.value if hasattr(_gr, "value") else str(_gr)
+        _gw = market.get("gamma_nearest_wall") or ("none", 9999.0)
         self._write({
             "event":        "exit",
             "ts":           datetime.now().isoformat(),
@@ -181,6 +193,9 @@ class HistoryLogger:
             "vwap_at_exit":      market.get("vwap"),
             "cvd_at_exit":       market.get("cvd"),
             "atr_at_exit":       market.get("atr_5m"),
+            # B14 gamma context at exit
+            "gamma_regime_at_exit":         _gr_str,
+            "gamma_wall_proximity_at_exit": {"wall": _gw[0], "ticks": _gw[1]},
             # MAE/MFE from ExpectancyEngine (Phase A: persisted for ML training)
             "mae_ticks":       market.get("mae_ticks"),
             "mfe_ticks":       market.get("mfe_ticks"),

@@ -343,6 +343,48 @@ class BaseBot:
         self._trades_since_cluster = 0      # Counter for clustering trigger
         self._equity_recorded_today = False # Only record equity once per day
 
+        # ─── B14 Phase 4: MenthorQ gamma integration ──────────────────
+        # Load daily gamma levels from data/menthorq/gamma/ at startup.
+        # An async watcher (_gamma_reload_watcher) polls for mtime changes
+        # every 60s so intraday repastes take effect without a bot restart.
+        # Used for: (a) entry-wall filter via is_entry_into_wall,
+        # (b) snapshot enrichment (regime, nearest wall, pin-zone flag).
+        # NOTE: natural_stop_for_entry() exists in core/menthorq_gamma but
+        # is intentionally NOT wired here — strategies will opt in later.
+        from pathlib import Path as _GammaPath
+        from core.menthorq_gamma import load_latest_gamma
+        _gamma_dir_default = os.path.join(
+            os.path.dirname(__file__), "..", "data", "menthorq", "gamma"
+        )
+        self.gamma_data_dir = _GammaPath(_gamma_dir_default)
+        try:
+            self.gamma_levels = load_latest_gamma(self.gamma_data_dir)
+            if self.gamma_levels is not None:
+                logger.info(
+                    f"[GAMMA] Loaded: date={self.gamma_levels.data_date} "
+                    f"symbol={self.gamma_levels.symbol} "
+                    f"HVL={self.gamma_levels.hvl} "
+                    f"HVL_0DTE={self.gamma_levels.hvl_0dte} "
+                    f"complete={self.gamma_levels.is_complete}"
+                )
+            else:
+                logger.warning(
+                    f"[GAMMA] No gamma data loaded from {self.gamma_data_dir} "
+                    f"— entry-wall filter will be inactive"
+                )
+        except Exception as _e:
+            logger.warning(f"[GAMMA] Failed to load gamma data: {_e}")
+            self.gamma_levels = None
+        # Track the mtime we loaded from so the reload watcher can detect
+        # newer files in the directory.
+        self._gamma_mtime = 0.0
+        try:
+            _levels_files = list(self.gamma_data_dir.glob("*_levels.txt"))
+            if _levels_files:
+                self._gamma_mtime = max(p.stat().st_mtime for p in _levels_files)
+        except Exception:
+            pass
+
         # Register bar callback
         self.aggregator.on_bar(self._on_bar)
 
@@ -439,6 +481,9 @@ class BaseBot:
         # Phase 5: Start Telegram command listener
         asyncio.ensure_future(self.telegram_commands.poll_commands(self))
 
+        # B14 Phase 4: MenthorQ gamma reload watcher (60s poll)
+        asyncio.ensure_future(self._gamma_reload_watcher())
+
         while True:
             try:
                 await self._connect_and_listen()
@@ -512,6 +557,64 @@ class BaseBot:
                 logger.warning(f"Dashboard push failed: {e}")
 
             await asyncio.sleep(2)
+
+    async def _gamma_reload_watcher(self):
+        """B14 Phase 4: poll data/menthorq/gamma/ every 60s; reload when
+        a newer *_levels.txt appears (intraday repaste, new day). Silent
+        on no-change; logs at INFO when a reload fires.
+        """
+        from core.menthorq_gamma import load_latest_gamma
+        while True:
+            await asyncio.sleep(60)
+            try:
+                files = list(self.gamma_data_dir.glob("*_levels.txt"))
+                if not files:
+                    continue
+                current_mtime = max(p.stat().st_mtime for p in files)
+                if current_mtime > self._gamma_mtime:
+                    new_levels = load_latest_gamma(self.gamma_data_dir)
+                    if new_levels is not None:
+                        self.gamma_levels = new_levels
+                        self._gamma_mtime = current_mtime
+                        logger.info(
+                            f"[GAMMA] Reloaded — date={new_levels.data_date} "
+                            f"complete={new_levels.is_complete}"
+                        )
+            except Exception as e:
+                logger.warning(f"[GAMMA] Reload watcher error: {e}")
+
+    def _enrich_market_with_gamma(self, market: dict) -> dict:
+        """B14 Phase 4: inject gamma_levels, gamma_regime, nearest wall,
+        and pin-zone flag into the snapshot. No-op when gamma data missing
+        (strategies and downstream code tolerate None)."""
+        from core.menthorq_gamma import (
+            classify_regime, distance_to_nearest_wall, is_at_hvl_gravity,
+            GammaRegime,
+        )
+        levels = self.gamma_levels
+        market["gamma_levels"] = levels
+        if levels is None:
+            market["gamma_regime"] = GammaRegime.UNKNOWN
+            market["gamma_nearest_wall"] = ("none", 9999.0)
+            market["gamma_in_pin_zone"] = False
+            return market
+        price = market.get("price", 0) or 0
+        if price <= 0:
+            market["gamma_regime"] = GammaRegime.UNKNOWN
+            market["gamma_nearest_wall"] = ("none", 9999.0)
+            market["gamma_in_pin_zone"] = False
+            return market
+        market["gamma_regime"] = classify_regime(price, levels)
+        # Nearest wall relative to current price (no direction — both sides
+        # considered via LONG look-up; we scan both then pick the closest).
+        long_wall = distance_to_nearest_wall(price, "LONG", levels)
+        short_wall = distance_to_nearest_wall(price, "SHORT", levels)
+        if long_wall[1] < short_wall[1]:
+            market["gamma_nearest_wall"] = long_wall
+        else:
+            market["gamma_nearest_wall"] = short_wall
+        market["gamma_in_pin_zone"] = is_at_hvl_gravity(price, levels)
+        return market
 
     async def _heartbeat_loop(self):
         """Send periodic heartbeat to bridge so it can detect hung bots."""
@@ -1332,6 +1435,12 @@ class BaseBot:
         market["rsi_divergence"] = self._last_rsi_divergence
         market["htf_patterns"] = self.htf_scanner.get_state().get("active_patterns", [])
 
+        # B14 Phase 4: enrich with MenthorQ gamma state (regime, nearest wall,
+        # pin-zone flag, raw GammaLevels). Strategies can read these for
+        # context; the entry-wall filter (below, post best_signal pick)
+        # uses the same gamma_levels for rejection decisions.
+        self._enrich_market_with_gamma(market)
+
         # Phase 7: Enrich with SMC pattern data
         try:
             smc_state = self.smc.get_state()
@@ -1729,6 +1838,26 @@ class BaseBot:
             self._last_eval["htf_state"] = htf_state
         except Exception:
             pass
+
+        # ── B14 Phase 4: Gamma-Wall Entry Filter ──────────────────────
+        # Reject entries that would immediately push into an opposing
+        # gamma wall (within NO_TRADE_INTO_WALL_BUFFER_TICKS, default 12)
+        # OR that enter at a countertrend reversal-zone (LONG just below
+        # resistance / SHORT just above support — price bounces against
+        # the trade). See core/menthorq_gamma.is_entry_into_wall.
+        if best_signal is not None and self.gamma_levels is not None:
+            from core.menthorq_gamma import is_entry_into_wall
+            _price = market.get("price", 0) or 0
+            _wall = is_entry_into_wall(_price, best_signal.direction, self.gamma_levels)
+            if _wall:
+                logger.info(
+                    f"[GAMMA_GATE] {best_signal.strategy} {best_signal.direction} "
+                    f"@ {_price:.2f}: REJECT — entry too close to {_wall}"
+                )
+                self.last_rejection = (
+                    f"gamma_wall:{_wall} blocked {best_signal.strategy} {best_signal.direction}"
+                )
+                best_signal = None
 
         # ── C/R Day Bias Filter ───────────────────────────────────────
         # On strong CONTINUATION/BULLISH C/R days (score >= 4), suppress
@@ -2506,6 +2635,8 @@ class BaseBot:
 
             # Log exit with MAE/MFE data from expectancy engine
             market_snap = self.aggregator.snapshot()
+            # B14 Phase 4: inject gamma context into exit snapshot.
+            self._enrich_market_with_gamma(market_snap)
             if exp_analysis:
                 market_snap["mae_ticks"] = exp_analysis.get("mae_ticks")
                 market_snap["mfe_ticks"] = exp_analysis.get("mfe_ticks")
