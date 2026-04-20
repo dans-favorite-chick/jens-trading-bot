@@ -33,7 +33,10 @@ from strategies.base_strategy import Signal
 from config.settings import TICK_SIZE
 
 logging.basicConfig(
-    level=logging.INFO,
+    # Lab runs at DEBUG to surface Fix 5 [EVAL] BLOCKED/SKIP/NO_SIGNAL
+    # reject-reason logs for strategy observability. Prod stays at INFO
+    # (see bots/prod_bot.py) so production logs stay quiet.
+    level=logging.DEBUG,
     format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
 )
 logger = logging.getLogger("LabBot")
