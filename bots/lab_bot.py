@@ -46,7 +46,7 @@ LAB_ZERO_GATE = {
     "min_momentum_confidence": 0,   # No confidence gate
     "min_precision": 0,             # No precision gate
     "risk_per_trade": 15.0,         # Standard risk per trade
-    "max_daily_loss": 200.0,        # Very high daily limit — let it trade
+    "max_daily_loss": 1000.0,       # Data-collection mode: wide cap to absorb lab exploration. Adjust after 50+ trades/strategy collected and validation triggered.
 }
 
 # Strategy overrides: all gates REMOVED
