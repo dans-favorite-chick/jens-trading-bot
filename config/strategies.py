@@ -123,15 +123,6 @@ STRATEGIES = {
         "max_vwap_dist_ticks": 20,  # Widened from 10t → 20t (more realistic touch zone)
         "max_hold_min": 20,
     },
-    "tick_scalp": {
-        "enabled": True,      # Enabled for lab bot
-        "validated": False,
-        "stop_ticks": 5,
-        "target_rr": 1.5,
-        "min_confluence": 2.5,
-        "min_tf_votes": 3,
-        "max_hold_min": 8,
-    },
     "ib_breakout": {
         "enabled": True,
         "validated": True,    # Runs in prod bot — 96.2% IB break rate, 74.56% WR
