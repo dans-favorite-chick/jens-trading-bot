@@ -263,19 +263,39 @@ def write_oif(action: str, qty: int = 1, stop_price: float = None,
         logger.warning(f"Unknown OIF action: {action}")
         return []
 
-    written = []
-    os.makedirs(OIF_INCOMING, exist_ok=True)
-    for cmd in cmds:
-        _oif_counter += 1
-        tag = f"_{trade_id}" if trade_id else ""
-        filepath = os.path.join(OIF_INCOMING, f"oif{_oif_counter}{tag}.txt")
-        try:
-            with open(filepath, "w") as f:
-                f.write(cmd)
-            written.append(filepath)
-            logger.info(f"[OIF:{trade_id or 'N/A'}] {filepath} -> {cmd.strip()}")
-        except Exception as e:
-            logger.error(f"[OIF FAILED] {filepath}: {e}")
+    # P1 fix: legacy write_oif() single-order path now uses the same atomic
+    # staging (.tmp → os.rename to .txt) that write_bracket_order() uses.
+    # Before this fix, the legacy path did a plain `open().write()` which
+    # leaves NT8 seeing a half-written .txt if Python crashes between
+    # open() and close() — the filesystem watcher can pick up a zero-byte
+    # or truncated command. NT8 would either reject it silently or (worse)
+    # parse a partial command. Staging to .tmp first and renaming on
+    # success guarantees NT8 only ever sees fully-formed .txt files.
+    #
+    # Same helpers used by write_bracket_order: _stage_oif + _commit_staged.
+    # If any .tmp write fails mid-batch, _commit_staged rolls back.
+    staged = []
+    try:
+        for cmd in cmds:
+            # _stage_oif expects the line without a trailing newline; strip
+            # any newline the legacy callers may have appended (it re-adds
+            # one in the .tmp write path).
+            line = cmd[:-1] if cmd.endswith("\n") else cmd
+            staged.append(_stage_oif(line, trade_id))
+    except OSError as e:
+        logger.error(f"[OIF:{trade_id or 'N/A'}] stage failed: {e}")
+        _rollback_staged(staged, trade_id)
+        return []
+
+    written = _commit_staged(staged, trade_id)
+    if len(written) != len(staged):
+        logger.error(
+            f"[OIF:{trade_id or 'N/A'}] PARTIAL LEGACY COMMIT — "
+            f"{len(written)}/{len(staged)} files visible to NT8"
+        )
+    else:
+        for path, cmd in zip(written, cmds):
+            logger.info(f"[OIF:{trade_id or 'N/A'}] {path} -> {cmd.strip()}")
     return written
 
 
