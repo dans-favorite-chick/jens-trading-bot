@@ -601,6 +601,7 @@ class BiasMomentumFollow(BaseStrategy):
         # TREND days: skip confluence gate entirely. Direction comes from MQ bias (context),
         # not TF votes, so the votes+momentum formula is meaningless. The momentum threshold
         # (20pts = ONE signal) is sufficient — day context IS the primary confluence.
+        votes = market.get("tf_votes_bullish" if direction == "LONG" else "tf_votes_bearish", 0)
         if not trend_day:
             confluence = votes + (momentum_score / 30)
             if confluence < min_confluence:
