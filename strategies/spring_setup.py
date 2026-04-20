@@ -15,7 +15,11 @@ v2 fixes (2026-04-14):
   rather than wick×1.5 — avoids getting stopped at exact session low
 """
 
+import logging
+
 from strategies.base_strategy import BaseStrategy, Signal
+
+logger = logging.getLogger(__name__)
 
 
 class SpringSetup(BaseStrategy):
@@ -40,6 +44,7 @@ class SpringSetup(BaseStrategy):
         tick_size = TICK_SIZE
 
         if len(bars_1m) < 2:
+            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
             return None  # Need at least 2 bars to detect wick pattern
 
         price = market.get("price", 0)
@@ -82,6 +87,7 @@ class SpringSetup(BaseStrategy):
             confluences.append(f"Bearish spring wick: {wick_ticks:.0f}t")
 
         if direction is None:
+            logger.debug(f"[EVAL] {self.name}: NO_SIGNAL no_spring_wick")
             return None
 
         # ── TREND Day Direction Gate ─────────────────────────────────
@@ -94,15 +100,18 @@ class SpringSetup(BaseStrategy):
         if day_type == "TREND":
             if direction == "SHORT" and mq_bias == "LONG":
                 self._last_reject = "TREND day + MQ LONG: spring SHORTs blocked (counter-trend)"
+                logger.debug(f"[EVAL] {self.name}: BLOCKED gate:trend_day_counter_trend_short")
                 return None
             elif direction == "LONG" and mq_bias == "SHORT":
                 self._last_reject = "TREND day + MQ SHORT: spring LONGs blocked (counter-trend)"
+                logger.debug(f"[EVAL] {self.name}: BLOCKED gate:trend_day_counter_trend_long")
                 return None
             # No MQ bias set but still a TREND day — use C/R verdict if available
             elif mq_bias == "NEUTRAL":
                 cr_verdict = market.get("cr_verdict", "UNKNOWN")
                 if direction == "SHORT" and cr_verdict == "CONTINUATION":
                     self._last_reject = "TREND day (CONTINUATION): spring SHORTs blocked"
+                    logger.debug(f"[EVAL] {self.name}: BLOCKED gate:trend_day_continuation_short")
                     return None
 
         # ── FIX 1: TF Alignment Gate ─────────────────────────────────
@@ -112,8 +121,10 @@ class SpringSetup(BaseStrategy):
             bullish_votes = market.get("tf_votes_bullish", 0)
             bearish_votes = market.get("tf_votes_bearish", 0)
             if direction == "LONG" and bullish_votes < min_tf_votes:
+                logger.debug(f"[EVAL] {self.name}: BLOCKED gate:tf_alignment_long")
                 return None  # Counter-trend long — not enough TF alignment
             elif direction == "SHORT" and bearish_votes < min_tf_votes:
+                logger.debug(f"[EVAL] {self.name}: BLOCKED gate:tf_alignment_short")
                 return None  # Counter-trend short — not enough TF alignment
             votes = bullish_votes if direction == "LONG" else bearish_votes
             confluences.append(f"TF aligned: {votes}/{min_tf_votes}+ votes")
@@ -128,6 +139,7 @@ class SpringSetup(BaseStrategy):
                 vwap_confirmed = True
                 confluences.append("VWAP reclaimed (below)")
             else:
+                logger.debug(f"[EVAL] {self.name}: BLOCKED gate:vwap_not_reclaimed")
                 return None  # VWAP not reclaimed
         else:
             vwap_confirmed = True
@@ -142,6 +154,7 @@ class SpringSetup(BaseStrategy):
                 delta_confirmed = True
                 confluences.append(f"CVD negative: {cvd:.0f}")
             else:
+                logger.debug(f"[EVAL] {self.name}: BLOCKED gate:delta_not_confirming")
                 return None  # Delta not confirming
         else:
             delta_confirmed = True
@@ -159,8 +172,9 @@ class SpringSetup(BaseStrategy):
         # Setting signal.atr_stop_override = True tells base_bot NOT to apply
         # the global ATR override on top of this (it's already ATR-based).
         atr_mult = self.config.get("atr_stop_multiplier", 1.1)
-        max_stop_ticks = self.config.get("max_stop_ticks", 40)   # $20 risk cap at 1 contract
-        min_stop_ticks = self.config.get("min_stop_ticks", 8)
+        # NQ research clamps (Fix 7, 2026-04-20): 8/40 → 40/120.
+        max_stop_ticks = self.config.get("max_stop_ticks", 120)
+        min_stop_ticks = self.config.get("min_stop_ticks", 40)
         atr_5m = market.get("atr_5m", 0) or 0
         atr_stop_override = False
 
@@ -183,6 +197,7 @@ class SpringSetup(BaseStrategy):
                 atr_stop_override = True
             else:
                 # Price already past the wick extreme — stale signal
+                logger.debug(f"[EVAL] {self.name}: NO_SIGNAL price_past_wick_extreme")
                 return None
         else:
             # ATR not available — fall back to structure stop
@@ -234,6 +249,8 @@ class SpringSetup(BaseStrategy):
 
         confluences.append(f"Regime: {session_info.get('regime', '?')}")
 
+        price = market.get("price", 0)
+        logger.info(f"[EVAL] {self.name}: SIGNAL {direction} entry={price:.2f}")
         sig = Signal(
             direction=direction,
             stop_ticks=stop_ticks,

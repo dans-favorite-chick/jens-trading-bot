@@ -128,16 +128,38 @@ def load_bridge_levels() -> dict:
     writes updated prices every 60 seconds.
     """
     if not os.path.exists(BRIDGE_FILE):
+        logger.warning(
+            f"[MenthorQ] Bridge file missing at {BRIDGE_FILE} — "
+            f"MQBridge.cs is likely not loaded on any NT8 chart. "
+            f"Action: in NT8, open a MenthorQ chart (any timeframe) and "
+            f"apply the MQBridge indicator (Indicators → MQBridge). It "
+            f"will start writing to {BRIDGE_FILE} within 60s."
+        )
         return {}
 
     try:
-        # Check file age — if older than 5 minutes, NT8 may have disconnected
+        # B11 fix: Check file age and escalate by tier for clearer operator action.
+        # MQBridge.cs writes every 60s. Staleness buckets:
+        #   - 0-5 min:   healthy; silent (no log)
+        #   - 5-30 min:  warning — NT8 may have hiccupped, MQBridge still loaded
+        #   - 30+ min:   error — MQBridge.cs is NOT running; operator must act
         mtime = os.path.getmtime(BRIDGE_FILE)
         age_min = (datetime.now().timestamp() - mtime) / 60
-        if age_min > 5:
+        if age_min > 30:
+            logger.error(
+                f"[MenthorQ] Bridge file is {age_min:.0f} min old "
+                f"(MQBridge.cs NOT RUNNING). MenthorQ gamma levels are "
+                f"STALE and strategies that gate on them (spring_setup, "
+                f"structural_bias, gamma_flip) are operating without live "
+                f"MQ context. ACTION: open NT8 Control Center → Indicators, "
+                f"verify MQBridge is loaded on at least one chart. If loaded, "
+                f"right-click the chart → Reload NinjaScript Output."
+            )
+        elif age_min > 5:
             logger.warning(
                 f"[MenthorQ] Bridge file is {age_min:.0f} min old — "
-                f"MQBridge.cs may not be running in NT8"
+                f"MQBridge.cs may have hiccupped. If this persists >30min, "
+                f"reload the MQBridge indicator on an NT8 chart."
             )
 
         # utf-8-sig strips the BOM that C# Encoding.UTF8 writes
@@ -190,6 +212,56 @@ def load_bridge_levels() -> dict:
     except Exception as e:
         logger.warning(f"[MenthorQ] Bridge file read error: {e}")
         return {}
+
+
+def bridge_health() -> dict:
+    """
+    B11 diagnostic: return structured bridge-health state for dashboards,
+    watchdogs, and startup pre-flight checks. Does NOT read/parse the
+    levels — just inspects the file itself.
+
+    Returns:
+        {
+            "path": absolute path to expected bridge file,
+            "exists": bool,
+            "age_min": float | None (None if file missing),
+            "status": "healthy" | "warning" | "stale" | "missing",
+            "action": human-readable next step for the operator,
+        }
+    """
+    path = BRIDGE_FILE
+    if not os.path.exists(path):
+        return {
+            "path": path,
+            "exists": False,
+            "age_min": None,
+            "status": "missing",
+            "action": (
+                "Open NT8 Control Center → Indicators. Apply MQBridge "
+                "to at least one MenthorQ chart. File will appear within 60s."
+            ),
+        }
+    try:
+        age_min = (datetime.now().timestamp() - os.path.getmtime(path)) / 60
+    except OSError:
+        return {"path": path, "exists": True, "age_min": None,
+                "status": "missing", "action": "Cannot stat bridge file (permissions?)"}
+
+    if age_min <= 5:
+        status, action = "healthy", "No action needed."
+    elif age_min <= 30:
+        status, action = "warning", (
+            f"Bridge file {age_min:.0f} min old; MQBridge may have hiccupped. "
+            f"Re-check in 5 min; if still stale, reload the indicator."
+        )
+    else:
+        status, action = "stale", (
+            f"Bridge file {age_min:.0f} min old; MQBridge.cs is NOT writing. "
+            f"In NT8 right-click the MenthorQ chart → Reload NinjaScript Output, "
+            f"or remove + re-apply the MQBridge indicator."
+        )
+    return {"path": path, "exists": True, "age_min": round(age_min, 1),
+            "status": status, "action": action}
 
 
 def load() -> MenthorQSnapshot:

@@ -13,7 +13,11 @@ REGIME-AWARE: Only trades during OPEN_MOMENTUM and MID_MORNING.
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+import logging
+
 from strategies.base_strategy import BaseStrategy, Signal
+
+logger = logging.getLogger(__name__)
 from config.settings import TICK_SIZE
 
 # Explicit ET zone — daily IB reset is anchored to the ET calendar day.
@@ -60,10 +64,12 @@ class IBBreakout(BaseStrategy):
 
         # Only trade in allowed regimes (unless all_regimes override is set)
         if not self.config.get("all_regimes", False) and not overrides.get("allowed", False):
+            logger.debug(f"[EVAL] {self.name}: BLOCKED gate:regime_not_allowed")
             return None
 
         # Need at least some bars
         if len(bars_1m) < 1:
+            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
             return None
 
         # Config params
@@ -75,6 +81,7 @@ class IBBreakout(BaseStrategy):
         # ── Detect current date, reset IB daily ─────────────────────
         price = market.get("price", 0)
         if price <= 0:
+            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
             return None
 
         # Use last 1m bar timestamp to determine date (ET-anchored)
@@ -115,11 +122,13 @@ class IBBreakout(BaseStrategy):
                 self._ib_set = True
 
             # Not set yet — still building
+            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
             return None
 
         # ── IB is set — validate width ──────────────────────────────
         ib_width = self._ib_high - self._ib_low
         if ib_width <= 0:
+            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
             return None
 
         # Check IB width vs ATR — skip if too wide (low break-extension)
@@ -127,6 +136,7 @@ class IBBreakout(BaseStrategy):
         atr_1m = market.get("atr_1m", 0)
         atr = atr_5m if atr_5m > 0 else atr_1m
         if atr > 0 and ib_width > (max_ib_width_atr * atr):
+            logger.debug(f"[EVAL] {self.name}: BLOCKED gate:ib_too_wide")
             return None  # IB too wide, reduced edge
 
         # ── Step 2: Watch for breakout ──────────────────────────────
@@ -140,6 +150,7 @@ class IBBreakout(BaseStrategy):
             direction = "SHORT"
 
         if direction is None:
+            logger.debug(f"[EVAL] {self.name}: NO_SIGNAL no_ib_breakout_or_already_traded")
             return None
 
         # ── FIX: CVD Hard Confirmation ──────────────────────────────
@@ -150,8 +161,10 @@ class IBBreakout(BaseStrategy):
         if require_cvd:
             cvd_now = market.get("cvd", 0)
             if direction == "LONG" and cvd_now <= 0:
+                logger.debug(f"[EVAL] {self.name}: BLOCKED gate:cvd_not_confirming_long")
                 return None  # Price broke IB high but buyers are not in control
             elif direction == "SHORT" and cvd_now >= 0:
+                logger.debug(f"[EVAL] {self.name}: BLOCKED gate:cvd_not_confirming_short")
                 return None  # Price broke IB low but sellers are not in control — buyers absorbing
 
         # Mark direction as traded for today
@@ -170,9 +183,23 @@ class IBBreakout(BaseStrategy):
             target_price = self._ib_low - (ib_width * target_extension)
 
         if stop_distance <= 0:
+            logger.debug(f"[EVAL] {self.name}: NO_SIGNAL invalid_stop_distance")
             return None
 
         stop_ticks = max(4, int(stop_distance / TICK_SIZE))
+
+        # Fix 8 (2026-04-20): NQ research ceiling guard. Structural stop from
+        # opposite IB boundary can produce 80-320t stops on normal-to-high vol
+        # days. Skip the signal rather than trade with an over-ceiling stop.
+        max_stop = self.config.get("max_stop_ticks", 120)
+        if stop_ticks > max_stop:
+            logger.info(
+                f"[EVAL] {self.name}: SKIP "
+                f"stop_too_wide ({stop_ticks}t > {max_stop}t max) "
+                f"— IB too wide for current risk tier"
+            )
+            return None
+
         target_distance = abs(target_price - price)
         target_rr = target_distance / stop_distance if stop_distance > 0 else 1.5
 
@@ -226,6 +253,7 @@ class IBBreakout(BaseStrategy):
         confluences.append(f"IB: {self._ib_low:.2f} - {self._ib_high:.2f} (width={ib_width:.2f})")
         confluences.append(f"Stop: {stop_ticks} ticks, Target RR: {target_rr:.2f}")
 
+        logger.info(f"[EVAL] {self.name}: SIGNAL {direction} entry={price:.2f}")
         return Signal(
             direction=direction,
             stop_ticks=stop_ticks,

@@ -14,7 +14,7 @@ import json
 import logging
 import time
 import urllib.request
-from datetime import datetime
+from datetime import datetime, date
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -169,6 +169,32 @@ def _trail_stop(pos, price: float):
     elif pos.direction == "SHORT" and mid < pos.stop_price:
         pos.stop_price = round(mid, 2)
         logger.info(f"[TRAIL:{pos.trade_id}] Stop trailed to {pos.stop_price:.2f} (mid)")
+
+
+# ── Dashboard push JSON default (BUG-TL1) ────────────────────────────────
+def _json_default_safe(obj):
+    """
+    json.dumps default= handler — called only for non-JSON-serializable values.
+
+    Historically the dashboard-push path raised "Object of type datetime is
+    not JSON serializable" whenever a `to_dict()` producer leaked a raw
+    datetime or date into the snapshot. This helper coerces those at the
+    push boundary so producer code doesn't have to hunt-and-ISO-encode
+    every field path. Any other exotic type falls back to str() so we
+    never re-raise into the dashboard loop.
+    """
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if hasattr(obj, "isoformat") and callable(obj.isoformat):
+        # Covers pandas.Timestamp, time, and similar date/time-like objects.
+        try:
+            return obj.isoformat()
+        except Exception:
+            pass
+    try:
+        return str(obj)
+    except Exception:
+        return f"<unserializable {type(obj).__name__}>"
 
 
 class BaseBot:
@@ -331,11 +357,13 @@ class BaseBot:
         from strategies.dom_pullback import DOMPullback
         from strategies.orb import OpeningRangeBreakout
         from strategies.noise_area import NoiseAreaMomentum
+        from strategies.vwap_band_pullback import VwapBandPullback
 
         strategy_classes = {
             "bias_momentum": BiasMomentumFollow,
             "spring_setup": SpringSetup,
             "vwap_pullback": VWAPPullback,
+            "vwap_band_pullback": VwapBandPullback,
             "high_precision_only": HighPrecisionOnly,
             "ib_breakout": IBBreakout,
             "compression_breakout": CompressionBreakout,
@@ -439,8 +467,10 @@ class BaseBot:
             try:
                 if _use_aiohttp:
                     async with aiohttp.ClientSession() as sess:
-                        # Push state
-                        state_json = json.dumps(self.to_dict())
+                        # Push state. default=_json_default_safe coerces
+                        # any leaked datetime/date in sub-component to_dict()
+                        # outputs to ISO strings (BUG-TL1 fix).
+                        state_json = json.dumps(self.to_dict(), default=_json_default_safe)
                         async with sess.post(url_state, data=state_json,
                                              headers={"Content-Type": "application/json"},
                                              timeout=aiohttp.ClientTimeout(total=2)):
@@ -458,7 +488,9 @@ class BaseBot:
                     # Fallback: run blocking urllib in thread pool so it doesn't
                     # starve the event loop
                     loop = asyncio.get_event_loop()
-                    state_json = json.dumps(self.to_dict()).encode("utf-8")
+                    state_json = json.dumps(
+                        self.to_dict(), default=_json_default_safe
+                    ).encode("utf-8")
                     req = urllib.request.Request(
                         url_state, data=state_json,
                         headers={"Content-Type": "application/json"},
@@ -530,15 +562,28 @@ class BaseBot:
             self.status = "SCANNING"
 
             async for message in ws:
+                # BUG-TL2 guard: the dispatch phase (json.loads + msg_type
+                # routing) has its own inner json guard; non-tick messages
+                # early-return via `continue`. Wrap the whole dispatch just
+                # to catch any other unexpected error without kicking the WS.
                 try:
                     tick = json.loads(message)
                 except json.JSONDecodeError:
+                    continue
+                except Exception as _dispatch_err:
+                    logger.error(
+                        f"[WS DISPATCH] error decoding message "
+                        f"(keeping WS alive): {type(_dispatch_err).__name__}: {_dispatch_err}"
+                    )
                     continue
 
                 msg_type = tick.get("type")
 
                 if msg_type == "dom":
-                    self.aggregator.process_dom(tick)
+                    try:
+                        self.aggregator.process_dom(tick)
+                    except Exception as _dom_err:
+                        logger.debug(f"[DOM] process failed: {_dom_err}")
                     continue
 
                 if msg_type == "trade_ack":
@@ -563,8 +608,21 @@ class BaseBot:
                 # Tick loop heartbeat — detect frozen loops
                 self._last_tick_time = time.time()
 
-                # Process tick through aggregator
-                snapshot = self.aggregator.process_tick(tick)
+                # BUG-TL2 guard: aggregator.process_tick is the highest-risk
+                # call on the tick path — raw tick dict parsing, bar builder,
+                # all indicators. If this raises, the unhandled exception
+                # bubbles out of `async for`, websockets sends code=1011 to
+                # the bridge, and the bot is kicked off (observed 22:50 CT
+                # 2026-04-19). Subsequent per-tick work below (footprint,
+                # strategies, exits) already has narrow try/except guards.
+                try:
+                    snapshot = self.aggregator.process_tick(tick)
+                except Exception as _agg_err:
+                    logger.error(
+                        f"[TICK AGGREGATOR] process_tick failed "
+                        f"(keeping WS alive): {type(_agg_err).__name__}: {_agg_err}"
+                    )
+                    continue
 
                 # NEW (shadow): feed footprint builders on every tick (fast path, no branching)
                 try:

@@ -51,9 +51,13 @@ STRATEGIES = {
     "bias_momentum": {
         "enabled": True,
         "validated": True,    # Runs in prod bot
-        # Stop wider than MNQ 1m ATR (7.7 ticks avg) so noise doesn't stop us out.
-        # 20 ticks = 5 points = $10 risk. Gives the trade room to breathe.
-        "stop_ticks": 20,
+        # NQ-calibrated ATR-anchored stop (B14 2026-04-20). Fixed-tick stops get
+        # taken out by noise on NQ — use 1.5×ATR anchored to last 5m wick.
+        "stop_method": "atr_anchored",
+        "stop_atr_mult": 2.0,
+        "min_stop_ticks": 40,        # 10 points floor (NQ noise)
+        "max_stop_ticks": 120,       # 30 points cap (high-vol days)
+        "stop_fallback_ticks": 64,   # 16 points if ATR unavailable
         # 5:1 RR minimum → 100 ticks = 25 points = $50. Aligns with 20-80 pt goal.
         # Only worthwhile if the setup is a genuine strong trend day.
         "target_rr": 5.0,
@@ -86,18 +90,29 @@ STRATEGIES = {
         # Anchored to wick low/high — NOT entry price — so it's below the defended level
         "atr_stop_multiplier": 1.1,     # 1.1 × 5m ATR from wick extreme
         "structure_buffer_ticks": 2,    # Fallback buffer if ATR unavailable
+        # NQ research clamps (Fix 7, 2026-04-20): raised from 8/40 → 40/120
+        "min_stop_ticks": 40,
+        "max_stop_ticks": 120,
     },
     "vwap_pullback": {
         "enabled": True,
         "validated": False,   # Lab only
-        "stop_ticks": 14,
+        # NQ-calibrated ATR-anchored stop (B14 2026-04-20). Replaces fixed 14t.
+        "stop_method": "atr_anchored",
+        "stop_atr_mult": 2.0,
+        "min_stop_ticks": 40,
+        "max_stop_ticks": 120,
+        "stop_fallback_ticks": 64,
+        # Max distance from VWAP to qualify as "near VWAP" (replaces hardcoded 6).
+        # 60t = 15pts — a true VWAP pullback can be further out than 6 ticks on NQ.
+        "max_vwap_dist_ticks": 60,
         "target_rr": 20.0,   # Reversal+stall exit drives this — target is not the OCO bracket
         "min_confluence": 3.2,
         "min_tf_votes": 3,
         "max_hold_min": 60,  # Give it room — VWAP pullbacks can run 30-80pts
     },
     "high_precision_only": {
-        "enabled": True,
+        "enabled": False,
         "validated": False,   # Lab only — Research Bot found promise (64% WR solo)
         "stop_ticks": 14,
         "target_rr": 5.0,    # 5:1 — high precision setups deserve big targets
@@ -110,7 +125,12 @@ STRATEGIES = {
         "enabled": True,
         "validated": False,   # Lab only — replicates user's manual DOM absorption entry
         # Entry: pullback to EMA9 or VWAP + sell orders being pulled/absorbed by buyers
-        "stop_ticks": 10,     # 10t = 2.5pts — tight stop just below the pullback low
+        # NQ-calibrated ATR-anchored stop (B14 2026-04-20). Replaces fixed 10t — too tight.
+        "stop_method": "atr_anchored",
+        "stop_atr_mult": 2.0,
+        "min_stop_ticks": 40,
+        "max_stop_ticks": 120,
+        "stop_fallback_ticks": 64,
         "target_rr": 2.5,     # 2.5:1 = 25t = 6.25pts minimum capture
         # DOM absorption threshold — 0=any signal, 100=very strong only
         # 35 is moderate: absorption is visible but not overwhelming
@@ -123,15 +143,6 @@ STRATEGIES = {
         "max_vwap_dist_ticks": 20,  # Widened from 10t → 20t (more realistic touch zone)
         "max_hold_min": 20,
     },
-    "tick_scalp": {
-        "enabled": True,      # Enabled for lab bot
-        "validated": False,
-        "stop_ticks": 5,
-        "target_rr": 1.5,
-        "min_confluence": 2.5,
-        "min_tf_votes": 3,
-        "max_hold_min": 8,
-    },
     "ib_breakout": {
         "enabled": True,
         "validated": True,    # Runs in prod bot — 96.2% IB break rate, 74.56% WR
@@ -139,6 +150,10 @@ STRATEGIES = {
         "target_extension": 1.5,
         "max_ib_width_atr_mult": 1.5,
         "stop_at_ib_midpoint": False,  # False = stop at full IB opposite, True = tighter stop at midpoint
+        # NQ research ceiling (Fix 8, 2026-04-20): structural stop must fit.
+        # If (price - ib_low) or (ib_high - price) exceeds this in ticks → SKIP signal.
+        # Complementary to max_ib_width_atr_mult (pre-filter on IB width).
+        "max_stop_ticks": 120,
         "max_hold_min": 60,
         # v2 fix (2026-04-14): CVD must confirm breakout direction
         # Without this: SHORT at IB low with CVD=+6.05M → -164t loss (buyers absorbing)
@@ -186,10 +201,10 @@ STRATEGIES = {
         "tight_mult":    None,      # None = regime default
         "min_tf_votes": 2,          # TF votes needed to confirm direction (exhaustion allows min-1)
         "stop_buffer_ticks": 3,     # Ticks beyond coil low/high for stop
-        # Stop management
-        "max_stop_ticks": 40,       # Hard cap ($20 risk). Pre-explosion stops are naturally tight
-                                    # (8-20t typically). Cap guards against drift edge cases.
-                                    # At 3:1 RR with 40t stop → target=120t ($60). Squeezes run 400t+.
+        # Stop management — NQ research clamps (Fix 7, 2026-04-20)
+        "min_stop_ticks": 40,       # 10pt floor (Propfolio noise floor)
+        "max_stop_ticks": 120,      # 30pt ceiling (Steady Turtle NQ band)
+        # atr_stop_mult stays strategy-internal (1.5× by default; trend breakout).
         # Targets — these moves run FAR, use wide RR
         # With 20-tick stop (5 pts): 5:1 = 100t = 25pts, 8:1 = 160t = 40pts
         # Explosion squeezes on MNQ routinely run 400t+ (100pts). Let it run.
@@ -199,5 +214,25 @@ STRATEGIES = {
         #   Which signal (VRR / exhaustion / close-breakout) has highest win rate?
         #   Does ATR-declining alone add value without a directional signal?
         #   Is exhaustion_tf_min = min_tf_votes-1 the right relaxation?
+    },
+
+    "vwap_band_pullback": {
+        # 1σ/2σ VWAP-band pullback + RSI(2) — ported from b12 research.
+        # Runs alongside vwap_pullback (proximity) for head-to-head lab data.
+        # Author prediction (b12 header): PF 1.5-1.8 at WR 45-55%, RR 1.5-2:1.
+        "enabled": True,
+        "validated": False,   # Lab only — needs 50+ trades before prod promotion
+        "min_bars": 50,
+        "rsi_period": 2,
+        "rsi_long_threshold": 30,
+        "rsi_short_threshold": 70,
+        "atr_period": 14,
+        "min_volume_ratio": 0.8,
+        "target_rr": 2.0,
+        # NQ-research clamps (matches Fix 7 values). If natural 2σ-band
+        # stop > max_stop_ticks, signal is skipped (Fix 8-style guard).
+        "min_stop_ticks": 40,
+        "max_stop_ticks": 120,
+        "max_hold_min": 60,
     },
 }

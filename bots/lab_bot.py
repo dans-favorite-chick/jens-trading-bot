@@ -33,7 +33,10 @@ from strategies.base_strategy import Signal
 from config.settings import TICK_SIZE
 
 logging.basicConfig(
-    level=logging.INFO,
+    # Lab runs at DEBUG to surface Fix 5 [EVAL] BLOCKED/SKIP/NO_SIGNAL
+    # reject-reason logs for strategy observability. Prod stays at INFO
+    # (see bots/prod_bot.py) so production logs stay quiet.
+    level=logging.DEBUG,
     format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
 )
 logger = logging.getLogger("LabBot")
@@ -46,7 +49,7 @@ LAB_ZERO_GATE = {
     "min_momentum_confidence": 0,   # No confidence gate
     "min_precision": 0,             # No precision gate
     "risk_per_trade": 15.0,         # Standard risk per trade
-    "max_daily_loss": 200.0,        # Very high daily limit — let it trade
+    "max_daily_loss": 1000.0,       # Data-collection mode: wide cap to absorb lab exploration. Adjust after 50+ trades/strategy collected and validation triggered.
 }
 
 # Strategy overrides: all gates REMOVED
@@ -69,14 +72,16 @@ LAB_STRATEGY_OVERRIDES = {
         "stop_multiplier": 1.5,         # Fallback only — ATR stop runs if ATR_5m available
         "target_rr": 5.0,              # Raised from 1.5 — spring setups can run 20-50pts
         "atr_stop_multiplier": 1.1,
-        "max_stop_ticks": 40,
-        "min_stop_ticks": 8,
+        # NQ research clamps aligned with Fix 7 main config (2026-04-20)
+        "max_stop_ticks": 120,
+        "min_stop_ticks": 40,
     },
     "vwap_pullback": {
         "min_confluence": 0.0,
         "min_tf_votes": 1,           # Just 1 TF
         "skip_regime_overrides": True,
-        "stop_ticks": 14,
+        "stop_ticks": 14,            # Legacy — kept for any pre-B14 readers. ATR stop supersedes.
+        "max_vwap_dist_ticks": 60,   # B14: permissive VWAP proximity gate for lab data collection
         "target_rr": 20.0,           # 20:1 — reversal+stall exit drives this
     },
     "high_precision_only": {
@@ -95,6 +100,7 @@ LAB_STRATEGY_OVERRIDES = {
         "target_rr": 5.0,            # IB breakouts naturally run 50-200pts — let them
         "ib_minutes": 15,
         "max_ib_width_atr_mult": 5.0,
+        "max_stop_ticks": 120,       # Fix 8 ceiling guard — skip signal if structural stop > 120t
         "all_regimes": True,
         "require_cvd_confirm": False,
     },
@@ -106,6 +112,14 @@ LAB_STRATEGY_OVERRIDES = {
         "skip_regime_overrides": True,
         "stop_ticks": 10,
         "target_rr": 20.0,           # 20:1 — reversal+stall exit drives this
+    },
+    "vwap_band_pullback": {
+        # Lab: loosen HTF alignment so the 1σ-band algorithm can fire
+        # across more setups for data collection. Preserves RSI(2) +
+        # volume gates (those are the algorithm's core).
+        "skip_regime_overrides": True,
+        "min_volume_ratio": 0.5,     # Lab: broader volume tolerance
+        "target_rr": 5.0,            # 5:1 — exit on stall or trend break
     },
 }
 

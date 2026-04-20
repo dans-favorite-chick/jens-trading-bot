@@ -54,14 +54,14 @@ print()
 
 # ─── (B1) PLACE SELL STOP GTC ──────────────────────────────
 stop_sell_id = f"T05_STPS_{test_id}"
-stop_sell_oif = f"PLACE;{ACCOUNT};{INSTRUMENT};SELL;1;STOP;0;20000;GTC;;{stop_sell_id};;"
+stop_sell_oif = f"PLACE;{ACCOUNT};{INSTRUMENT};SELL;1;STOPMARKET;0;20000;GTC;;{stop_sell_id};;"
 print(f"[B1] PLACE SELL STOP GTC (stop 20000, ID={stop_sell_id})")
 send("B1_stopsell_gtc", stop_sell_oif, wait=3.0)
 print()
 
 # ─── (B2) PLACE BUY STOP GTC ──────────────────────────────
 stop_buy_id = f"T05_STPB_{test_id}"
-stop_buy_oif = f"PLACE;{ACCOUNT};{INSTRUMENT};BUY;1;STOP;0;40000;GTC;;{stop_buy_id};;"
+stop_buy_oif = f"PLACE;{ACCOUNT};{INSTRUMENT};BUY;1;STOPMARKET;0;40000;GTC;;{stop_buy_id};;"
 print(f"[B2] PLACE BUY STOP GTC (stop 40000, ID={stop_buy_id})")
 send("B2_stopbuy_gtc", stop_buy_oif, wait=3.0)
 print()

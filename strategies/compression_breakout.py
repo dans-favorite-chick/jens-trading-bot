@@ -24,7 +24,11 @@ from dataclasses import dataclass
 from typing import Optional
 import math
 
+import logging
+
 from strategies.base_strategy import BaseStrategy, Signal
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -86,6 +90,7 @@ class CompressionBreakout(BaseStrategy):
             compression_tf, bars_5m, bars_1m, market
         )
         if bars_compression is None or len(bars_compression) < 50:
+            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
             return None
 
         # Most recent CLOSED bar is our reference
@@ -98,6 +103,7 @@ class CompressionBreakout(BaseStrategy):
             bars_compression, bb_period, bb_std, kc_period, kc_atr_mult
         )
         if bb_width is None or kc_width is None:
+            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
             return None
         in_ttm_squeeze = bb_width < kc_width
 
@@ -109,6 +115,7 @@ class CompressionBreakout(BaseStrategy):
         ]
         atr_history = [a for a in atr_history if a is not None and a > 0]
         if len(atr_history) < atr_smoothing // 2:  # Need most of the lookback
+            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
             return None
         avg_atr = sum(atr_history) / len(atr_history)
         atr_compressed = current_atr <= (avg_atr * atr_compression_ratio)
@@ -143,6 +150,7 @@ class CompressionBreakout(BaseStrategy):
                 # Reset
                 self._state.consecutive_squeeze_bars = 0
                 self._state.in_squeeze = False
+                logger.debug(f"[EVAL] {self.name}: NO_SIGNAL squeeze_not_held_min_bars")
                 return None
 
         # ── STAGE 2: BREAKOUT DETECTION (4 conditions, ALL must be true) ──
@@ -165,20 +173,24 @@ class CompressionBreakout(BaseStrategy):
             breakout_level = squeeze_low
         else:
             # Still inside the range, no breakout yet
+            logger.debug(f"[EVAL] {self.name}: NO_SIGNAL price_inside_squeeze_range")
             return None
 
         # Condition 2: Breakout bar volume ≥ 1.5x squeeze avg volume
         if ref_bar.volume < (squeeze_avg_vol * breakout_volume_mult):
+            logger.debug(f"[EVAL] {self.name}: BLOCKED gate:breakout_volume_insufficient")
             return None  # Weak breakout — likely fake
 
         # Condition 3: BB has re-expanded outside KC (squeeze released)
         if in_ttm_squeeze:  # If still in squeeze, breakout isn't confirmed
+            logger.debug(f"[EVAL] {self.name}: BLOCKED gate:still_in_ttm_squeeze")
             return None
 
         # Condition 4: Close is solidly past breakout level (not just a tick over)
         breakout_distance = abs(ref_bar.close - breakout_level)
         min_breakout_distance = current_atr * 0.25  # At least 25% of ATR past level
         if breakout_distance < min_breakout_distance:
+            logger.debug(f"[EVAL] {self.name}: BLOCKED gate:breakout_distance_too_small")
             return None  # Marginal breakout — wait for confirmation
 
         # ── STAGE 3: HIGHER TIMEFRAME ALIGNMENT (optional but recommended) ──
@@ -186,6 +198,7 @@ class CompressionBreakout(BaseStrategy):
         if require_htf_alignment:
             htf_aligned = self._check_htf_alignment(direction, market, session_info)
             if not htf_aligned:
+                logger.debug(f"[EVAL] {self.name}: BLOCKED gate:htf_not_aligned")
                 return None
 
         # ── STAGE 4: BUILD THE SIGNAL ──────────────────────────────────
@@ -195,7 +208,10 @@ class CompressionBreakout(BaseStrategy):
         # Convert to ticks (MNQ tick size = 0.25)
         tick_size = 0.25
         stop_ticks = int(stop_distance_price / tick_size)
-        stop_ticks = max(stop_ticks, 8)  # Floor at 8 ticks
+        # NQ research clamps (Fix 7, 2026-04-20) — 40t floor / 120t ceiling
+        min_stop = self.config.get("min_stop_ticks", 40)
+        max_stop = self.config.get("max_stop_ticks", 120)
+        stop_ticks = max(min_stop, min(max_stop, stop_ticks))
 
         # Confluences for trade journal
         confluences = [
@@ -219,6 +235,7 @@ class CompressionBreakout(BaseStrategy):
         else:
             entry_price_sm = round(squeeze_low - 0.25, 2)
 
+        logger.info(f"[EVAL] {self.name}: SIGNAL {direction} entry={ref_bar.close:.2f}")
         return Signal(
             direction=direction,
             stop_ticks=stop_ticks,

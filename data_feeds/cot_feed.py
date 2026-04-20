@@ -158,13 +158,24 @@ class COTFeed:
         """Fallback: fetch directly from CFTC EDGAR API."""
         import asyncio
         import urllib.request
+        import urllib.parse
 
         def _fetch():
-            # CFTC Socrata API for disaggregated futures
-            url = ("https://publicreporting.cftc.gov/resource/jun7-fc8e.json?"
-                   "$where=market_and_exchange_names like '%NASDAQ MINI%'"
-                   "&$order=report_date_as_yyyy_mm_dd DESC"
-                   "&$limit=52")
+            # BUG-TL3 fix: the $where clause contains spaces, apostrophes,
+            # and the LIKE wildcard `%` — all of which must be percent-encoded
+            # for urllib's http client (which raises "URL can't contain
+            # control characters" on any bare space). Use urlencode() to
+            # properly escape all query-string parameters.
+            # CFTC Socrata API for disaggregated futures.
+            base = "https://publicreporting.cftc.gov/resource/jun7-fc8e.json"
+            params = {
+                "$where": "market_and_exchange_names like '%NASDAQ MINI%'",
+                "$order": "report_date_as_yyyy_mm_dd DESC",
+                "$limit": "52",
+            }
+            # quote_via=urllib.parse.quote ensures spaces become %20, not `+`
+            # (Socrata accepts both but %20 is the safer universal form).
+            url = base + "?" + urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
             req = urllib.request.Request(url, headers={"Accept": "application/json"})
             resp = urllib.request.urlopen(req, timeout=30)
             return json.loads(resp.read().decode())

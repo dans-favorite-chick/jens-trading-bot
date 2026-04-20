@@ -8,7 +8,11 @@ Logic: TF bias says bullish → price pulled back to/below VWAP → bounce candl
 The entry is ON the pullback touch, not after price already reclaimed.
 """
 
+import logging
+
 from strategies.base_strategy import BaseStrategy, Signal
+
+logger = logging.getLogger(__name__)
 
 
 class VWAPPullback(BaseStrategy):
@@ -17,8 +21,12 @@ class VWAPPullback(BaseStrategy):
     def evaluate(self, market: dict, bars_5m: list, bars_1m: list,
                  session_info: dict) -> Signal | None:
 
-        stop_ticks = self.config.get("stop_ticks", 8)
         target_rr = self.config.get("target_rr", 1.8)
+        # B14: NQ-calibrated ATR stop params (replaces fixed stop_ticks).
+        stop_atr_mult       = self.config.get("stop_atr_mult", 2.0)
+        min_stop_ticks      = self.config.get("min_stop_ticks", 40)
+        max_stop_ticks      = self.config.get("max_stop_ticks", 120)
+        stop_fallback_ticks = self.config.get("stop_fallback_ticks", 64)
         day_type = market.get("day_type", "UNKNOWN")
         mq_bias  = market.get("mq_direction_bias", "NEUTRAL")
         trend_day = (day_type == "TREND")
@@ -26,6 +34,7 @@ class VWAPPullback(BaseStrategy):
         min_tf_votes = 1 if trend_day else self.config.get("min_tf_votes", 2)
 
         if len(bars_1m) < 2:
+            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
             return None
 
         price = market.get("price", 0)
@@ -37,6 +46,7 @@ class VWAPPullback(BaseStrategy):
         bearish = market.get("tf_votes_bearish", 0)
 
         if vwap <= 0:
+            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
             return None
 
         confluences = []
@@ -44,9 +54,15 @@ class VWAPPullback(BaseStrategy):
         from config.settings import TICK_SIZE
         tick_size = TICK_SIZE
 
-        # Price must be near VWAP (within 6 ticks — wider zone for pullback detection)
+        # B14: config-driven VWAP proximity gate (was hardcoded 6t — too tight, caused
+        # zero fills in prod). Default 60t = 15pts is more realistic for NQ pullbacks.
+        max_vwap_dist = self.config.get("max_vwap_dist_ticks", 60)
         vwap_dist_ticks = abs(price - vwap) / tick_size
-        if vwap_dist_ticks > 6:
+        if vwap_dist_ticks > max_vwap_dist:
+            logger.debug(
+                f"[EVAL] {self.name}: BLOCKED "
+                f"gate:vwap_dist_too_far ({vwap_dist_ticks:.1f}t > {max_vwap_dist}t)"
+            )
             return None
 
         # Check for pullback history: recent bars must show price WAS away from VWAP
@@ -73,6 +89,7 @@ class VWAPPullback(BaseStrategy):
             confluences.append(f"Bearish TF: {bearish}/4")
             confluences.append(f"Pullback from {max_dist_below:.0f}t below VWAP")
         else:
+            logger.debug(f"[EVAL] {self.name}: NO_SIGNAL no_pullback_detected")
             return None
 
         confluences.append(f"Near VWAP ({vwap_dist_ticks:.0f}t away)")
@@ -107,11 +124,30 @@ class VWAPPullback(BaseStrategy):
             confluences.append("Bounce candle (bearish)")
 
         if not has_bounce:
+            logger.debug(f"[EVAL] {self.name}: NO_SIGNAL no_bounce_candle")
             return None  # No bounce = no entry, wait for confirmation
 
         confluences.append(f"Regime: {session_info.get('regime', '?')}")
 
-        return Signal(
+        # B14: NQ-calibrated ATR-anchored stop (replaces fixed stop_ticks).
+        from strategies._nq_stop import compute_atr_stop
+        atr_5m = market.get("atr_5m", 0) or 0
+        last_5m = bars_5m[-1] if bars_5m else None
+        stop_ticks, stop_price, atr_override, stop_note = compute_atr_stop(
+            direction=direction,
+            entry_price=price,
+            last_5m_bar=last_5m,
+            atr_5m_points=atr_5m,
+            tick_size=tick_size,
+            stop_atr_mult=self.config.get("stop_atr_mult", 2.0),
+            min_stop_ticks=self.config.get("min_stop_ticks", 40),
+            max_stop_ticks=self.config.get("max_stop_ticks", 120),
+            stop_fallback_ticks=self.config.get("stop_fallback_ticks", 64),
+        )
+        confluences.append(stop_note)
+
+        logger.info(f"[EVAL] {self.name}: SIGNAL {direction} entry={price:.2f}")
+        sig = Signal(
             direction=direction,
             stop_ticks=stop_ticks,
             target_rr=target_rr,
@@ -121,3 +157,7 @@ class VWAPPullback(BaseStrategy):
             reason=f"VWAP pullback {direction} — {vwap_dist_ticks:.0f}t from VWAP, score {score}",
             confluences=confluences,
         )
+        sig.atr_stop_override = atr_override
+        if atr_override and stop_price is not None:
+            sig.stop_price = stop_price
+        return sig

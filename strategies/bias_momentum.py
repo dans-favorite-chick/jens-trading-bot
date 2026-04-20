@@ -8,8 +8,12 @@ REGIME-AWARE: Loosens gates in golden windows (OPEN_MOMENTUM, MID_MORNING)
 to maximize signal generation when edge is highest.
 """
 
+import logging
+
 from strategies.base_strategy import BaseStrategy, Signal
 from core.candlestick_patterns import CandlestickAnalyzer, get_pattern_confluence
+
+logger = logging.getLogger(__name__)
 
 # Regime-specific overrides — BE AGGRESSIVE in golden windows
 # Non-golden regimes use strategy config defaults (tighter gates)
@@ -47,11 +51,14 @@ class BiasMomentumFollow(BaseStrategy):
 
         min_confluence = overrides.get("min_confluence", self.config.get("min_confluence", 5.5))
         min_momentum = overrides.get("min_momentum", self.config.get("min_momentum", 80))
-        stop_ticks = self.config.get("stop_ticks", 20)
+        # B14: NQ-calibrated ATR stop params (replaces fixed stop_ticks). Stop is
+        # computed at the end, after direction is known. Regime overrides (if any
+        # are added later) can still tighten/loosen this — ATR is the base floor.
         target_rr = self.config.get("target_rr", 5.0)
 
         # Minimal warmup — only need 1 bar to have data, use what we have
         if len(bars_1m) < 1:
+            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
             return None
 
         # ── Direction: Multi-TF EMA vote ──────────────────────────────
@@ -143,6 +150,7 @@ class BiasMomentumFollow(BaseStrategy):
                 direction = "LONG" if bias_1m == "BULLISH" else ("SHORT" if bias_1m == "BEARISH" else None)
             if direction is None:
                 self._last_reject = f"TREND day: no 1m direction (1m={bias_1m}, MQ={mq_bias})"
+                logger.debug(f"[EVAL] {self.name}: BLOCKED gate:trend_day_no_direction")
                 return None
         else:
             # Non-TREND: EMA stack gate (Layer A) + VWAP side (Layer B)
@@ -160,6 +168,7 @@ class BiasMomentumFollow(BaseStrategy):
                 self._last_reject = (
                     f"EMA_STACK: 5m EMA9={ema9:.1f} EMA21={ema21:.1f} "
                     f"(no stack — need EMA9{'>'if ema9>0 else '<'}EMA21 or explosive bar)")
+                logger.debug(f"[EVAL] {self.name}: BLOCKED gate:ema_stack")
                 return None
 
             # Layer B: VWAP side check (unless explosive bypass active)
@@ -169,11 +178,13 @@ class BiasMomentumFollow(BaseStrategy):
                     self._last_reject = (
                         f"VWAP_GATE: price {price:.2f} below VWAP {vwap:.2f} — "
                         f"no explosive bypass active (VCR={_vcr:.1f}, delta={_bar_delta:+.0f})")
+                    logger.debug(f"[EVAL] {self.name}: BLOCKED gate:vwap_long")
                     return None
                 elif direction == "SHORT" and not price_below_vwap and vwap > 0:
                     self._last_reject = (
                         f"VWAP_GATE: price {price:.2f} above VWAP {vwap:.2f} — "
                         f"no explosive bypass active (VCR={_vcr:.1f}, delta={_bar_delta:+.0f})")
+                    logger.debug(f"[EVAL] {self.name}: BLOCKED gate:vwap_short")
                     return None
 
         # ── CVD Gate — afternoon/chop regimes (HARD BLOCK) ──────────────────
@@ -189,11 +200,13 @@ class BiasMomentumFollow(BaseStrategy):
                 self._last_reject = (
                     f"BIAS_MOM: CVD={cvd/1e6:.1f}M (net selling) in {regime} — "
                     f"institutional flow opposes LONG. Wait for CVD to turn positive.")
+                logger.debug(f"[EVAL] {self.name}: BLOCKED gate:cvd_chop_long")
                 return None
             elif direction == "SHORT" and cvd >= 0:
                 self._last_reject = (
                     f"BIAS_MOM: CVD=+{cvd/1e6:.1f}M (net buying) in {regime} — "
                     f"institutional flow opposes SHORT. Wait for CVD to turn negative.")
+                logger.debug(f"[EVAL] {self.name}: BLOCKED gate:cvd_chop_short")
                 return None
 
         # ── Momentum scoring ─────────────────────────────────────────
@@ -561,6 +574,7 @@ class BiasMomentumFollow(BaseStrategy):
         if momentum_score < effective_min_momentum:
             self._last_reject = (f"MOMENTUM: score={momentum_score} need={effective_min_momentum} "
                                  f"({'TREND ' if trend_day else ''}{', '.join(confluences[1:])})")
+            logger.debug(f"[EVAL] {self.name}: NO_SIGNAL momentum_score={momentum_score}<{effective_min_momentum}")
             return None
 
         # ── EMA9 Extension Gate ────────────────────────────────────────
@@ -595,23 +609,45 @@ class BiasMomentumFollow(BaseStrategy):
             if _ema_dist > _max_ema_dist:
                 self._last_reject = (f"BIAS_MOM: Price {_ema_dist:.0f}t from EMA9 "
                                      f"(max {_max_ema_dist}t in {regime}) — chasing, wait for pullback")
+                logger.debug(f"[EVAL] {self.name}: BLOCKED gate:ema9_extension")
                 return None
 
         # ── Confluence score ────────────────────────────────────────
         # TREND days: skip confluence gate entirely. Direction comes from MQ bias (context),
         # not TF votes, so the votes+momentum formula is meaningless. The momentum threshold
         # (20pts = ONE signal) is sufficient — day context IS the primary confluence.
+        votes = market.get("tf_votes_bullish" if direction == "LONG" else "tf_votes_bearish", 0)
         if not trend_day:
             confluence = votes + (momentum_score / 30)
             if confluence < min_confluence:
                 self._last_reject = (f"CONFLUENCE: score={confluence:.1f} need={min_confluence} "
                                      f"votes={votes} momentum={momentum_score}")
+                logger.debug(f"[EVAL] {self.name}: NO_SIGNAL confluence={confluence:.1f}<{min_confluence}")
                 return None
 
         confluences.append(f"TF: {votes}/4 {'bull' if direction == 'LONG' else 'bear'}")
         confluences.append(f"Momentum: {momentum_score}")
 
-        return Signal(
+        # B14: NQ-calibrated ATR-anchored stop (replaces fixed stop_ticks=20).
+        from strategies._nq_stop import compute_atr_stop
+        from config.settings import TICK_SIZE as _ts_stop
+        atr_5m = market.get("atr_5m", 0) or 0
+        last_5m = bars_5m[-1] if bars_5m else (bars_1m[-1] if bars_1m else None)
+        stop_ticks, stop_price, atr_override, stop_note = compute_atr_stop(
+            direction=direction,
+            entry_price=price if price > 0 else market.get("price", 0),
+            last_5m_bar=last_5m,
+            atr_5m_points=atr_5m,
+            tick_size=_ts_stop,
+            stop_atr_mult=self.config.get("stop_atr_mult", 2.0),
+            min_stop_ticks=self.config.get("min_stop_ticks", 40),
+            max_stop_ticks=self.config.get("max_stop_ticks", 120),
+            stop_fallback_ticks=self.config.get("stop_fallback_ticks", 64),
+        )
+        confluences.append(stop_note)
+
+        logger.info(f"[EVAL] {self.name}: SIGNAL {direction} entry={price:.2f}")
+        sig = Signal(
             direction=direction,
             stop_ticks=stop_ticks,
             target_rr=target_rr,
@@ -621,3 +657,7 @@ class BiasMomentumFollow(BaseStrategy):
             reason=f"Bias Momentum {direction} — {votes}/4 TF, score {momentum_score}, regime {regime}",
             confluences=confluences,
         )
+        sig.atr_stop_override = atr_override
+        if atr_override and stop_price is not None:
+            sig.stop_price = stop_price
+        return sig

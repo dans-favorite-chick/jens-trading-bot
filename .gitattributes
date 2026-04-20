@@ -1,0 +1,32 @@
+# Phoenix Bot — line-ending normalization (P21, 2026-04-20)
+#
+# All text files stored with LF in repo and checked out as LF.
+# Windows-native tooling (cmd.exe, NinjaScript, PowerShell) accepts LF;
+# empirically verified across the current repo (all .cs/.bat files have
+# been LF for months and work fine against NT8 / cmd).
+#
+# If you edit .cs files directly in NT8's NinjaScript editor (which saves
+# CRLF on disk by default), git will normalize back to LF on commit —
+# expected and harmless. Visible as "modified" in `git status` until
+# committed.
+#
+# Applied alongside `core.autocrlf false` to prevent the checkout-time
+# LF→CRLF conversion that accumulated 137 working-tree-CRLF files across
+# the roadmap-v4 + Option B + verification sprints.
+
+* text=auto eol=lf
+
+# ── Binary files — never munge EOLs ──────────────────────────────────
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.ico    binary
+*.pdf    binary
+*.sqlite binary
+*.db     binary
+*.parquet binary
+*.pyc    binary
+*.pyo    binary
+*.zip    binary
+*.nt8bk  binary

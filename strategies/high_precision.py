@@ -5,7 +5,11 @@ Very selective — requires high TF alignment and momentum.
 Quick target, tight stop.
 """
 
+import logging
+
 from strategies.base_strategy import BaseStrategy, Signal
+
+logger = logging.getLogger(__name__)
 
 
 class HighPrecisionOnly(BaseStrategy):
@@ -21,6 +25,7 @@ class HighPrecisionOnly(BaseStrategy):
         target_rr = self.config.get("target_rr", 1.5)
 
         if len(bars_1m) < 3:
+            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
             return None
 
         price = market.get("price", 0)
@@ -37,6 +42,7 @@ class HighPrecisionOnly(BaseStrategy):
         elif bearish >= min_tf_votes:
             direction = "SHORT"
         else:
+            logger.debug(f"[EVAL] {self.name}: BLOCKED gate:tf_votes_insufficient")
             return None
 
         confluences = [f"TF alignment: {max(bullish,bearish)}/4"]
@@ -77,10 +83,12 @@ class HighPrecisionOnly(BaseStrategy):
                 confluences.append(f"Candle precision: {precision:.0f}%")
 
         if score < 30:
+            logger.debug(f"[EVAL] {self.name}: NO_SIGNAL score={score}<30")
             return None
 
         confluences.append(f"Regime: {session_info.get('regime', '?')}")
 
+        logger.info(f"[EVAL] {self.name}: SIGNAL {direction} entry={price:.2f}")
         return Signal(
             direction=direction,
             stop_ticks=stop_ticks,
