@@ -33,10 +33,10 @@ class DOMPullback(BaseStrategy):
 
         target_rr         = self.config.get("target_rr", 2.5)
         # B14: NQ-calibrated ATR stop (replaces fixed stop_ticks=10, too tight for NQ).
-        stop_atr_mult       = self.config.get("stop_atr_mult", 1.5)
-        min_stop_ticks      = self.config.get("min_stop_ticks", 16)
-        max_stop_ticks      = self.config.get("max_stop_ticks", 80)
-        stop_fallback_ticks = self.config.get("stop_fallback_ticks", 24)
+        stop_atr_mult       = self.config.get("stop_atr_mult", 2.0)
+        min_stop_ticks      = self.config.get("min_stop_ticks", 40)
+        max_stop_ticks      = self.config.get("max_stop_ticks", 120)
+        stop_fallback_ticks = self.config.get("stop_fallback_ticks", 64)
         min_dom_str       = self.config.get("min_dom_strength", 40)
         max_ema_dist      = self.config.get("max_ema_dist_ticks", 28)   # Data P25 = 26-40t
         max_vwap_dist     = self.config.get("max_vwap_dist_ticks", 20)  # Data P25 = ~20t

@@ -4,8 +4,8 @@ Phoenix Bot — NQ-calibrated ATR-anchored stop helper (B14 2026-04-20).
 Package-private helper used by vwap_pullback, bias_momentum, dom_pullback to
 compute a stop distance + absolute stop price. Mirrors spring_setup's pattern
 but with NQ-appropriate defaults:
-  - 1.5× ATR_5m from last 5m bar wick
-  - clamp [min_stop_ticks, max_stop_ticks] (default 16..80)
+  - 2.0× ATR_5m from last 5m bar wick
+  - clamp [min_stop_ticks, max_stop_ticks] (default 40..120)
   - fallback stop_fallback_ticks when ATR is missing/zero
 
 Returns (stop_ticks, stop_price, atr_stop_override_flag, note).
@@ -24,10 +24,10 @@ def compute_atr_stop(
     last_5m_bar,
     atr_5m_points: float,
     tick_size: float,
-    stop_atr_mult: float = 1.5,
-    min_stop_ticks: int = 16,
-    max_stop_ticks: int = 80,
-    stop_fallback_ticks: int = 24,
+    stop_atr_mult: float = 2.0,
+    min_stop_ticks: int = 40,
+    max_stop_ticks: int = 120,
+    stop_fallback_ticks: int = 64,
 ):
     """Compute NQ-calibrated ATR-anchored stop.
 

@@ -624,10 +624,10 @@ class BiasMomentumFollow(BaseStrategy):
             last_5m_bar=last_5m,
             atr_5m_points=atr_5m,
             tick_size=_ts_stop,
-            stop_atr_mult=self.config.get("stop_atr_mult", 1.5),
-            min_stop_ticks=self.config.get("min_stop_ticks", 16),
-            max_stop_ticks=self.config.get("max_stop_ticks", 80),
-            stop_fallback_ticks=self.config.get("stop_fallback_ticks", 24),
+            stop_atr_mult=self.config.get("stop_atr_mult", 2.0),
+            min_stop_ticks=self.config.get("min_stop_ticks", 40),
+            max_stop_ticks=self.config.get("max_stop_ticks", 120),
+            stop_fallback_ticks=self.config.get("stop_fallback_ticks", 64),
         )
         confluences.append(stop_note)
 

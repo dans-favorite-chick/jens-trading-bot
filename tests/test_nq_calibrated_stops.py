@@ -41,8 +41,9 @@ TICK = 0.25
 # ────────────────────────────────────────────────────────────────────────
 class TestComputeATRStop:
 
-    def test_normal_range_long_15t_atr_clamps_to_22(self):
-        """ATR_5m=15t = 3.75pt → 1.5×3.75=5.625pt = 22.5t → int=22. Inside [16,80]."""
+    def test_normal_range_long_15t_atr_clamps_to_40(self):
+        """ATR_5m=15t = 3.75pt → 2.0×3.75=7.5pt. Raw stop_distance from wick
+        anchor ≈ 11.5pt = 46t. Inside [40,120] → expect ~46t (uncapped)."""
         bar = _Bar(21000, 21005, 20999, 21003)
         stop_ticks, stop_price, override, note = compute_atr_stop(
             direction="LONG",
@@ -51,32 +52,31 @@ class TestComputeATRStop:
             atr_5m_points=3.75,   # 15 ticks
             tick_size=TICK,
         )
-        # anchor = bar.low 20999; stop_price = 20999 - 5.625 = 20993.375
-        # stop_distance = 21003 - 20993.375 = 9.625pt = 38.5t → 38. Clamped into [16,80]=38.
-        # NOTE: wick anchor extends stop BEYOND just 1.5×ATR from entry.
+        # anchor = bar.low 20999; stop_price = 20999 - 7.5 = 20991.5
+        # stop_distance = 21003 - 20991.5 = 11.5pt = 46t. Clamp into [40,120]=46.
         assert override is True
-        assert 16 <= stop_ticks <= 80
+        assert 40 <= stop_ticks <= 120
         # LONG: stop price below entry
         assert stop_price < 21003.0
         assert "ATR stop" in note
 
     def test_clamp_min_tiny_atr(self):
-        """ATR so small that raw computation < 16t → clamp to 16t."""
+        """ATR so small that raw computation < 40t → clamp to 40t."""
         bar = _Bar(21000, 21001, 21000, 21001)  # wick anchor basically at entry
         stop_ticks, stop_price, override, _ = compute_atr_stop(
             direction="LONG",
             entry_price=21001.0,
             last_5m_bar=bar,
-            atr_5m_points=0.25,   # 1 tick = 0.25pt; 1.5×0.25=0.375pt = 1.5t raw
+            atr_5m_points=0.25,   # 1 tick = 0.25pt; 2.0×0.25=0.5pt = 2t raw
             tick_size=TICK,
         )
         assert override is True
-        assert stop_ticks == 16   # clamped to min
-        # stop_price recomputed from clamp: entry - 16*0.25 = 21001 - 4 = 20997
-        assert abs(stop_price - 20997.0) < 1e-9
+        assert stop_ticks == 40   # clamped to new min
+        # stop_price recomputed from clamp: entry - 40*0.25 = 21001 - 10 = 20991
+        assert abs(stop_price - 20991.0) < 1e-9
 
     def test_clamp_max_huge_atr(self):
-        """ATR huge → raw > 80t → clamp to 80t."""
+        """ATR huge → raw > 120t → clamp to 120t."""
         bar = _Bar(21000, 21010, 20990, 21000)
         stop_ticks, stop_price, override, _ = compute_atr_stop(
             direction="LONG",
@@ -86,8 +86,8 @@ class TestComputeATRStop:
             tick_size=TICK,
         )
         assert override is True
-        assert stop_ticks == 80
-        assert abs(stop_price - (21000.0 - 80 * TICK)) < 1e-9
+        assert stop_ticks == 120
+        assert abs(stop_price - (21000.0 - 120 * TICK)) < 1e-9
 
     def test_fallback_when_atr_is_zero(self):
         bar = _Bar(21000, 21005, 20999, 21003)
@@ -97,10 +97,10 @@ class TestComputeATRStop:
             last_5m_bar=bar,
             atr_5m_points=0,
             tick_size=TICK,
-            stop_fallback_ticks=24,
+            stop_fallback_ticks=64,
         )
         assert override is False
-        assert stop_ticks == 24
+        assert stop_ticks == 64
         assert stop_price is None
         assert "fallback" in note.lower()
 
@@ -111,10 +111,10 @@ class TestComputeATRStop:
             last_5m_bar=_Bar(21000, 21005, 20999, 21003),
             atr_5m_points=None,
             tick_size=TICK,
-            stop_fallback_ticks=24,
+            stop_fallback_ticks=64,
         )
         assert override is False
-        assert stop_ticks == 24
+        assert stop_ticks == 64
 
     def test_long_stop_below_entry(self):
         bar = _Bar(21000, 21005, 20999, 21003)
@@ -159,12 +159,12 @@ class TestComputeATRStop:
             direction="LONG",
             entry_price=20990.0,   # below bar.low
             last_5m_bar=bar,
-            atr_5m_points=0.5,     # tiny, so anchor_low - 0.75pt = 20998.25; entry 20990 already below
+            atr_5m_points=0.5,     # tiny; anchor_low - 1.0pt = 20998; entry 20990 already below
             tick_size=TICK,
-            stop_fallback_ticks=24,
+            stop_fallback_ticks=64,
         )
         assert override is False
-        assert stop_ticks == 24
+        assert stop_ticks == 64
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -213,10 +213,10 @@ class TestVWAPPullbackGate:
         from strategies.vwap_pullback import VWAPPullback
         cfg = {
             "target_rr": 20.0,
-            "stop_atr_mult": 1.5,
-            "min_stop_ticks": 16,
-            "max_stop_ticks": 80,
-            "stop_fallback_ticks": 24,
+            "stop_atr_mult": 2.0,
+            "min_stop_ticks": 40,
+            "max_stop_ticks": 120,
+            "stop_fallback_ticks": 64,
             "max_vwap_dist_ticks": 60,
             "min_tf_votes": 2,
         }
@@ -238,7 +238,7 @@ class TestVWAPPullbackGate:
         assert sig is not None, "Expected signal at 40t from VWAP under default 60t gate"
         assert sig.direction == "LONG"
         assert sig.atr_stop_override is True
-        assert 16 <= sig.stop_ticks <= 80
+        assert 40 <= sig.stop_ticks <= 120
 
     def test_entry_rejected_at_80t_from_vwap_default_60(self):
         """Price 80 ticks from VWAP with default max=60 → None."""

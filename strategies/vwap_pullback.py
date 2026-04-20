@@ -8,7 +8,11 @@ Logic: TF bias says bullish → price pulled back to/below VWAP → bounce candl
 The entry is ON the pullback touch, not after price already reclaimed.
 """
 
+import logging
+
 from strategies.base_strategy import BaseStrategy, Signal
+
+logger = logging.getLogger("vwap_pullback")
 
 
 class VWAPPullback(BaseStrategy):
@@ -19,10 +23,10 @@ class VWAPPullback(BaseStrategy):
 
         target_rr = self.config.get("target_rr", 1.8)
         # B14: NQ-calibrated ATR stop params (replaces fixed stop_ticks).
-        stop_atr_mult       = self.config.get("stop_atr_mult", 1.5)
-        min_stop_ticks      = self.config.get("min_stop_ticks", 16)
-        max_stop_ticks      = self.config.get("max_stop_ticks", 80)
-        stop_fallback_ticks = self.config.get("stop_fallback_ticks", 24)
+        stop_atr_mult       = self.config.get("stop_atr_mult", 2.0)
+        min_stop_ticks      = self.config.get("min_stop_ticks", 40)
+        max_stop_ticks      = self.config.get("max_stop_ticks", 120)
+        stop_fallback_ticks = self.config.get("stop_fallback_ticks", 64)
         day_type = market.get("day_type", "UNKNOWN")
         mq_bias  = market.get("mq_direction_bias", "NEUTRAL")
         trend_day = (day_type == "TREND")
@@ -53,6 +57,10 @@ class VWAPPullback(BaseStrategy):
         max_vwap_dist = self.config.get("max_vwap_dist_ticks", 60)
         vwap_dist_ticks = abs(price - vwap) / tick_size
         if vwap_dist_ticks > max_vwap_dist:
+            logger.debug(
+                f"[EVAL] {self.name}: BLOCKED "
+                f"gate:vwap_dist_too_far ({vwap_dist_ticks:.1f}t > {max_vwap_dist}t)"
+            )
             return None
 
         # Check for pullback history: recent bars must show price WAS away from VWAP
@@ -127,10 +135,10 @@ class VWAPPullback(BaseStrategy):
             last_5m_bar=last_5m,
             atr_5m_points=atr_5m,
             tick_size=tick_size,
-            stop_atr_mult=self.config.get("stop_atr_mult", 1.5),
-            min_stop_ticks=self.config.get("min_stop_ticks", 16),
-            max_stop_ticks=self.config.get("max_stop_ticks", 80),
-            stop_fallback_ticks=self.config.get("stop_fallback_ticks", 24),
+            stop_atr_mult=self.config.get("stop_atr_mult", 2.0),
+            min_stop_ticks=self.config.get("min_stop_ticks", 40),
+            max_stop_ticks=self.config.get("max_stop_ticks", 120),
+            stop_fallback_ticks=self.config.get("stop_fallback_ticks", 64),
         )
         confluences.append(stop_note)
 
