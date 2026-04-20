@@ -13,6 +13,7 @@ Messages sent:
 """
 
 import asyncio
+import html
 import logging
 import os
 import time
@@ -20,6 +21,20 @@ import time
 import requests
 
 logger = logging.getLogger("Telegram")
+
+
+# P14: canonical HTML-escape helper for all user-supplied string fields.
+# Telegram's HTML parse_mode treats <, >, & as markup. Any strategy name,
+# exit reason, alert body, or other caller-provided string that isn't
+# escaped will either corrupt the formatting or return HTTP 400. Use
+# html.escape() (stdlib) — handles &, <, > and (with quote=True) quote
+# characters, more complete than the manual .replace() chain that was
+# applied only in 2 of 5 notifier paths before this fix.
+def _esc(value) -> str:
+    """Defensive HTML-escape. Tolerates non-str values (ints/floats)."""
+    if value is None:
+        return ""
+    return html.escape(str(value), quote=True)
 
 # Load from environment
 TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
@@ -87,17 +102,16 @@ async def notify_entry(trade_id: str, direction: str, strategy: str,
                        price: float, stop: float, target: float,
                        contracts: int, risk_dollars: float, tier: str,
                        regime: str):
-    """Send trade entry notification."""
+    """Send trade entry notification. P14: all caller strings escaped."""
     emoji = "\U0001F7E2" if direction == "LONG" else "\U0001F534"  # green/red circle
-    # HTML parse mode — no need to escape underscores in strategy names
     msg = (
-        f"{emoji} <b>ENTRY: {direction}</b>\n"
-        f"Strategy: <code>{strategy}</code>\n"
+        f"{emoji} <b>ENTRY: {_esc(direction)}</b>\n"
+        f"Strategy: <code>{_esc(strategy)}</code>\n"
         f"Price: <code>{price:.2f}</code>\n"
         f"Stop: <code>{stop:.2f}</code> | Target: <code>{target:.2f}</code>\n"
-        f"Size: {contracts}x | Risk: ${risk_dollars:.2f} ({tier})\n"
-        f"Regime: {regime}\n"
-        f"ID: <code>{trade_id}</code>"
+        f"Size: {contracts}x | Risk: ${risk_dollars:.2f} ({_esc(tier)})\n"
+        f"Regime: {_esc(regime)}\n"
+        f"ID: <code>{_esc(trade_id)}</code>"
     )
     await send(msg)
 
@@ -116,13 +130,13 @@ async def notify_exit(trade_id: str, direction: str, strategy: str,
 
     hold_min = hold_time_s / 60
     msg = (
-        f"{emoji} <b>EXIT: {direction} {result}</b>\n"
-        f"Strategy: <code>{strategy}</code>\n"
+        f"{emoji} <b>EXIT: {_esc(direction)} {_esc(result)}</b>\n"
+        f"Strategy: <code>{_esc(strategy)}</code>\n"
         f"Entry: <code>{entry_price:.2f}</code> | Exit: <code>{exit_price:.2f}</code>\n"
         f"<b>P&amp;L: {pnl_str}</b> ({pnl_ticks:+.1f} ticks)\n"
-        f"Reason: {exit_reason}\n"
+        f"Reason: {_esc(exit_reason)}\n"
         f"Hold: {hold_min:.1f} min\n"
-        f"ID: <code>{trade_id}</code>"
+        f"ID: <code>{_esc(trade_id)}</code>"
     )
     await send(msg)
 
@@ -140,7 +154,7 @@ async def notify_daily_summary(daily_pnl: float, trades: int, wins: int,
         f"P&amp;L: <b>{pnl_str}</b>\n"
         f"Trades: {trades} ({wins}W / {losses}L)\n"
         f"Win Rate: {win_rate:.0f}%\n"
-        f"Status: {status}"
+        f"Status: {_esc(status)}"
     )
     await send(msg)
 
@@ -153,21 +167,20 @@ async def notify_council(bias: str, vote_count: str, summary: str):
         "NEUTRAL": "\U0001F7E1",   # yellow
     }.get(bias, "\U00002753")      # question mark
 
-    # Escape HTML special chars in summary (user-generated text)
-    safe_summary = summary[:200].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # P14: use html.escape() via _esc helper (consistent across notifiers).
+    safe_summary = _esc(summary[:200] if summary else "")
     msg = (
-        f"{emoji} <b>COUNCIL: {bias}</b>\n"
-        f"Vote: {vote_count}\n"
+        f"{emoji} <b>COUNCIL: {_esc(bias)}</b>\n"
+        f"Vote: {_esc(vote_count)}\n"
         f"{safe_summary}"
     )
     await send(msg)
 
 
 async def notify_alert(alert_type: str, message: str):
-    """Send general alert (recovery mode, kill switch, news gate, etc.)."""
-    # Escape HTML special chars in alert message
-    safe_message = message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    msg = f"\U000026A0 <b>ALERT: {alert_type}</b>\n{safe_message}"
+    """Send general alert (recovery mode, kill switch, news gate, etc.).
+    P14: both alert_type and message are user-supplied → escape both."""
+    msg = f"\U000026A0 <b>ALERT: {_esc(alert_type)}</b>\n{_esc(message)}"
     await send(msg)
 
 
