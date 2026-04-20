@@ -31,8 +31,12 @@ class DOMPullback(BaseStrategy):
     def evaluate(self, market: dict, bars_5m: list, bars_1m: list,
                  session_info: dict) -> Signal | None:
 
-        stop_ticks        = self.config.get("stop_ticks", 10)
         target_rr         = self.config.get("target_rr", 2.5)
+        # B14: NQ-calibrated ATR stop (replaces fixed stop_ticks=10, too tight for NQ).
+        stop_atr_mult       = self.config.get("stop_atr_mult", 1.5)
+        min_stop_ticks      = self.config.get("min_stop_ticks", 16)
+        max_stop_ticks      = self.config.get("max_stop_ticks", 80)
+        stop_fallback_ticks = self.config.get("stop_fallback_ticks", 24)
         min_dom_str       = self.config.get("min_dom_strength", 40)
         max_ema_dist      = self.config.get("max_ema_dist_ticks", 28)   # Data P25 = 26-40t
         max_vwap_dist     = self.config.get("max_vwap_dist_ticks", 20)  # Data P25 = ~20t
@@ -290,7 +294,24 @@ class DOMPullback(BaseStrategy):
 
         confluences.append(f"Regime: {session_info.get('regime', '?')}")
 
-        return Signal(
+        # B14: NQ-calibrated ATR-anchored stop (replaces fixed stop_ticks=10).
+        from strategies._nq_stop import compute_atr_stop
+        atr_5m = market.get("atr_5m", 0) or 0
+        last_5m = bars_5m[-1] if bars_5m else None
+        stop_ticks, stop_price, atr_override, stop_note = compute_atr_stop(
+            direction=direction,
+            entry_price=price,
+            last_5m_bar=last_5m,
+            atr_5m_points=atr_5m,
+            tick_size=tick_size,
+            stop_atr_mult=stop_atr_mult,
+            min_stop_ticks=min_stop_ticks,
+            max_stop_ticks=max_stop_ticks,
+            stop_fallback_ticks=stop_fallback_ticks,
+        )
+        confluences.append(stop_note)
+
+        sig = Signal(
             direction=direction,
             stop_ticks=stop_ticks,
             target_rr=target_rr,
@@ -302,3 +323,7 @@ class DOMPullback(BaseStrategy):
                     f"pb quiet ({pb_body:.0f}t), bounce ({bounce_body:.0f}t)"),
             confluences=confluences,
         )
+        sig.atr_stop_override = atr_override
+        if atr_override and stop_price is not None:
+            sig.stop_price = stop_price
+        return sig

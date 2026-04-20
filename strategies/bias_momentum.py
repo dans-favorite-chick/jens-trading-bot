@@ -47,7 +47,9 @@ class BiasMomentumFollow(BaseStrategy):
 
         min_confluence = overrides.get("min_confluence", self.config.get("min_confluence", 5.5))
         min_momentum = overrides.get("min_momentum", self.config.get("min_momentum", 80))
-        stop_ticks = self.config.get("stop_ticks", 20)
+        # B14: NQ-calibrated ATR stop params (replaces fixed stop_ticks). Stop is
+        # computed at the end, after direction is known. Regime overrides (if any
+        # are added later) can still tighten/loosen this — ATR is the base floor.
         target_rr = self.config.get("target_rr", 5.0)
 
         # Minimal warmup — only need 1 bar to have data, use what we have
@@ -611,7 +613,25 @@ class BiasMomentumFollow(BaseStrategy):
         confluences.append(f"TF: {votes}/4 {'bull' if direction == 'LONG' else 'bear'}")
         confluences.append(f"Momentum: {momentum_score}")
 
-        return Signal(
+        # B14: NQ-calibrated ATR-anchored stop (replaces fixed stop_ticks=20).
+        from strategies._nq_stop import compute_atr_stop
+        from config.settings import TICK_SIZE as _ts_stop
+        atr_5m = market.get("atr_5m", 0) or 0
+        last_5m = bars_5m[-1] if bars_5m else (bars_1m[-1] if bars_1m else None)
+        stop_ticks, stop_price, atr_override, stop_note = compute_atr_stop(
+            direction=direction,
+            entry_price=price if price > 0 else market.get("price", 0),
+            last_5m_bar=last_5m,
+            atr_5m_points=atr_5m,
+            tick_size=_ts_stop,
+            stop_atr_mult=self.config.get("stop_atr_mult", 1.5),
+            min_stop_ticks=self.config.get("min_stop_ticks", 16),
+            max_stop_ticks=self.config.get("max_stop_ticks", 80),
+            stop_fallback_ticks=self.config.get("stop_fallback_ticks", 24),
+        )
+        confluences.append(stop_note)
+
+        sig = Signal(
             direction=direction,
             stop_ticks=stop_ticks,
             target_rr=target_rr,
@@ -621,3 +641,7 @@ class BiasMomentumFollow(BaseStrategy):
             reason=f"Bias Momentum {direction} — {votes}/4 TF, score {momentum_score}, regime {regime}",
             confluences=confluences,
         )
+        sig.atr_stop_override = atr_override
+        if atr_override and stop_price is not None:
+            sig.stop_price = stop_price
+        return sig

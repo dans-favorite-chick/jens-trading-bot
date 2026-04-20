@@ -76,7 +76,8 @@ LAB_STRATEGY_OVERRIDES = {
         "min_confluence": 0.0,
         "min_tf_votes": 1,           # Just 1 TF
         "skip_regime_overrides": True,
-        "stop_ticks": 14,
+        "stop_ticks": 14,            # Legacy — kept for any pre-B14 readers. ATR stop supersedes.
+        "max_vwap_dist_ticks": 60,   # B14: permissive VWAP proximity gate for lab data collection
         "target_rr": 20.0,           # 20:1 — reversal+stall exit drives this
     },
     "high_precision_only": {
