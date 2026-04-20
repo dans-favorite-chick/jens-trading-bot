@@ -51,9 +51,13 @@ STRATEGIES = {
     "bias_momentum": {
         "enabled": True,
         "validated": True,    # Runs in prod bot
-        # Stop wider than MNQ 1m ATR (7.7 ticks avg) so noise doesn't stop us out.
-        # 20 ticks = 5 points = $10 risk. Gives the trade room to breathe.
-        "stop_ticks": 20,
+        # NQ-calibrated ATR-anchored stop (B14 2026-04-20). Fixed-tick stops get
+        # taken out by noise on NQ — use 1.5×ATR anchored to last 5m wick.
+        "stop_method": "atr_anchored",
+        "stop_atr_mult": 2.0,
+        "min_stop_ticks": 40,        # 10 points floor (NQ noise)
+        "max_stop_ticks": 120,       # 30 points cap (high-vol days)
+        "stop_fallback_ticks": 64,   # 16 points if ATR unavailable
         # 5:1 RR minimum → 100 ticks = 25 points = $50. Aligns with 20-80 pt goal.
         # Only worthwhile if the setup is a genuine strong trend day.
         "target_rr": 5.0,
@@ -90,7 +94,15 @@ STRATEGIES = {
     "vwap_pullback": {
         "enabled": True,
         "validated": False,   # Lab only
-        "stop_ticks": 14,
+        # NQ-calibrated ATR-anchored stop (B14 2026-04-20). Replaces fixed 14t.
+        "stop_method": "atr_anchored",
+        "stop_atr_mult": 2.0,
+        "min_stop_ticks": 40,
+        "max_stop_ticks": 120,
+        "stop_fallback_ticks": 64,
+        # Max distance from VWAP to qualify as "near VWAP" (replaces hardcoded 6).
+        # 60t = 15pts — a true VWAP pullback can be further out than 6 ticks on NQ.
+        "max_vwap_dist_ticks": 60,
         "target_rr": 20.0,   # Reversal+stall exit drives this — target is not the OCO bracket
         "min_confluence": 3.2,
         "min_tf_votes": 3,
@@ -110,7 +122,12 @@ STRATEGIES = {
         "enabled": True,
         "validated": False,   # Lab only — replicates user's manual DOM absorption entry
         # Entry: pullback to EMA9 or VWAP + sell orders being pulled/absorbed by buyers
-        "stop_ticks": 10,     # 10t = 2.5pts — tight stop just below the pullback low
+        # NQ-calibrated ATR-anchored stop (B14 2026-04-20). Replaces fixed 10t — too tight.
+        "stop_method": "atr_anchored",
+        "stop_atr_mult": 2.0,
+        "min_stop_ticks": 40,
+        "max_stop_ticks": 120,
+        "stop_fallback_ticks": 64,
         "target_rr": 2.5,     # 2.5:1 = 25t = 6.25pts minimum capture
         # DOM absorption threshold — 0=any signal, 100=very strong only
         # 35 is moderate: absorption is visible but not overwhelming
