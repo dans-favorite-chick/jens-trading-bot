@@ -498,6 +498,13 @@ class BridgeServer:
                 self.tick_buffer.append(tick)
                 await self._broadcast_to_bots(json.dumps(tick))
                 self.ticks_received += 1
+                # B6 fix: mark data-freshness from fallback. Without this,
+                # nt8_last_tick_time stays frozen at the last TCP heartbeat
+                # and stale_watcher logs "NT8 data stale" forever even while
+                # the fallback is successfully delivering ticks. Also blocks
+                # stale_watcher's "resumed" transition, which will flood
+                # Telegram once stale_watcher alerts are wired.
+                self.nt8_last_tick_time = time.time()
 
             except Exception as e:
                 if "No such file" not in str(e):
