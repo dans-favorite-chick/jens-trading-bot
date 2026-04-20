@@ -97,7 +97,7 @@ STRATEGIES = {
         "max_hold_min": 60,  # Give it room — VWAP pullbacks can run 30-80pts
     },
     "high_precision_only": {
-        "enabled": True,
+        "enabled": False,
         "validated": False,   # Lab only — Research Bot found promise (64% WR solo)
         "stop_ticks": 14,
         "target_rr": 5.0,    # 5:1 — high precision setups deserve big targets
