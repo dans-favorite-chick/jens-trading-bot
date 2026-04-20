@@ -8,8 +8,12 @@ REGIME-AWARE: Loosens gates in golden windows (OPEN_MOMENTUM, MID_MORNING)
 to maximize signal generation when edge is highest.
 """
 
+import logging
+
 from strategies.base_strategy import BaseStrategy, Signal
 from core.candlestick_patterns import CandlestickAnalyzer, get_pattern_confluence
+
+logger = logging.getLogger(__name__)
 
 # Regime-specific overrides — BE AGGRESSIVE in golden windows
 # Non-golden regimes use strategy config defaults (tighter gates)
@@ -54,6 +58,7 @@ class BiasMomentumFollow(BaseStrategy):
 
         # Minimal warmup — only need 1 bar to have data, use what we have
         if len(bars_1m) < 1:
+            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
             return None
 
         # ── Direction: Multi-TF EMA vote ──────────────────────────────
@@ -145,6 +150,7 @@ class BiasMomentumFollow(BaseStrategy):
                 direction = "LONG" if bias_1m == "BULLISH" else ("SHORT" if bias_1m == "BEARISH" else None)
             if direction is None:
                 self._last_reject = f"TREND day: no 1m direction (1m={bias_1m}, MQ={mq_bias})"
+                logger.debug(f"[EVAL] {self.name}: BLOCKED gate:trend_day_no_direction")
                 return None
         else:
             # Non-TREND: EMA stack gate (Layer A) + VWAP side (Layer B)
@@ -162,6 +168,7 @@ class BiasMomentumFollow(BaseStrategy):
                 self._last_reject = (
                     f"EMA_STACK: 5m EMA9={ema9:.1f} EMA21={ema21:.1f} "
                     f"(no stack — need EMA9{'>'if ema9>0 else '<'}EMA21 or explosive bar)")
+                logger.debug(f"[EVAL] {self.name}: BLOCKED gate:ema_stack")
                 return None
 
             # Layer B: VWAP side check (unless explosive bypass active)
@@ -171,11 +178,13 @@ class BiasMomentumFollow(BaseStrategy):
                     self._last_reject = (
                         f"VWAP_GATE: price {price:.2f} below VWAP {vwap:.2f} — "
                         f"no explosive bypass active (VCR={_vcr:.1f}, delta={_bar_delta:+.0f})")
+                    logger.debug(f"[EVAL] {self.name}: BLOCKED gate:vwap_long")
                     return None
                 elif direction == "SHORT" and not price_below_vwap and vwap > 0:
                     self._last_reject = (
                         f"VWAP_GATE: price {price:.2f} above VWAP {vwap:.2f} — "
                         f"no explosive bypass active (VCR={_vcr:.1f}, delta={_bar_delta:+.0f})")
+                    logger.debug(f"[EVAL] {self.name}: BLOCKED gate:vwap_short")
                     return None
 
         # ── CVD Gate — afternoon/chop regimes (HARD BLOCK) ──────────────────
@@ -191,11 +200,13 @@ class BiasMomentumFollow(BaseStrategy):
                 self._last_reject = (
                     f"BIAS_MOM: CVD={cvd/1e6:.1f}M (net selling) in {regime} — "
                     f"institutional flow opposes LONG. Wait for CVD to turn positive.")
+                logger.debug(f"[EVAL] {self.name}: BLOCKED gate:cvd_chop_long")
                 return None
             elif direction == "SHORT" and cvd >= 0:
                 self._last_reject = (
                     f"BIAS_MOM: CVD=+{cvd/1e6:.1f}M (net buying) in {regime} — "
                     f"institutional flow opposes SHORT. Wait for CVD to turn negative.")
+                logger.debug(f"[EVAL] {self.name}: BLOCKED gate:cvd_chop_short")
                 return None
 
         # ── Momentum scoring ─────────────────────────────────────────
@@ -563,6 +574,7 @@ class BiasMomentumFollow(BaseStrategy):
         if momentum_score < effective_min_momentum:
             self._last_reject = (f"MOMENTUM: score={momentum_score} need={effective_min_momentum} "
                                  f"({'TREND ' if trend_day else ''}{', '.join(confluences[1:])})")
+            logger.debug(f"[EVAL] {self.name}: NO_SIGNAL momentum_score={momentum_score}<{effective_min_momentum}")
             return None
 
         # ── EMA9 Extension Gate ────────────────────────────────────────
@@ -597,6 +609,7 @@ class BiasMomentumFollow(BaseStrategy):
             if _ema_dist > _max_ema_dist:
                 self._last_reject = (f"BIAS_MOM: Price {_ema_dist:.0f}t from EMA9 "
                                      f"(max {_max_ema_dist}t in {regime}) — chasing, wait for pullback")
+                logger.debug(f"[EVAL] {self.name}: BLOCKED gate:ema9_extension")
                 return None
 
         # ── Confluence score ────────────────────────────────────────
@@ -609,6 +622,7 @@ class BiasMomentumFollow(BaseStrategy):
             if confluence < min_confluence:
                 self._last_reject = (f"CONFLUENCE: score={confluence:.1f} need={min_confluence} "
                                      f"votes={votes} momentum={momentum_score}")
+                logger.debug(f"[EVAL] {self.name}: NO_SIGNAL confluence={confluence:.1f}<{min_confluence}")
                 return None
 
         confluences.append(f"TF: {votes}/4 {'bull' if direction == 'LONG' else 'bear'}")
@@ -632,6 +646,7 @@ class BiasMomentumFollow(BaseStrategy):
         )
         confluences.append(stop_note)
 
+        logger.info(f"[EVAL] {self.name}: SIGNAL {direction} entry={price:.2f}")
         sig = Signal(
             direction=direction,
             stop_ticks=stop_ticks,

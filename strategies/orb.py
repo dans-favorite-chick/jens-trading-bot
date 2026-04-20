@@ -22,7 +22,11 @@ Mechanics:
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import logging
+
 from strategies.base_strategy import BaseStrategy, Signal
+
+logger = logging.getLogger(__name__)
 from config.settings import TICK_SIZE
 
 # Explicit ET zone — session boundaries + entry cutoff are clock-anchored
@@ -62,10 +66,12 @@ class OpeningRangeBreakout(BaseStrategy):
                  session_info: dict) -> Signal | None:
 
         if self._traded_today:
+            logger.debug(f"[EVAL] {self.name}: BLOCKED gate:already_traded_today")
             return None
 
         price = market.get("price", 0) or 0
         if price <= 0 or len(bars_1m) < 1:
+            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
             return None
 
         # ── Config ──────────────────────────────────────────────────
@@ -103,13 +109,16 @@ class OpeningRangeBreakout(BaseStrategy):
             if len(self._or_bars_1m) >= or_duration:
                 self._or_set = True
             else:
+                logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
                 return None
 
         # ── Step 2: Validate OR size ────────────────────────────────
         or_size = self._or_high - self._or_low
         if or_size < min_or_size_pts:
+            logger.debug(f"[EVAL] {self.name}: BLOCKED gate:or_too_tight")
             return None  # Too tight — low-vol day, skip
         if or_size > max_or_size_pts:
+            logger.debug(f"[EVAL] {self.name}: BLOCKED gate:or_too_wide")
             return None  # Too wide — gap day, skip
 
         # ── Step 3: Check entry window cutoff ───────────────────────
@@ -118,6 +127,7 @@ class OpeningRangeBreakout(BaseStrategy):
             session_start = datetime.fromtimestamp(self._or_bars_1m[0].start_time, tz=_ET)
             minutes_since_open = (bar_dt - session_start).total_seconds() / 60
             if minutes_since_open > max_entry_delay_min:
+                logger.debug(f"[EVAL] {self.name}: BLOCKED gate:entry_window_expired")
                 return None  # Missed the window — no new OR trades
         except (OSError, ValueError, TypeError, IndexError):
             pass
@@ -125,10 +135,12 @@ class OpeningRangeBreakout(BaseStrategy):
         # ── Step 4: 5-minute close confirmation ─────────────────────
         # Require a completed 5m bar whose close is outside the OR.
         if len(bars_5m) < 1:
+            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
             return None
         last_5m = bars_5m[-1]
         if last_5m.end_time == self._last_5m_checked_ts:
-            return None  # Already checked this 5m bar
+            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
+            return None  # Already checked this 5m bar — dedup
         self._last_5m_checked_ts = last_5m.end_time
 
         direction = None
@@ -137,6 +149,7 @@ class OpeningRangeBreakout(BaseStrategy):
         elif last_5m.close < self._or_low:
             direction = "SHORT"
         if direction is None:
+            logger.debug(f"[EVAL] {self.name}: NO_SIGNAL no_5m_close_outside_or")
             return None
 
         # ── Step 5: Compute entry/stop/target prices ────────────────
@@ -152,8 +165,10 @@ class OpeningRangeBreakout(BaseStrategy):
 
         # Cap stop distance
         if stop_distance > max_stop_points:
+            logger.debug(f"[EVAL] {self.name}: BLOCKED gate:stop_distance_too_wide")
             return None  # Too wide — rejects oversized OR setups that slipped past size filter
         if stop_distance <= 0:
+            logger.debug(f"[EVAL] {self.name}: NO_SIGNAL invalid_stop_distance")
             return None
 
         stop_ticks = max(4, int(stop_distance / TICK_SIZE))
@@ -182,6 +197,7 @@ class OpeningRangeBreakout(BaseStrategy):
 
         eod_time = "10:55" if self.is_prod_bot else "15:55"
 
+        logger.info(f"[EVAL] {self.name}: SIGNAL {direction} entry={entry_price:.2f}")
         return Signal(
             direction=direction,
             stop_ticks=stop_ticks,

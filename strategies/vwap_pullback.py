@@ -12,7 +12,7 @@ import logging
 
 from strategies.base_strategy import BaseStrategy, Signal
 
-logger = logging.getLogger("vwap_pullback")
+logger = logging.getLogger(__name__)
 
 
 class VWAPPullback(BaseStrategy):
@@ -34,6 +34,7 @@ class VWAPPullback(BaseStrategy):
         min_tf_votes = 1 if trend_day else self.config.get("min_tf_votes", 2)
 
         if len(bars_1m) < 2:
+            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
             return None
 
         price = market.get("price", 0)
@@ -45,6 +46,7 @@ class VWAPPullback(BaseStrategy):
         bearish = market.get("tf_votes_bearish", 0)
 
         if vwap <= 0:
+            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
             return None
 
         confluences = []
@@ -87,6 +89,7 @@ class VWAPPullback(BaseStrategy):
             confluences.append(f"Bearish TF: {bearish}/4")
             confluences.append(f"Pullback from {max_dist_below:.0f}t below VWAP")
         else:
+            logger.debug(f"[EVAL] {self.name}: NO_SIGNAL no_pullback_detected")
             return None
 
         confluences.append(f"Near VWAP ({vwap_dist_ticks:.0f}t away)")
@@ -121,6 +124,7 @@ class VWAPPullback(BaseStrategy):
             confluences.append("Bounce candle (bearish)")
 
         if not has_bounce:
+            logger.debug(f"[EVAL] {self.name}: NO_SIGNAL no_bounce_candle")
             return None  # No bounce = no entry, wait for confirmation
 
         confluences.append(f"Regime: {session_info.get('regime', '?')}")
@@ -142,6 +146,7 @@ class VWAPPullback(BaseStrategy):
         )
         confluences.append(stop_note)
 
+        logger.info(f"[EVAL] {self.name}: SIGNAL {direction} entry={price:.2f}")
         sig = Signal(
             direction=direction,
             stop_ticks=stop_ticks,

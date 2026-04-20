@@ -22,7 +22,11 @@ User description:
    map... so I enter. It took off."
 """
 
+import logging
+
 from strategies.base_strategy import BaseStrategy, Signal
+
+logger = logging.getLogger(__name__)
 
 
 class DOMPullback(BaseStrategy):
@@ -45,6 +49,7 @@ class DOMPullback(BaseStrategy):
 
         # Need at least 5 bars: 2+ trend bars, 1-2 pullback bars, 1 bounce bar
         if len(bars_1m) < 5:
+            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
             return None
 
         from config.settings import TICK_SIZE
@@ -82,6 +87,7 @@ class DOMPullback(BaseStrategy):
             else:
                 self._last_reject = (f"DOM_PB: No direction "
                                      f"(MQ={mq_bias}, TF bull={bullish} bear={bearish})")
+                logger.debug(f"[EVAL] {self.name}: BLOCKED gate:no_direction")
                 return None
 
         confluences = []
@@ -94,17 +100,20 @@ class DOMPullback(BaseStrategy):
                 confluences.append("EMA9 > EMA21 (trend intact)")
             elif ema9 > 0 and ema21 > 0:
                 self._last_reject = "DOM_PB: EMA9 < EMA21 — trend not intact for LONG"
+                logger.debug(f"[EVAL] {self.name}: BLOCKED gate:ema_trend_not_intact_long")
                 return None
             if vwap > 0 and price < vwap:
                 # Price below VWAP is OK only on strong TREND days (MQ LONG)
                 if not (trend_day and mq_bias == "LONG"):
                     self._last_reject = f"DOM_PB: Price below VWAP ({price:.2f} < {vwap:.2f}) on non-TREND day"
+                    logger.debug(f"[EVAL] {self.name}: BLOCKED gate:price_below_vwap_non_trend")
                     return None
         elif direction == "SHORT":
             if ema9 > 0 and ema21 > 0 and ema9 < ema21:
                 confluences.append("EMA9 < EMA21 (trend intact)")
             elif ema9 > 0 and ema21 > 0:
                 self._last_reject = "DOM_PB: EMA9 > EMA21 — trend not intact for SHORT"
+                logger.debug(f"[EVAL] {self.name}: BLOCKED gate:ema_trend_not_intact_short")
                 return None
 
         # ── Gate 2: Price at pullback level ───────────────────────────
@@ -127,6 +136,7 @@ class DOMPullback(BaseStrategy):
             self._last_reject = (f"DOM_PB: Not at level "
                                  f"(EMA9={abs(price-ema9)/tick_size:.0f}t, "
                                  f"VWAP={abs(price-vwap)/tick_size:.0f}t)")
+            logger.debug(f"[EVAL] {self.name}: BLOCKED gate:not_at_pullback_level")
             return None
 
         # ── Gate 3: Genuine pullback (price WAS extended before) ──────
@@ -138,9 +148,11 @@ class DOMPullback(BaseStrategy):
 
         if direction == "LONG" and max_above < 8:
             self._last_reject = f"DOM_PB: No pullback — was never >8t above EMA/VWAP"
+            logger.debug(f"[EVAL] {self.name}: NO_SIGNAL no_prior_extension_long")
             return None
         if direction == "SHORT" and max_below < 8:
             self._last_reject = f"DOM_PB: No pullback — was never >8t below EMA/VWAP"
+            logger.debug(f"[EVAL] {self.name}: NO_SIGNAL no_prior_extension_short")
             return None
 
         dist_str = f"{max_above:.0f}t" if direction == "LONG" else f"{max_below:.0f}t"
@@ -160,6 +172,7 @@ class DOMPullback(BaseStrategy):
         if pb_body > max_pb_body_ticks:
             self._last_reject = (f"DOM_PB: Pullback bar too strong "
                                  f"(body={pb_body:.0f}t > {max_pb_body_ticks}t) — aggressive reversal, not pullback")
+            logger.debug(f"[EVAL] {self.name}: BLOCKED gate:pullback_bar_too_strong")
             return None
 
         # Check if pullback is on lighter volume than prior trend bars
@@ -195,6 +208,7 @@ class DOMPullback(BaseStrategy):
             self._last_reject = (f"DOM_PB: No DOM signal "
                                  f"(dir={dom_dir}, str={dom_strength:.0f}, "
                                  f"imbal={dom_imbal:.2f})")
+            logger.debug(f"[EVAL] {self.name}: BLOCKED gate:dom_not_confirmed")
             return None
 
         # ── Gate 6: Bounce bar quality — decisive, strong body ────────
@@ -206,29 +220,35 @@ class DOMPullback(BaseStrategy):
         if direction == "LONG":
             if bounce_bar.close <= bounce_bar.open:
                 self._last_reject = "DOM_PB: Bounce bar is bearish — no confirmation"
+                logger.debug(f"[EVAL] {self.name}: NO_SIGNAL bounce_bar_bearish_on_long")
                 return None
             if bounce_body < min_bounce_body:
                 self._last_reject = f"DOM_PB: Bounce body too small ({bounce_body:.0f}t < {min_bounce_body}t)"
+                logger.debug(f"[EVAL] {self.name}: NO_SIGNAL bounce_body_too_small_long")
                 return None
             # Close should be in upper half of bar (not just a wick)
             if bounce_range > 0:
                 close_position = (bounce_bar.close - bounce_bar.low) / (bounce_bar.high - bounce_bar.low)
                 if close_position < 0.4:
                     self._last_reject = f"DOM_PB: Bounce close in lower half (pos={close_position:.0%}) — wick, not body"
+                    logger.debug(f"[EVAL] {self.name}: NO_SIGNAL bounce_close_lower_half_long")
                     return None
             confluences.append(f"Bounce bar strong ({bounce_body:.0f}t body, "
                                f"close at {((bounce_bar.close - bounce_bar.low) / max(bounce_range * tick_size, tick_size)):.0%})")
         elif direction == "SHORT":
             if bounce_bar.close >= bounce_bar.open:
                 self._last_reject = "DOM_PB: Bounce bar is bullish — no confirmation"
+                logger.debug(f"[EVAL] {self.name}: NO_SIGNAL bounce_bar_bullish_on_short")
                 return None
             if bounce_body < min_bounce_body:
                 self._last_reject = f"DOM_PB: Bounce body too small ({bounce_body:.0f}t < {min_bounce_body}t)"
+                logger.debug(f"[EVAL] {self.name}: NO_SIGNAL bounce_body_too_small_short")
                 return None
             if bounce_range > 0:
                 close_position = (bounce_bar.high - bounce_bar.close) / (bounce_bar.high - bounce_bar.low)
                 if close_position < 0.4:
                     self._last_reject = f"DOM_PB: Bounce close in upper half — wick, not body"
+                    logger.debug(f"[EVAL] {self.name}: NO_SIGNAL bounce_close_upper_half_short")
                     return None
             confluences.append(f"Bounce bar strong ({bounce_body:.0f}t body)")
 
@@ -311,6 +331,7 @@ class DOMPullback(BaseStrategy):
         )
         confluences.append(stop_note)
 
+        logger.info(f"[EVAL] {self.name}: SIGNAL {direction} entry={price:.2f}")
         sig = Signal(
             direction=direction,
             stop_ticks=stop_ticks,
