@@ -26,7 +26,11 @@ MNQ adaptations from published SPY spec:
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import logging
+
 from strategies.base_strategy import BaseStrategy, Signal
+
+logger = logging.getLogger(__name__)
 from config.settings import TICK_SIZE
 
 
@@ -98,6 +102,7 @@ class NoiseAreaMomentum(BaseStrategy):
     def evaluate(self, market: dict, bars_5m: list, bars_1m: list,
                  session_info: dict) -> Signal | None:
         if len(bars_1m) < 1:
+            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
             return None
 
         # ── Config ──────────────────────────────────────────────────
@@ -116,6 +121,7 @@ class NoiseAreaMomentum(BaseStrategy):
         try:
             bar_dt_et = datetime.fromtimestamp(last_bar.end_time, tz=_ET)
         except (OSError, ValueError, TypeError):
+            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
             return None
         today_str = bar_dt_et.strftime("%Y-%m-%d")
 
@@ -135,6 +141,7 @@ class NoiseAreaMomentum(BaseStrategy):
                     self._today_open_price = b.open
                     break
             if self._today_open_price is None:
+                logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
                 return None  # Session hasn't opened yet
 
         # ── Update sigma_open_table with new 1m bars only once each ──
@@ -150,28 +157,34 @@ class NoiseAreaMomentum(BaseStrategy):
             1 for samples in self.sigma_open_table.values() if len(samples) >= min_history
         )
         if minutes_with_history < 30:  # Need at least 30 minute-buckets populated
+            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
             return None
 
         # ── 30-minute signal cadence ────────────────────────────────
         minute_of_hour = bar_dt_et.minute
         if minute_of_hour % trade_freq_min != 0:
+            logger.debug(f"[EVAL] {self.name}: BLOCKED gate:not_on_30min_cadence")
             return None
         # Dedup: one signal per 30-min window
         window_key = bar_dt_et.replace(second=0, microsecond=0).timestamp()
         if window_key == self._last_30min_fired_ts:
+            logger.debug(f"[EVAL] {self.name}: BLOCKED gate:already_checked_this_window")
             return None
         self._last_30min_fired_ts = window_key
 
         # ── EoD cutoff ──────────────────────────────────────────────
         if bar_dt_et.strftime("%H:%M") >= eod_time_et:
+            logger.debug(f"[EVAL] {self.name}: BLOCKED gate:eod_cutoff")
             return None
 
         # ── Compute noise cone ──────────────────────────────────────
         minute_of_day = self._minute_of_day(bar_dt_et)
         if minute_of_day < 0:
+            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
             return None
         sigma_open = self._get_sigma_open(minute_of_day)
         if sigma_open is None:
+            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
             return None
 
         today_open = self._today_open_price
@@ -186,9 +199,11 @@ class NoiseAreaMomentum(BaseStrategy):
         # ── Signal logic ────────────────────────────────────────────
         price = market.get("price", 0) or 0
         if price <= 0:
+            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
             return None
         vwap = market.get("vwap", 0) or 0
         if require_vwap and vwap <= 0:
+            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
             return None  # VWAP not ready — don't fire without dual confirm
 
         direction = None
@@ -197,6 +212,7 @@ class NoiseAreaMomentum(BaseStrategy):
         elif price < lb and (not require_vwap or price < vwap):
             direction = "SHORT"
         if direction is None:
+            logger.debug(f"[EVAL] {self.name}: NO_SIGNAL price_inside_noise_cone")
             return None
 
         # ── Price construction ──────────────────────────────────────
@@ -214,6 +230,7 @@ class NoiseAreaMomentum(BaseStrategy):
             stop_distance = stop_price - entry_price
 
         if stop_distance <= 0:
+            logger.debug(f"[EVAL] {self.name}: NO_SIGNAL invalid_stop_distance")
             return None
         stop_ticks = max(4, int(stop_distance / TICK_SIZE))
 
@@ -226,6 +243,7 @@ class NoiseAreaMomentum(BaseStrategy):
         ]
 
         broken_boundary = ub if direction == "LONG" else lb
+        logger.info(f"[EVAL] {self.name}: SIGNAL {direction} entry={entry_price:.2f}")
         return Signal(
             direction=direction,
             stop_ticks=stop_ticks,
