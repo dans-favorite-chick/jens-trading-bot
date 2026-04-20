@@ -264,27 +264,39 @@ class BridgeServer:
 
         try:
             async for message in websocket:
+                # BUG-TL2 guard: wrap per-message dispatch so a single handler
+                # failure (bad trade command, malformed heartbeat, etc.) does
+                # NOT bubble out of `async for` and force websockets to close
+                # the socket with code 1011 (internal error), kicking the bot
+                # off the bridge and triggering reconnect storms.
                 try:
-                    data = json.loads(message)
-                except json.JSONDecodeError:
-                    logger.warning(f"Bad JSON from {bot_name}: {message[:100]}")
-                    continue
+                    try:
+                        data = json.loads(message)
+                    except json.JSONDecodeError:
+                        logger.warning(f"Bad JSON from {bot_name}: {message[:100]}")
+                        continue
 
-                msg_type = data.get("type", "")
+                    msg_type = data.get("type", "")
 
-                if msg_type == "trade":
-                    await self._handle_trade_command(bot_name, data)
+                    if msg_type == "trade":
+                        await self._handle_trade_command(bot_name, data)
 
-                elif msg_type == "heartbeat":
-                    # Track bot liveness — watchdog reads this from health
-                    self.bot_heartbeats[bot_name] = {
-                        "ts": time.time(),
-                        "status": data.get("status", "unknown"),
-                    }
+                    elif msg_type == "heartbeat":
+                        # Track bot liveness — watchdog reads this from health
+                        self.bot_heartbeats[bot_name] = {
+                            "ts": time.time(),
+                            "status": data.get("status", "unknown"),
+                        }
 
-                elif msg_type == "status":
-                    # Bot status update (for dashboard)
-                    pass
+                    elif msg_type == "status":
+                        # Bot status update (for dashboard)
+                        pass
+                except Exception as _msg_err:
+                    logger.error(
+                        f"[WS:{bot_name}] per-message handler failed, "
+                        f"keeping socket alive: {type(_msg_err).__name__}: {_msg_err}"
+                    )
+                    # Continue the `async for` — do NOT re-raise.
 
         except websockets.exceptions.ConnectionClosed as e:
             disconnect_reason = f"WS closed: code={e.code} reason={e.reason or 'none'}"

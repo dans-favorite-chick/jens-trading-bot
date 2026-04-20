@@ -530,15 +530,28 @@ class BaseBot:
             self.status = "SCANNING"
 
             async for message in ws:
+                # BUG-TL2 guard: the dispatch phase (json.loads + msg_type
+                # routing) has its own inner json guard; non-tick messages
+                # early-return via `continue`. Wrap the whole dispatch just
+                # to catch any other unexpected error without kicking the WS.
                 try:
                     tick = json.loads(message)
                 except json.JSONDecodeError:
+                    continue
+                except Exception as _dispatch_err:
+                    logger.error(
+                        f"[WS DISPATCH] error decoding message "
+                        f"(keeping WS alive): {type(_dispatch_err).__name__}: {_dispatch_err}"
+                    )
                     continue
 
                 msg_type = tick.get("type")
 
                 if msg_type == "dom":
-                    self.aggregator.process_dom(tick)
+                    try:
+                        self.aggregator.process_dom(tick)
+                    except Exception as _dom_err:
+                        logger.debug(f"[DOM] process failed: {_dom_err}")
                     continue
 
                 if msg_type == "trade_ack":
@@ -563,8 +576,21 @@ class BaseBot:
                 # Tick loop heartbeat — detect frozen loops
                 self._last_tick_time = time.time()
 
-                # Process tick through aggregator
-                snapshot = self.aggregator.process_tick(tick)
+                # BUG-TL2 guard: aggregator.process_tick is the highest-risk
+                # call on the tick path — raw tick dict parsing, bar builder,
+                # all indicators. If this raises, the unhandled exception
+                # bubbles out of `async for`, websockets sends code=1011 to
+                # the bridge, and the bot is kicked off (observed 22:50 CT
+                # 2026-04-19). Subsequent per-tick work below (footprint,
+                # strategies, exits) already has narrow try/except guards.
+                try:
+                    snapshot = self.aggregator.process_tick(tick)
+                except Exception as _agg_err:
+                    logger.error(
+                        f"[TICK AGGREGATOR] process_tick failed "
+                        f"(keeping WS alive): {type(_agg_err).__name__}: {_agg_err}"
+                    )
+                    continue
 
                 # NEW (shadow): feed footprint builders on every tick (fast path, no branching)
                 try:
