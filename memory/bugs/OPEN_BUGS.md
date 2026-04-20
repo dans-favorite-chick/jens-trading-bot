@@ -6,6 +6,19 @@ separately via the pytest suite itself.
 
 ---
 
+## B12 — fix/b12-vwap-pullback-base-strategy SUPERSEDED
+**Status**: SUPERSEDED (not merged)
+**Reason**: b12's BaseStrategy-contract concern was already resolved
+by Fix 6's refactor of vwap_pullback. b12's algorithm rewrite
+(1σ/2σ bands + RSI(2)) was reshaped into a new strategy file
+`strategies/vwap_band_pullback.py` via feat/vwap-band-pullback-from-b12
+(commit adf6b4e, merged 69dcfd4) so it runs alongside vwap_pullback
+for head-to-head lab data collection.
+**Branch disposition**: fix/b12-vwap-pullback-base-strategy left on
+origin but should not be merged — kept for historical reference.
+
+---
+
 ## B16 — Trade memory bot_id attribution missing
 **Discovered**: 2026-04-20 during Task B P&L diagnostic
 **Severity**: Medium
