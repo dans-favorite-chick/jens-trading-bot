@@ -68,7 +68,9 @@ class TestContractRollover(unittest.TestCase):
     def test_normal_trading_uses_front_month(self):
         from core.contract_rollover import get_active_contract
         info = get_active_contract(today=date(2026, 4, 17))
-        self.assertEqual(info["symbol"], "MNQM6 06-26")
+        # Symbol aligned to NT8 chart Data Series (no expiration suffix)
+        # per fix/instrument-name-mismatch (2026-04-20, commit e0f48bb).
+        self.assertEqual(info["symbol"], "MNQM6")
         self.assertFalse(info["should_roll"])
 
     def test_roll_window_triggers_switch(self):
