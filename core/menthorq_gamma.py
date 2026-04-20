@@ -470,21 +470,75 @@ def distance_to_nearest_wall(
     return (best_name, best_ticks)
 
 
+def is_price_near_level(
+    price: float,
+    levels: Optional[GammaLevels],
+    buffer_ticks: Optional[int] = None,
+) -> List[Tuple[str, float, str]]:
+    """
+    Return all named levels within buffer_ticks of price, regardless
+    of which side they sit on. Each entry: (name, distance_ticks, side)
+    where side is 'above' or 'below'.
+
+    Used by is_entry_into_wall for countertrend-reversal-zone logic:
+    e.g. SHORT entered just below a support level has price about to
+    be bounced back up into the short.
+    """
+    if levels is None:
+        return []
+    if buffer_ticks is None:
+        buffer_ticks = WALL_PROXIMITY_BUFFER_TICKS
+
+    out: List[Tuple[str, float, str]] = []
+    for attr in (
+        "call_resistance", "put_support", "hvl",
+        "one_d_min", "one_d_max",
+        "call_resistance_0dte", "put_support_0dte", "hvl_0dte",
+        "gamma_wall_0dte",
+    ):
+        val = getattr(levels, attr, None)
+        if val is None:
+            continue
+        ticks = _pts_to_ticks(abs(val - price))
+        if ticks <= buffer_ticks:
+            side = "above" if val > price else "below"
+            out.append((attr, ticks, side))
+    return out
+
+
 def is_entry_into_wall(
     price: float, direction: str, levels: Optional[GammaLevels]
 ) -> Optional[str]:
     """
-    Entry filter. If the next opposing wall is within
-    NO_TRADE_INTO_WALL_BUFFER_TICKS of price, return its attr name
-    (caller logs + rejects). None means entry is safe.
+    Combined entry filter. Rejects a candidate signal when either:
+
+    (1) Direction-of-travel: next opposing wall in the trade's path
+        is within NO_TRADE_INTO_WALL_BUFFER_TICKS (would slam into it).
+    (2) Countertrend-reversal zone:
+          LONG just BELOW a resistance/gamma-wall → rejection bounce.
+          SHORT just ABOVE a support              → bounce back up
+            into the short.
+
+    Returns the offending wall's attr name, or None if entry is safe.
     """
     if levels is None:
         return None
+
+    # Check 1 — direction of travel.
     name, ticks = distance_to_nearest_wall(price, direction, levels)
-    if name == "none":
-        return None
-    if ticks < NO_TRADE_INTO_WALL_BUFFER_TICKS:
+    if name != "none" and ticks < NO_TRADE_INTO_WALL_BUFFER_TICKS:
         return name
+
+    # Check 2 — countertrend reversal proximity.
+    direction_u = direction.upper()
+    for near_name, _dist, side in is_price_near_level(price, levels):
+        lname = near_name.lower()
+        if direction_u == "SHORT" and side == "above" and "support" in lname:
+            return near_name
+        if direction_u == "LONG" and side == "below" and (
+            "resistance" in lname or "gamma_wall" in lname
+        ):
+            return near_name
     return None
 
 
@@ -533,7 +587,7 @@ def natural_stop_for_entry(
 
 
 def find_level_clusters(
-    levels: Optional[GammaLevels], tolerance_ticks: int = 5
+    levels: Optional[GammaLevels], tolerance_ticks: int = 12
 ) -> List[dict]:
     """
     Find clusters of levels within tolerance_ticks of each other.
