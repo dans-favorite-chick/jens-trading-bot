@@ -172,8 +172,9 @@ class SpringSetup(BaseStrategy):
         # Setting signal.atr_stop_override = True tells base_bot NOT to apply
         # the global ATR override on top of this (it's already ATR-based).
         atr_mult = self.config.get("atr_stop_multiplier", 1.1)
-        max_stop_ticks = self.config.get("max_stop_ticks", 40)   # $20 risk cap at 1 contract
-        min_stop_ticks = self.config.get("min_stop_ticks", 8)
+        # NQ research clamps (Fix 7, 2026-04-20): 8/40 → 40/120.
+        max_stop_ticks = self.config.get("max_stop_ticks", 120)
+        min_stop_ticks = self.config.get("min_stop_ticks", 40)
         atr_5m = market.get("atr_5m", 0) or 0
         atr_stop_override = False
 

@@ -208,7 +208,10 @@ class CompressionBreakout(BaseStrategy):
         # Convert to ticks (MNQ tick size = 0.25)
         tick_size = 0.25
         stop_ticks = int(stop_distance_price / tick_size)
-        stop_ticks = max(stop_ticks, 8)  # Floor at 8 ticks
+        # NQ research clamps (Fix 7, 2026-04-20) — 40t floor / 120t ceiling
+        min_stop = self.config.get("min_stop_ticks", 40)
+        max_stop = self.config.get("max_stop_ticks", 120)
+        stop_ticks = max(min_stop, min(max_stop, stop_ticks))
 
         # Confluences for trade journal
         confluences = [

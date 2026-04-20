@@ -90,6 +90,9 @@ STRATEGIES = {
         # Anchored to wick low/high — NOT entry price — so it's below the defended level
         "atr_stop_multiplier": 1.1,     # 1.1 × 5m ATR from wick extreme
         "structure_buffer_ticks": 2,    # Fallback buffer if ATR unavailable
+        # NQ research clamps (Fix 7, 2026-04-20): raised from 8/40 → 40/120
+        "min_stop_ticks": 40,
+        "max_stop_ticks": 120,
     },
     "vwap_pullback": {
         "enabled": True,
@@ -194,10 +197,10 @@ STRATEGIES = {
         "tight_mult":    None,      # None = regime default
         "min_tf_votes": 2,          # TF votes needed to confirm direction (exhaustion allows min-1)
         "stop_buffer_ticks": 3,     # Ticks beyond coil low/high for stop
-        # Stop management
-        "max_stop_ticks": 40,       # Hard cap ($20 risk). Pre-explosion stops are naturally tight
-                                    # (8-20t typically). Cap guards against drift edge cases.
-                                    # At 3:1 RR with 40t stop → target=120t ($60). Squeezes run 400t+.
+        # Stop management — NQ research clamps (Fix 7, 2026-04-20)
+        "min_stop_ticks": 40,       # 10pt floor (Propfolio noise floor)
+        "max_stop_ticks": 120,      # 30pt ceiling (Steady Turtle NQ band)
+        # atr_stop_mult stays strategy-internal (1.5× by default; trend breakout).
         # Targets — these moves run FAR, use wide RR
         # With 20-tick stop (5 pts): 5:1 = 100t = 25pts, 8:1 = 160t = 40pts
         # Explosion squeezes on MNQ routinely run 400t+ (100pts). Let it run.
