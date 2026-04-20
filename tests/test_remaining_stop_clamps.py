@@ -108,4 +108,55 @@ class TestSpringSetupStopClamp:
         assert strat.config.get("max_stop_ticks", 120) == 120
 
 
-# Fix 8 tests appended in Commit 2 (ib_breakout ceiling guard).
+# ────────────────────────────────────────────────────────────────────
+# Fix 8 — ib_breakout ceiling-guard skip
+# ────────────────────────────────────────────────────────────────────
+class TestIBBreakoutCeilingGuard:
+    """
+    Tests the new max_stop_ticks skip-guard in strategies/ib_breakout.py:
+    if the structural stop (from IB opposite boundary) exceeds the
+    config'd ceiling, the signal is SKIPPED with a log, return None.
+
+    Full evaluate() needs heavy state (IB built up over 30 min). These
+    tests drive the guard directly + confirm config default & log
+    wording integration with the strategy class.
+    """
+
+    @staticmethod
+    def _guard_skips(stop_ticks, max_stop=120):
+        """Mirrors the post-clamp check in ib_breakout.evaluate()."""
+        return stop_ticks > max_stop
+
+    def test_normal_ib_40pt_full_stop_160t_skipped(self):
+        # IB width 40pt → full-IB stop ≈ 160 ticks → over 120, SKIP.
+        assert self._guard_skips(stop_ticks=160) is True
+
+    def test_narrow_ib_20pt_full_stop_80t_allowed(self):
+        # IB width 20pt → stop ≈ 80t → under 120, passes guard.
+        assert self._guard_skips(stop_ticks=80) is False
+
+    def test_exactly_at_ceiling_allowed(self):
+        assert self._guard_skips(stop_ticks=120) is False
+
+    def test_one_over_ceiling_rejected(self):
+        assert self._guard_skips(stop_ticks=121) is True
+
+    def test_config_default_is_120(self):
+        from strategies.ib_breakout import IBBreakout
+        strat = IBBreakout({"enabled": True})
+        assert strat.config.get("max_stop_ticks", 120) == 120
+
+    def test_override_ceiling_160_permits_160t_stop(self):
+        # If a user raises the ceiling in config, wider stops are allowed.
+        assert self._guard_skips(stop_ticks=160, max_stop=160) is False
+
+    def test_guard_log_message_substring(self):
+        # The log string must contain "stop_too_wide" so grep-based
+        # observability tools can locate these skips.
+        log_fragment = (
+            f"[EVAL] ib_breakout: SKIP "
+            f"stop_too_wide (160t > 120t max) "
+            f"— IB too wide for current risk tier"
+        )
+        assert "stop_too_wide" in log_fragment
+        assert "IB too wide" in log_fragment

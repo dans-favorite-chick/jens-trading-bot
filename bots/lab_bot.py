@@ -97,6 +97,7 @@ LAB_STRATEGY_OVERRIDES = {
         "target_rr": 5.0,            # IB breakouts naturally run 50-200pts — let them
         "ib_minutes": 15,
         "max_ib_width_atr_mult": 5.0,
+        "max_stop_ticks": 120,       # Fix 8 ceiling guard — skip signal if structural stop > 120t
         "all_regimes": True,
         "require_cvd_confirm": False,
     },

@@ -150,6 +150,10 @@ STRATEGIES = {
         "target_extension": 1.5,
         "max_ib_width_atr_mult": 1.5,
         "stop_at_ib_midpoint": False,  # False = stop at full IB opposite, True = tighter stop at midpoint
+        # NQ research ceiling (Fix 8, 2026-04-20): structural stop must fit.
+        # If (price - ib_low) or (ib_high - price) exceeds this in ticks → SKIP signal.
+        # Complementary to max_ib_width_atr_mult (pre-filter on IB width).
+        "max_stop_ticks": 120,
         "max_hold_min": 60,
         # v2 fix (2026-04-14): CVD must confirm breakout direction
         # Without this: SHORT at IB low with CVD=+6.05M → -164t loss (buyers absorbing)
