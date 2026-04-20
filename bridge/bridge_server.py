@@ -77,7 +77,13 @@ class BridgeServer:
         self.nt8_ws = None
         self.nt8_connected = False
         self.nt8_instrument = None
-        self.nt8_last_tick_time = 0.0
+        # B7 fix: separate "data flowing" signal (ticks only) from
+        # "connection alive" signal (heartbeat or tick). The 2026-04-16
+        # 3h15m silent-stall incident had heartbeats still arriving while
+        # zero ticks flowed; with both signals on nt8_last_tick_time the
+        # bridge saw nothing wrong.
+        self.nt8_last_tick_time = 0.0         # ticks only
+        self.nt8_last_heartbeat_time = 0.0    # heartbeats AND ticks (ticks imply liveness)
         self.nt8_connect_time = None
 
         # Bot connections
@@ -154,7 +160,10 @@ class BridgeServer:
         self._log_event("info", f"NT8 client connected from {remote}")
         self.nt8_connected = True
         self.nt8_connect_time = time.time()
+        # Seed both signals on connect so stale_watcher doesn't fire until
+        # at least DISCONNECT_THRESHOLD_S of silence post-connect.
         self.nt8_last_tick_time = time.time()
+        self.nt8_last_heartbeat_time = time.time()
 
         try:
             while True:
@@ -186,10 +195,15 @@ class BridgeServer:
                     self._log_event("info", f"NT8 instrument: {self.nt8_instrument}")
 
                 elif msg_type == "heartbeat":
-                    self.nt8_last_tick_time = time.time()
+                    # B7 fix: heartbeat bumps ONLY the liveness signal, not
+                    # the tick signal — otherwise a frozen-feed NT8 (TCP
+                    # alive, zero ticks) looks identical to a healthy one.
+                    self.nt8_last_heartbeat_time = time.time()
 
                 elif msg_type == "tick":
                     self.nt8_last_tick_time = time.time()
+                    # Ticks also prove liveness — bump both.
+                    self.nt8_last_heartbeat_time = time.time()
                     self.ticks_received += 1
                     self.recent_tick_times.append(time.time())
 
@@ -415,9 +429,19 @@ class BridgeServer:
         """
         now = time.time()
         nt8_age = now - self.nt8_last_tick_time if self.nt8_last_tick_time > 0 else -1
+        # B7: separate heartbeat age for silent-stall diagnosis
+        nt8_hb_age = (now - self.nt8_last_heartbeat_time
+                      if self.nt8_last_heartbeat_time > 0 else -1)
 
+        # nt8_status tiers:
+        #   live         → ticks fresh (<5s)
+        #   silent_stall → heartbeat fresh but ticks stale >60s during RTH (B7)
+        #   stale        → heartbeat still arriving but within disconnect threshold
+        #   disconnected → heartbeat stale OR never seen
         if self.nt8_connected and nt8_age < 5:
             nt8_status = "live"
+        elif self.nt8_connected and nt8_hb_age >= 0 and nt8_hb_age < 10 and nt8_age > 60:
+            nt8_status = "silent_stall"
         elif self.nt8_connected and nt8_age < DISCONNECT_THRESHOLD_S:
             nt8_status = "stale"
         else:
@@ -438,6 +462,7 @@ class BridgeServer:
             "nt8_connected": self.nt8_connected,
             "nt8_instrument": self.nt8_instrument,
             "nt8_last_tick_age_s": round(nt8_age, 1),
+            "nt8_last_heartbeat_age_s": round(nt8_hb_age, 1),  # B7
             "bots_connected": bots,
             "bots_count": len(bots),
             "ticks_received": self.ticks_received,
@@ -458,21 +483,66 @@ class BridgeServer:
 
     # ─── NT8 Stale Watcher ──────────────────────────────────────────
     async def stale_watcher(self):
-        """Monitor NT8 connection health. Log warnings on stale data."""
-        was_stale = False
+        """Monitor NT8 connection health. Emit DISTINCT signals (B7 fix):
+
+        - "SOCKET_DEAD": no heartbeat AND no tick for > DISCONNECT_THRESHOLD_S
+          → TCP connection is dead; C# indicator crashed, NT8 closed, or
+          network broke. File fallback may still deliver ticks if NT8 is
+          still writing mnq_data.json.
+
+        - "SILENT_STALL": heartbeats are fresh (<10s old) but ticks are
+          stale (>60s old during RTH). This is the "NT8 frozen feed"
+          class — TCP keepalive + heartbeat timer keep firing while the
+          chart's tick stream has stopped (reproduced 2026-04-16 for
+          3h15m). Before this fix the bridge never noticed.
+        """
+        was_socket_dead = False
+        was_silent_stall = False
+        SILENT_STALL_HEARTBEAT_MAX_AGE = 10   # heartbeat fresh = socket alive
+        SILENT_STALL_TICK_MIN_AGE = 60        # ticks stale = feed frozen
+
         while True:
             await asyncio.sleep(2)
-            if self.nt8_last_tick_time == 0:
+            if self.nt8_last_heartbeat_time == 0 and self.nt8_last_tick_time == 0:
                 continue
 
-            age = time.time() - self.nt8_last_tick_time
+            now = time.time()
+            hb_age = (now - self.nt8_last_heartbeat_time
+                      if self.nt8_last_heartbeat_time > 0 else 999)
+            tick_age = (now - self.nt8_last_tick_time
+                        if self.nt8_last_tick_time > 0 else 999)
 
-            if age > DISCONNECT_THRESHOLD_S and not was_stale:
-                self._log_event("error", f"NT8 data stale ({age:.0f}s) — switching to file fallback")
-                was_stale = True
-            elif age < 5 and was_stale:
-                self._log_event("info", "NT8 data resumed (TCP live)")
-                was_stale = False
+            # ── SOCKET_DEAD detection ───────────────────────────────
+            socket_dead_now = hb_age > DISCONNECT_THRESHOLD_S
+            if socket_dead_now and not was_socket_dead:
+                self._log_event(
+                    "error",
+                    f"NT8 SOCKET_DEAD — heartbeat {hb_age:.0f}s stale "
+                    f"(threshold {DISCONNECT_THRESHOLD_S}s). "
+                    f"Switching to file fallback.",
+                )
+                was_socket_dead = True
+            elif not socket_dead_now and was_socket_dead and hb_age < 5:
+                self._log_event("info", "NT8 SOCKET RESUMED (TCP live)")
+                was_socket_dead = False
+
+            # ── SILENT_STALL detection ──────────────────────────────
+            # Only meaningful when the socket IS alive (heartbeat fresh).
+            silent_stall_now = (
+                hb_age < SILENT_STALL_HEARTBEAT_MAX_AGE
+                and tick_age > SILENT_STALL_TICK_MIN_AGE
+            )
+            if silent_stall_now and not was_silent_stall:
+                self._log_event(
+                    "error",
+                    f"NT8 SILENT_STALL — heartbeats fresh ({hb_age:.0f}s) but "
+                    f"ticks stale ({tick_age:.0f}s). TCP alive, feed frozen. "
+                    f"Probable NT8 data-subscription or chart lock-up.",
+                )
+                was_silent_stall = True
+            elif not silent_stall_now and was_silent_stall and tick_age < 5:
+                self._log_event("info", "NT8 SILENT_STALL cleared (ticks resumed)")
+                was_silent_stall = False
 
     # ─── File Fallback Poller ───────────────────────────────────────
     async def file_fallback_poller(self):
