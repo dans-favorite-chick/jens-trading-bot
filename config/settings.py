@@ -167,6 +167,18 @@ TREND_RIDER_ENABLED = True        # Hold remaining contract until trend stalls
 TREND_RIDER_MIN_SCORE = 4         # Only ride trend when daily momentum score >= N
                                   # Score 4 = DEVELOPING, Score 5 = INSTITUTIONAL
 
+# ─── MenthorQ Gamma Integration (B14) ──────────────────────────────
+# Daily paste of MenthorQ gamma levels feeds the gamma regime classifier
+# and entry-wall filter. See docs/MENTHORQ_USAGE.md.
+MENTHORQ_GAMMA_DIR = os.path.join(
+    os.path.dirname(__file__), "..", "data", "menthorq", "gamma"
+)
+MENTHORQ_MAX_DATA_AGE_HOURS = 30        # WARN + treat as missing beyond this
+MENTHORQ_HVL_BUFFER_TICKS = 8           # Transition-zone band around HVL
+MENTHORQ_WALL_BUFFER_TICKS = 8          # Countertrend proximity buffer
+MENTHORQ_NO_TRADE_INTO_WALL_TICKS = 12  # Entry-into-wall rejection radius
+MENTHORQ_ENABLE_STOP_OVERRIDE = False   # Strategies opt in to gamma stop
+
 # ─── Logging ────────────────────────────────────────────────────────
 LOG_DIR = "logs"
 BRIDGE_LOG = "logs/bridge.log"
