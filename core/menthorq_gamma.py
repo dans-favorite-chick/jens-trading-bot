@@ -34,10 +34,15 @@ logger = logging.getLogger("MenthorQGamma")
 
 # ─── Constants (Phase 5 moves these to config/settings.py) ──────────
 
-TICK_SIZE = 0.25  # MNQ
-HVL_TRANSITION_BUFFER_TICKS = 8
-WALL_PROXIMITY_BUFFER_TICKS = 8
-NO_TRADE_INTO_WALL_BUFFER_TICKS = 12
+# Phase 5 (2026-04-20): sourced from config/settings.py. Module-level
+# aliases are preserved so tests and direct callers see the same names;
+# tuning is now a one-line change in config/settings.py, no re-push.
+from config.settings import (
+    TICK_SIZE,
+    MENTHORQ_HVL_BUFFER_TICKS as HVL_TRANSITION_BUFFER_TICKS,
+    MENTHORQ_WALL_BUFFER_TICKS as WALL_PROXIMITY_BUFFER_TICKS,
+    MENTHORQ_NO_TRADE_INTO_WALL_TICKS as NO_TRADE_INTO_WALL_BUFFER_TICKS,
+)
 
 
 # ─── Data model ──────────────────────────────────────────────────────

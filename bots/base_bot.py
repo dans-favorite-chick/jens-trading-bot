@@ -353,12 +353,13 @@ class BaseBot:
         # is intentionally NOT wired here — strategies will opt in later.
         from pathlib import Path as _GammaPath
         from core.menthorq_gamma import load_latest_gamma
-        _gamma_dir_default = os.path.join(
-            os.path.dirname(__file__), "..", "data", "menthorq", "gamma"
-        )
-        self.gamma_data_dir = _GammaPath(_gamma_dir_default)
+        from config.settings import MENTHORQ_GAMMA_DIR, MENTHORQ_MAX_DATA_AGE_HOURS
+        self.gamma_data_dir = _GammaPath(MENTHORQ_GAMMA_DIR)
+        self._gamma_max_age_hours = MENTHORQ_MAX_DATA_AGE_HOURS
         try:
-            self.gamma_levels = load_latest_gamma(self.gamma_data_dir)
+            self.gamma_levels = load_latest_gamma(
+                self.gamma_data_dir, max_age_hours=self._gamma_max_age_hours
+            )
             if self.gamma_levels is not None:
                 logger.info(
                     f"[GAMMA] Loaded: date={self.gamma_levels.data_date} "
@@ -572,7 +573,10 @@ class BaseBot:
                     continue
                 current_mtime = max(p.stat().st_mtime for p in files)
                 if current_mtime > self._gamma_mtime:
-                    new_levels = load_latest_gamma(self.gamma_data_dir)
+                    new_levels = load_latest_gamma(
+                        self.gamma_data_dir,
+                        max_age_hours=self._gamma_max_age_hours,
+                    )
                     if new_levels is not None:
                         self.gamma_levels = new_levels
                         self._gamma_mtime = current_mtime
