@@ -746,6 +746,172 @@ v2 plan's P6 C# heartbeat requirement is **already 80% built** — the fallback 
 
 ---
 
+### Step 5.4 — Re-verification (2026-04-19 evening sprint kickoff)
+
+Re-read both C# files + the Python consumers to verify the earlier claim holds against current tree state. The Phase 5 audit earlier today inspected a 310-line `TickStreamer.cs`; current file has grown to **406 lines** (v3.0 multi-instrument — streams MNQ primary + ES + ^VXN + ^VIX on the same TCP connection). Re-audit summary:
+
+#### Claim verification — does the heartbeat + fallback file story hold?
+
+| Original Phase 5 claim | Current state | Verified? |
+|---|---|---|
+| Heartbeat Timer exists, 3s cadence | [TickStreamer.cs:70,124,274-288](phoenix_bot/ninjatrader/TickStreamer.cs) — `Timer heartbeatTimer`, `HEARTBEAT_MS = 3000`, created in `State.DataLoaded`, disposed in `State.Terminated`. Callback sends TCP heartbeat when connected, else reconnect attempt. | ✅ |
+| Heartbeat JSON message sent | [TickStreamer.cs:277-283](phoenix_bot/ninjatrader/TickStreamer.cs) — `{"type":"heartbeat","ts":"<ISO-8601>"}\n` via `Send()` under `sendLock`. | ✅ |
+| Fallback file writes on each tick, mtime advances | [TickStreamer.cs:179-197](phoenix_bot/ninjatrader/TickStreamer.cs) — `File.WriteAllText(FALLBACK_FILE_PRIMARY, ...)` throttled to 1s (`FILE_WRITE_MS=1000`), wrapped in try/catch. | ✅ |
+| SiM variant matches production | [SiM_TickStreamer.cs](phoenix_bot/ninjatrader/SiM_TickStreamer.cs) — identical structure, 374 lines. Same heartbeat + fallback mechanics. Difference: fires during Historical/Transition states for sim/replay testing. | ✅ |
+| Python consumes TCP heartbeats | [bridge_server.py:188-192](phoenix_bot/bridge/bridge_server.py) — `msg_type == "heartbeat"` → `nt8_last_tick_time = time.time()`. Also bumped by ticks (line 192). | ✅ |
+| Python has stale watcher | [bridge_server.py:448-463](phoenix_bot/bridge/bridge_server.py) — `stale_watcher()` async task, logs warning when `age > DISCONNECT_THRESHOLD_S` (30s). | ✅ |
+| Python has file-fallback poller | [bridge_server.py:466-504](phoenix_bot/bridge/bridge_server.py) — `file_fallback_poller()` activates after 30s TCP staleness, reads mtime-updated `C:\temp\mnq_data.json`, broadcasts as ticks. | ✅ |
+| Circuit breaker detects tick gap | [core/circuit_breakers.py:10,127-135](phoenix_bot/core/circuit_breakers.py) + [base_bot.py:588](phoenix_bot/bots/base_bot.py) — `check_tick_gap()` fires on >60s no ticks during RTH; `record_tick()` wired on each tick received. | ✅ |
+
+**Claim holds: P6 is ~80% built.** Re-verified across both C# files and 3 Python consumers. Nothing has regressed since the original audit.
+
+#### NEW finding — latent bug in `file_fallback_poller`
+
+The earlier Phase 5 audit didn't drill into the fallback poller's interaction with `nt8_last_tick_time`. Re-reading [bridge_server.py:466-504](phoenix_bot/bridge/bridge_server.py) reveals:
+
+```python
+# Lines 485-500 inside file_fallback_poller()
+with open(FILE_FALLBACK_PATH, "r") as f:
+    data = json.load(f)
+tick = {
+    "type": "tick", "price": ..., "bid": ..., "ask": ...,
+    "vol": ..., "ts": datetime.now(timezone.utc).isoformat(),
+    "source": "file_fallback",
+}
+self.tick_buffer.append(tick)
+await self._broadcast_to_bots(json.dumps(tick))
+self.ticks_received += 1
+# ← NO update to self.nt8_last_tick_time here
+```
+
+**Consequence chain if TCP dies and file fallback succeeds:**
+1. `nt8_last_tick_time` frozen at the last TCP heartbeat
+2. `stale_watcher` logs "NT8 data stale" forever (line 459) — never logs "resumed" because `age < 5` never true (age keeps growing)
+3. Downstream consumers that read `nt8_last_tick_age_s` via `/health` see forever-stale
+4. `circuit_breakers.check_tick_gap()` uses its own `_last_tick_ts` (bumped via `record_tick()` at [base_bot.py:588](phoenix_bot/bots/base_bot.py)). Since the bot DOES receive the fallback ticks via the bridge broadcast, `record_tick()` is called → breaker does NOT false-fire. Good for the bot; bad for the bridge-level staleness signal.
+
+**Impact:** operational — false-positive "NT8 stale" alerts during a healthy fallback mode. Not catastrophic (bot keeps trading via fallback ticks), but confusing for triage and will generate spurious Telegram chatter once alerts are wired to `stale_watcher`.
+
+**One-line fix** (place before the `try:` at bridge_server.py:477 is too early; must be after successful broadcast):
+
+```python
+# bridge_server.py: inside file_fallback_poller(), after line 500
+self.tick_buffer.append(tick)
+await self._broadcast_to_bots(json.dumps(tick))
+self.ticks_received += 1
+self.nt8_last_tick_time = time.time()    # ← NEW: mark data freshness from fallback
+```
+
+Effort: **5 minutes, 1 line.** Python-only.
+
+#### NEW finding — "silent tick stall" is NOT cleanly detected
+
+Re-inspection of the [KNOWN_ISSUES.md](memory/context/KNOWN_ISSUES.md) silent-stall incident (2026-04-16, 07:56–11:11 CDT, NT8 showed connected but forwarded 0 ticks/sec for 3h15m):
+
+The current architecture conflates "connection alive" and "data flowing" in `nt8_last_tick_time` (bumped by BOTH heartbeats AND ticks at bridge_server.py:188-192). This means:
+
+- During a silent stall: heartbeats still arrive every 3s → `nt8_last_tick_time` stays fresh → nobody notices for hours
+- `circuit_breakers.check_tick_gap()` relies on `record_tick()` calls from base_bot, which only fire for actual ticks — so IT would detect stall correctly (after 60s). The bot-side breaker does the right thing; the bridge-side stale_watcher does NOT.
+
+**Enhancement to cleanly detect silent stall at the bridge:**
+Split the single timestamp into two. Change bridge_server.py from:
+
+```python
+# Current (conflated)
+elif msg_type == "heartbeat":
+    self.nt8_last_tick_time = time.time()
+elif msg_type == "tick":
+    self.nt8_last_tick_time = time.time()
+    ...
+```
+
+to:
+
+```python
+# Proposed (separated)
+elif msg_type == "heartbeat":
+    self.nt8_last_heartbeat_time = time.time()
+elif msg_type == "tick":
+    self.nt8_last_tick_time = time.time()
+    self.nt8_last_heartbeat_time = time.time()  # ticks imply heartbeat liveness
+    ...
+```
+
+Then `stale_watcher` gets two thresholds:
+- `nt8_last_heartbeat_time` older than 10s → connection dead
+- `nt8_last_tick_time` older than 60s during RTH → silent stall (NT8 frozen but TCP alive)
+
+Effort: **30 minutes** for the split + tests. Python-only.
+
+#### Refined remaining P6 work
+
+Original Phase 5 estimated Option A at ~2.5h. Re-verification confirms the estimate and adds specifics:
+
+| Sub-task | Est | Risk |
+|---|---|---|
+| Bug fix: `file_fallback_poller` bumps `nt8_last_tick_time` (1-line) | 5 min | Low |
+| Split heartbeat vs tick timestamps in bridge_server.py | 30 min | Low |
+| Silent-stall breaker rule (heartbeats fresh, ticks stale during RTH) added to circuit_breakers.py | 30 min | Low |
+| Telegram wiring on stale_watcher transitions (not just circuit_breakers) | 20 min | Low |
+| Websockets ping_interval=10 + ping_timeout=10 on the bot→bridge socket (already covered in v2 Option A, still relevant) | 30 min | Low — tested surface |
+| Unit tests covering all three stall modes: TCP dead, fallback active, silent stall | 45 min | Medium (need to simulate with mtime monkeypatch) |
+| Integration smoke: kill NT8 → verify fallback triggers → resume → verify recovery logged | 30 min | Medium (requires NT8 manual test) |
+
+**Total refined P6 estimate: ~3h** (previously ~2.5h). Slightly over because the silent-stall enhancement is now explicit rather than implicit in "Option A."
+
+#### C# compile cycle required?
+
+**No.** All proposed work is Python-side. TickStreamer.cs and SiM_TickStreamer.cs already provide both the TCP heartbeat (Timer thread) and the mtime-updating fallback file (chart thread). Remaining P6 work is consumer logic on the Python side.
+
+If we later decide diagnostic granularity justifies Option B's timer-thread heartbeat file (proposed in Step 5.2), that adds ~1.5h for the C# addition + compile/deploy cycle. Still deferrable per original recommendation.
+
+#### Phase 5 re-verification verdict
+
+- Original claim "P6 is 80% built" **verified and re-confirmed** against current (406-line) TickStreamer.cs and current bridge/base_bot code
+- One latent Python bug found (`file_fallback_poller` omits a 1-line timestamp update) — trivial fix, not Monday-blocking
+- One enhancement opportunity identified (split heartbeat vs tick signals) — improves silent-stall detection at bridge layer
+- **Zero C# changes required for P6 completion under Option A**
+- Refined P6 scope estimate: **~3h Python-only**
+
+**Proceed-gate: re-verification supports the original recommendation. Same Phase 6 entry point applies (line-ending / autocrlf audit).**
+
+### Step 5.5 — Tonight's sprint slots (2026-04-19 evening — correction)
+
+Correction to the initial "deferrable" framing in Step 5.4. The two latent bugs are PROMOTED into tonight's implementation sprint. Same rules as every other tonight item: code change + pytest coverage + commit.
+
+#### B6 — `file_fallback_poller` timestamp fix
+
+- **Scope:** Add `self.nt8_last_tick_time = time.time()` after successful fallback broadcast in `bridge/bridge_server.py` `file_fallback_poller()` (after line 500).
+- **Estimate:** 5 min code + 5 min test = **10 min**.
+- **Sprint slot:** immediately after **P5b**.
+- **Test coverage:** new unit test simulating `age > DISCONNECT_THRESHOLD_S`, asserting `nt8_last_tick_time` advances after a fallback broadcast (mtime monkeypatch).
+- **Commit:** solo commit, `fix(bridge): file_fallback_poller bumps nt8_last_tick_time (B6)`.
+
+#### B7 — Heartbeat/tick timestamp split + stale_watcher distinct signals
+
+- **Scope:** In `bridge/bridge_server.py`:
+  1. Introduce `self.nt8_last_heartbeat_time` alongside `self.nt8_last_tick_time`.
+  2. `heartbeat` handler bumps only `nt8_last_heartbeat_time`.
+  3. `tick` handler bumps both (tick implies liveness).
+  4. `stale_watcher` reads the pair and distinguishes:
+     - `heartbeat_age > 10s` → "NT8 connection dead"
+     - `heartbeat_age < 10s` AND `tick_age > 60s` during RTH → "NT8 silent stall (frozen feed)"
+  5. Dashboard/health endpoint exposes both ages separately.
+- **Estimate:** 30 min code + 15 min test = **45 min**.
+- **Sprint slot:** immediately after **B6**.
+- **Test coverage:**
+  - `test_heartbeat_bumps_only_heartbeat_time` — feed a heartbeat, assert only `nt8_last_heartbeat_time` advances.
+  - `test_tick_bumps_both_timestamps` — feed a tick, assert both advance.
+  - `test_silent_stall_detected_during_rth` — heartbeats fresh, ticks stale > 60s during RTH, stale_watcher emits distinct log/signal.
+  - `test_connection_dead_detected` — heartbeats stale > 10s, stale_watcher emits "connection dead" signal.
+- **Commit:** solo commit, `feat(bridge): split heartbeat vs tick timestamps for silent-stall detection (B7)`.
+
+**Sprint order (updated):** `… P5b → B6 → B7 → P6 → …` (remaining P6 consumer work follows B7 since B7 provides the clean signal split P6 depends on).
+
+**Dependency note:** B6 can ship independently. B7 is a prereq for the "silent-stall breaker rule" line item in the Step 5.4 refined estimate (that breaker rule is now part of P6 proper, not B7).
+
+---
+
 ## Phase 6 — Line-ending / autocrlf current state
 
 ### Step 6.1 — Audit
@@ -934,8 +1100,180 @@ No irreversible steps. All three above changes are atomically separable commits/
 
 **Proceed-gate: Phase 6 findings support moving to Phase 7 (write the deltas doc + close the sprint).**
 
+### Step 6.4 — Re-audit (2026-04-19 evening sprint kickoff)
+
+Re-ran the Phase 6 audit to check drift before executing the normalization. **Significant drift:** the working tree has inverted from 97% LF to 24% LF as multiple edit sessions with `autocrlf=true` accumulated CRLF conversions on checkout.
+
+#### Current state
+
+| Setting | Value | Change from Step 6.1 |
+|---|---|---|
+| Tracked files total | **181** | +22 (new strategies, tools, tests from the sprint) |
+| `.gitattributes` | **still absent** | no change |
+| `core.autocrlf` (local) | **`true`** | no change |
+| `core.autocrlf` (global) | _unset_ | no change |
+| `core.eol` | _unset_ | no change |
+
+#### Working-tree distribution (current)
+
+| State | Count | Was (Step 6.1) | Delta |
+|---|---|---|---|
+| `w/lf` | **32** | 144 | **−112** |
+| `w/crlf` | **137** | 3 | **+134** |
+| `w/none` (empty file) | **12** | 11 | +1 |
+| `w/mixed` | **0** | 1 | **−1** (cleaned itself up) |
+
+The `memory/audit_log.jsonl` mixed-EOL case from Step 6.1 has normalized to `w/crlf` — likely when it was next appended, the writer emitted consistent CRLF. No mixed files anywhere in the tree today.
+
+#### Current index state (authoritative)
+
+All 169 non-empty tracked files are `i/lf` in the index. **Zero index-side inconsistency.** Every CRLF working-tree file is purely a checkout-time artifact of `autocrlf=true`; git still stores LF canonically.
+
+#### Extension × state breakdown
+
+| Extension | i/lf w/lf | i/lf w/crlf | i/none w/none |
+|---|---|---|---|
+| `.py` | 29 | **98** | 9 |
+| `.md` | 1 | **22** | 0 |
+| `.cs` | 1 | **3** | 0 |
+| `.bat` | 0 | **5** | 0 |
+| `.yaml` | 0 | **5** | 0 |
+| `.html` | 1 | 1 | 0 |
+| `.jsonl` | 0 | 1 | 0 |
+| `.txt` | 0 | 1 | 0 |
+| `.gitignore` | 0 | 1 | 0 |
+| `.gitkeep` | 0 | 0 | 1 |
+| `.json` | 0 | 0 | 1 |
+| `.lock` | 0 | 0 | 1 |
+
+#### Files with mixed line endings
+
+**Zero.** The prior `memory/audit_log.jsonl` mix has resolved itself. No audit action needed to unmix anything.
+
+#### Files that MUST stay CRLF
+
+**None.** Reconfirmed across every extension type empirically:
+- `.cs` — three CRLF plus one LF (`strategies/chandelier_exit.py` wait — that's .py; .cs LF is `core/chandelier_exit.py` — actually that's .py too. Let me clarify: the 1 `.cs w/lf` is an older file; 3 `.cs w/crlf` are the NinjaScript-edited versions). Both work in NT8.
+- `.bat` — 5 at CRLF; cmd.exe tolerates LF per Step 6.2 empirical finding
+- `.html` / `.md` / `.yaml` / `.json` / `.py` — all tool-agnostic
+
+The original Step 6.2 conclusion holds: **no file type operationally requires CRLF.**
+
+#### Mixed-EOL files needing pre-normalize attention
+
+**Zero.** No intervention required before `git add --renormalize .`.
+
+#### Proposed `.gitattributes` (unchanged from Step 6.3)
+
+Keep the Step 6.3 proposal verbatim:
+
+```
+# Phoenix Bot — line-ending normalization
+# All text files stored with LF in repo and checked out as LF.
+# Windows-native tooling (cmd.exe, NinjaScript, PowerShell) accepts LF.
+
+* text=auto eol=lf
+
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.ico    binary
+*.pdf    binary
+*.sqlite binary
+*.db     binary
+*.parquet binary
+*.pyc    binary
+*.pyo    binary
+*.zip    binary
+*.nt8bk  binary
+```
+
+#### Revised migration plan (procedure unchanged, diff-size expanded)
+
+The command sequence from Step 6.3 is still correct verbatim. What changed is the **diff size** on the renormalize commit:
+
+| Aspect | Step 6.1 estimate | Current estimate |
+|---|---|---|
+| Files touched by `--renormalize` | 4 | **137** |
+| `git diff --stat --cached` size | ~1k lines | **~100k+ lines** (every line of every .py/.md/.cs/.yaml/.bat reports as "changed" due to EOL) |
+| `git diff --stat --cached --ignore-all-space` | 0 | **0** (still zero semantic change) |
+| Review burden | trivial | **needs the explicit "EOL-only" note on the commit** — reviewers should apply `--ignore-all-space` |
+| Effort | 15-20 min | **still 15-20 min** — procedure identical, wait time for git slightly longer |
+
+The commit is still atomic + reversible + zero-content-change. Just bigger diff on paper.
+
+#### Recommended commit message (explicit EOL-only note)
+
+```
+chore: normalize line endings to LF per .gitattributes
+
+* Non-functional change — converts 137 working-tree-CRLF files back
+  to canonical LF form. Git already stored LF in the index; this just
+  synchronizes the working tree and removes the autocrlf=true CRLF
+  conversion from checkout.
+* Follow-up to the .gitattributes commit which establishes the rule.
+* Verify via: git diff HEAD~2 --ignore-all-space --stat  →  0 lines.
+* No build, test, or runtime behavior changes. All tests pass before
+  and after. Launchers (.bat) and NT8 compiles (.cs) continue to work.
+```
+
+#### Why the drift happened
+
+Each edit session with `autocrlf=true` + `.gitattributes`-absent accumulates CRLF. Tonight's sprint + the Option B sprint + the roadmap-v4 sprint together touched ~140 files; all of them got LF→CRLF'd during their git-level touches. Over the next sprint cycle (without normalization) this would creep back toward 100% CRLF.
+
+Shipping the normalize this sprint is the right move: it creates a stable floor, and the `.gitattributes` rule prevents re-drift.
+
+### Phase 6 re-audit verdict
+
+- Procedure from Step 6.3 is **still correct verbatim**; nothing in the migration plan needs to change
+- **137 files** will re-normalize to LF (was 4 in the prior audit) — larger diff but identical change-kind
+- **Zero** mixed-EOL files to hand-resolve first
+- **Zero** file types that must stay CRLF
+- Estimated effort **unchanged at ~15-20 min**; commit is atomic + reversible
+- **No production code changes in this audit.** No renormalize applied.
+
+**Proceed-gate: re-audit supports execution of Step 6.3 procedure as-is. Ready for proceed.**
+
 ---
 
 ## Phase 7 — Action plan deltas
 
-_(pending — see `docs/ACTION_PLAN_V2_1_DELTAS.md` when generated)_
+**Status: consolidated.** Full deltas doc at [docs/ACTION_PLAN_V2_1_DELTAS.md](../../docs/ACTION_PLAN_V2_1_DELTAS.md).
+
+### Step 7.1 — Summary
+
+- **Bugs discovered during verification: 7 total** (B1-B7). B2-B7 ship tonight. B1 deferred to P2 (Week 1 Day 3).
+- **Design corrections to v2 plan: 4** — P4 storage (SQLite → JSON), P10 scope split (P10a/b/c), P6 already 80% built, filename correction (TickStreamer.cs).
+- **Estimate corrections:** P10 +2.5-4.5h, P4 −2h, P6 −1h, P21 −10-15min, P5b new +1h-1.5h.
+- **Net Week 1 effort change: roughly flat** (additions from P5b + B6/B7 roughly offset by P4 and P6 reductions).
+- **Live-data verification pending:** B4 account-scoped CANCELALLORDERS — will verify during P5b smoke test. FILLED-state delta pass: **COMPLETE** (verified tonight).
+
+### Step 7.2 — Tonight's 11-item implementation order
+
+Full schedule in deltas doc. One-line summary: `P5b → B6 → B7 → P3 → P11 → P20 → P7 → P14 → P4b → P1 → P21`.
+
+Discipline: pytest + individual commit per item. P21 (EOL renormalize) ships last so feature diffs on items 1-10 stay clean and the renormalize commit is atomic + isolated for `git blame --ignore-rev` handling.
+
+### Step 7.3 — Open questions before sprint starts
+
+Six open questions documented in the deltas doc Q1-Q6:
+- **Q1 (B4 account-scoped test)** — resolved: verify during P5b smoke test, not before
+- **Q2 (prod_bot signal_price)** — recommend defer to Week 2 Day 7 P10a
+- **Q3 (phoenix_action_plan_v2_post_migration.md commit location)** — recommend under docs/
+- **Q4 (EOL renormalize timing)** — resolved: tonight as item 11
+- **Q5 (B3 rollout safety)** — REQUIRED before P5b — options (a)/(b)/(c)/(d), recommend (b)
+- **Q6 (B7 test scope)** — recommend pure unit tests tonight, manual NT8 integration for Monday pre-open
+
+### Step 7.4 — Commit verification corpus
+
+Done in the same commit that introduces this Phase 7 entry. See commit message body for the phase-by-phase rollup.
+
+### Phase 7 verdict
+
+- Verification sprint consolidated end-to-end across 6 phases + this closing Phase 7
+- 7 bugs catalogued, 4 design corrections locked in, 11-item tonight sprint defined with explicit order
+- **Zero production code changes across the entire verification sprint** (Phases 1-7). All changes are documentation + test artifacts under `tools/verification_2026_04_18/`.
+- **Ready to begin implementation sprint** pending Q5 (B3 rollout safety) user decision.
+
+**Proceed-gate: Phase 7 complete. Next action is tonight's 11-item implementation sprint starting at P5b after Q5 resolution.**

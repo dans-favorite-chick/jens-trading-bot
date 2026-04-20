@@ -7,79 +7,87 @@ Updates to `phoenix_action_plan_v2_post_migration.md` generated during the
 
 ## Summary
 
-**Bugs discovered: 5** (all on the OIF writer path, all latent for the entire bot's lifetime).
+- **Bugs discovered during verification: 7 total**
+  - **B1**: `bridge/oif_writer.py` ORDER ID never populated (Priority P2, deferred)
+  - **B2**: CANCEL_ALL semicolon count 15→13 (fix in P5b tonight)
+  - **B3**: STOP→STOPMARKET at all 4 order-type sites (fix in P5b tonight)
+  - **B4**: CANCELALLORDERS cross-account risk (fix in P5b tonight)
+  - **B5**: No single-order CANCEL function (add in P5b tonight)
+  - **B6**: `file_fallback_poller` doesn't bump `nt8_last_tick_time` (fix tonight after P5b)
+  - **B7**: Bridge conflates heartbeat/tick timestamps — silent-stall blindspot (real incident 2026-04-16, fix tonight after B6)
+
+- **Design corrections to v2 plan: 4**
+  - P4 SQLite → JSON (codebase already decided)
+  - P10 scope split into P10a/b/c
+  - P6 already ~80% built (TickStreamer.cs has Timer + fallback mtime)
+  - Filename correction: TickStreamer.cs NOT MarketDataBroadcasterV3.cs
+
+- **Estimate corrections:**
+  - P10: 1.5h → 4-6h
+  - P4: 4h → 2h
+  - P6: 4h → 3h (pure Python, zero C# compile cycle)
+  - P21: 30min → 15-20 min
+  - P5b (new): +60-90 min (was not in original plan)
+
+- **Net Week 1 effort change: roughly flat** (additions from P5b + B6/B7 roughly offset by P4 and P6 reductions).
+
+- **Items requiring verification against live data before final implementation:**
+  - FILLED-state delta pass — **COMPLETE** (verified tonight)
+  - B4 account-scoped CANCELALLORDERS — will verify during P5b live smoke test
+
+### Bug detail table
 
 | ID | File / location | Severity | Status |
 |---|---|---|---|
-| B1 | `bridge/oif_writer.py:62` — ORDER ID never populated → no per-order fill ACKs ever generated | CRITICAL (latent) | Ship via P5 |
-| B2 | `bridge/oif_writer.py:100` — CANCELALLORDERS has 14 semicolons, NT8 wants 12 → every CANCEL_ALL silently rejected | CRITICAL (latent) | Ship via P5b |
-| B3 | `bridge/oif_writer.py:65,75,92,97` — stop orders use `STOP` but NT8 wants `STOPMARKET` → every NT8-side stop order parse-rejected; bot has been running with no NT8 stop protection | CRITICAL (latent) | Ship via P5b (highest priority) |
-| B4 | NT8 design — `CANCELALLORDERS;;;;;;;;;;;;` no-args form cancels orders across ALL accounts (Sim101 + live brokerage + demo) | CRITICAL (design) | Ship via P5b (per-order CANCEL loop, not no-args form) |
-| B5 | `bridge/oif_writer.py` — no single-order CANCEL action path exists | MEDIUM (gap) | Ship via P5b (add `CANCEL` action) |
-
-**Design corrections to v2 plan: 4**
-
-1. **P4 storage**: SQLite+WAL → JSON + JSONL (codebase has 9 JSON+atomic-replace precedents, 0 SQLite)
-2. **P10 scope**: one universal `_on_trade_closed` handler → splits into **P10a** (3 trade-close consumers), **P10b** (bar-pipeline wiring for `sweep_watcher.track_pivot_break`), **P10c** (deferred to post-P2 for `tca_tracker.record_fill`)
-3. **P6 already 80% built**: TickStreamer.cs v2.0 already has a `System.Threading.Timer` heartbeat + `C:\temp\mnq_data.json` fallback file with 1Hz mtime signal. Python-only scope (Option A) satisfies v2's P6 intent.
-4. **Filename correction**: v2 plan references `MarketDataBroadcasterV3.cs`. That file does not exist; the actual tick broadcaster is `ninjatrader/TickStreamer.cs`.
-
-**Estimate corrections**
-
-| Item | v2 estimate | Revised | Delta |
-|---|---|---|---|
-| P4 (state persistence) | 4h | 2h | **−2h** |
-| P6 (staleness detection) | 4h implied | 2.5h (Option A) | **−1.5h** |
-| P10 (shadow module wiring) | 1.5h | 4-6h across P10a/b/c | **+2.5-4.5h** (but spread across days) |
-| P21 line-ending sub-task | 30+ min implied | 15-20 min | **−10-15 min** |
-| P5b (new) | — | 45-60 min | **+1h on Day 1** |
-| Day 1 total | 1.5h | ~2.5h | **+1h** |
-| Day 4 total | 5h | ~4h | **−1h** |
-| Day 5 total | 5h | 6h | **+1h** |
-
-**Net Week 1 effort change: roughly flat.** P5b (+1h Day 1) offsets P4 (−2h Day 4). P6 Option-A savings absorb the Day 5 overflow. P10 sub-items redistribute into Week 2 without breaking the overall week-1 shape.
-
-**Items requiring live-data verification before final implementation**
-
-1. **17:30 CT Sunday delta pass**: re-run `tools/verification_2026_04_18/test_01_market_ack.py` once CME re-opens (17:00 CT Sun) to observe the `FILLED;<qty>;<price>` ACK-content format and a sample `<Instrument>_<Account>_Position.txt` file. 15-min task. User-owned.
-2. **B4 account-scoped CANCELALLORDERS test**: 10-min test of `CANCELALLORDERS;Sim101;;;;;;;;;;;;` (12 semicolons, account populated). If accepted, B4 fix simplifies from per-order CANCEL loop to a single account-scoped invocation. Can run tonight before P5b, during, or deferred.
+| B1 | `bridge/oif_writer.py:62` — ORDER ID never populated → no per-order fill ACKs ever generated | CRITICAL (latent) | Ship via P2 (deferred from P5, carried into Week 1 Day 3) |
+| B2 | `bridge/oif_writer.py:100` — CANCELALLORDERS has 14 semicolons, NT8 wants 12 → every CANCEL_ALL silently rejected | CRITICAL (latent) | Ship via P5b tonight |
+| B3 | `bridge/oif_writer.py:65,75,92,97` — stop orders use `STOP` but NT8 wants `STOPMARKET` → every NT8-side stop order parse-rejected; bot has been running with no NT8 stop protection | CRITICAL (latent) | Ship via P5b tonight (highest priority) |
+| B4 | NT8 design — `CANCELALLORDERS;;;;;;;;;;;;` no-args form cancels orders across ALL accounts (Sim101 + live brokerage + demo) | CRITICAL (design) | Ship via P5b tonight |
+| B5 | `bridge/oif_writer.py` — no single-order CANCEL action path exists | MEDIUM (gap) | Ship via P5b tonight (add `CANCEL` action) |
+| B6 | `bridge/bridge_server.py:500` — `file_fallback_poller` broadcasts fallback ticks but never bumps `self.nt8_last_tick_time` → `stale_watcher` logs "NT8 data stale" forever even while fallback healthy | LOW (cosmetic, will turn into Telegram spam when alerts are wired) | Ship tonight, slot 2 (after P5b) |
+| B7 | `bridge/bridge_server.py:188-192` — heartbeat and tick both bump the same `nt8_last_tick_time`; silent tick-stall (NT8 frozen but TCP alive) is undetectable at the bridge layer. Reproduced in the 2026-04-16 3h15m stall incident | MEDIUM (real operational incident) | Ship tonight, slot 3 (after B6) |
 
 ---
 
 ## Tonight's implementation sequence (2026-04-19 evening)
 
-Compressed Day-1+2+4 sprint. Target: items 1-6 complete by ~9 PM CT; items 7-8 contingent on 9 PM energy check.
+**All 11 items ship tonight.** Strict discipline: pytest + individual commit after every item.
 
-| # | Item | Est | v2 original day | Rationale for tonight |
-|---|---|---|---|---|
-| 1 | **P5b — OIF writer correctness** (B2+B3+B4+B5 bundle) | 60-90 min | Day 1 | B3 fix is the top-priority safety item; bundled with B2/B4/B5 for atomic OIF-layer cleanup |
-| 2 | **P3 — HALT enforcement** at strategy entry | 30 min | Day 1 | Single `if` at entrypoint; highest-ROI patch in plan |
-| 3 | **P11 — AI filter safe REJECT default** on timeout | 15 min | Day 1 | One-line fix |
-| 4 | **P20 — `in_cooldown()` side-effect split** | 15 min | Day 1 | Pure-query vs mutator split |
-| 5 | **P7 — Daily-reset date marker** | 30 min | Day 1 | 15-line patch, disk-persisted `_current_date` |
-| 6 | **P14 — Telegram HTML escape** | 30 min | Day 2 (low-priority) | Pulled forward — cheap alongside P5b's Telegram work |
-| 7 | *P4b — Exit collision priority function* | 60 min | Day 4 | Pulled forward if capacity; `decide_exit()` single-decision function |
-| 8 | *P1 — Atomic OIF writer* | 2h | Day 2 | Pulled forward if capacity; tempfile + fsync + `os.replace` retry loop |
+| # | Item | Est | Notes |
+|---|---|---|---|
+| 1 | **P5b — OIF correctness** (B2+B3+B4+B5 bundle) | ~60-90 min | B3 stop-loss fix is top priority; bundled with B2/B4/B5 for atomic OIF-layer cleanup |
+| 2 | **B6 — `file_fallback_poller` timestamp fix** | ~10 min | 1-line fix + pytest coverage; `self.nt8_last_tick_time = time.time()` after fallback broadcast |
+| 3 | **B7 — heartbeat/tick timestamp split** | ~45 min | Split `nt8_last_tick_time` into `nt8_last_heartbeat_time` + `nt8_last_tick_time`; `stale_watcher` emits distinct "connection dead" vs "silent stall" signals; 4 tests |
+| 4 | **P3 — HALT enforcement** at strategy entry | ~30 min | Single `if` at strategy-eval entrypoint; highest-ROI patch in plan |
+| 5 | **P11 — AI filter safe REJECT default** on timeout | ~15 min | One-line safe-default fix |
+| 6 | **P20 — `in_cooldown()` side-effect split** | ~15 min | Pure-query vs mutator split |
+| 7 | **P7 — Daily reset date marker** | ~30 min | 15-line patch, disk-persisted `_current_date` |
+| 8 | **P14 — Telegram HTML escape** | ~30 min | Escape in all `send*()` entrypoints; fixes past corrupted notification incident |
+| 9 | **P4b — Exit collision priority function** | ~60 min | `decide_exit()` single-decision function resolves simultaneous stop/target/time/trail hits |
+| 10 | **P1 — Atomic OIF writer** | ~2h | tempfile + fsync + `os.replace` retry loop; precedes P2's fill-ACK gate |
+| 11 | **P21 — EOL renormalize** (137-file sweep) | ~15-20 min | Isolated commit, ships LAST so feature diffs on items 1-10 stay clean |
 
-Items 1-6 subtotal: ~3h target.
-Items 7-8 conditional: ~3h more if both land.
+**Strict discipline:** pytest + individual commit after every item. P21 ships last so feature diffs on items 1-10 stay clean and the renormalize commit is atomic + isolated for easy `git blame --ignore-rev` handling.
 
-**P5b goes first** because it fixes the critical B3 stop-loss bug (bot has been running with no NT8-side stops since day one). Every subsequent item benefits from having working order-execution primitives.
+**P5b goes first** because B3 fixes the critical stop-loss bug (bot has been running with no NT8-side stops since day one). Every subsequent item benefits from working order-execution primitives.
+
+**B6 + B7 ship in slots 2-3** because the silent-stall blindspot (B7) is a real operational bug that caused the 2026-04-16 3h15m outage; no dependencies on later items.
 
 ---
 
 ## Revised Week 1 schedule
 
-Assumes tonight's items 1-6 land; items 7-8 contingent.
+Tonight compresses what was originally Day 1 + Day 2 + Day 4 into a single session. Remaining days open up.
 
 | Day | v2 planned items | Revised items (this plan) | Revised total |
 |---|---|---|---|
-| **Mon (Day 1)** | P3, P11, P20, P7 (1.5h) | **All landed tonight** — use Day 1 for overflow/polish + B4 account-scoped test + prod_bot signal_price sanity check | ~0-1h buffer |
-| **Tue (Day 2)** | P1 atomic OIF writer (2h) | P1 (if not tonight) + P14 (already tonight) | 2-2.5h |
-| **Wed (Day 3)** | P2 fill-ACK gate (3h) | **P2 fill-ACK gate** — state machine now 3-outcome per Phase 1 findings (ACK arrives / REJECTED / never arrives → check NT8 log). Uses corrected filename pattern `<Account>_<orderId>.txt`. | 3-3.5h |
-| **Thu (Day 4)** | P4 (4h) + P4b (1h) = 5h | **P4 JSON + JSONL** (2h) + P4b (1h if not tonight) | 3h |
-| **Fri (Day 5)** | P5 (2h) + P13 (0.5h) + P6 (1.5h) + P6b (1h) = 5h | P5 (2h) + P13 (0.5h) + **P6 Option A Python-only** (2.5h) + P6b (1h) | 6h |
-| **Week 1 total** | ~16.5h | ~14.5-15.5h | slight savings |
+| **Tonight (Sun evening)** | — | **11-item sprint** (see table above): P5b → B6 → B7 → P3 → P11 → P20 → P7 → P14 → P4b → P1 → P21 | ~6-7h |
+| **Mon (Day 1)** | P3, P11, P20, P7 (1.5h) | **All landed tonight.** Day 1 reserved for overflow / polish / prod_bot signal_price sanity check / live B4 account-scoped test | 0-1h buffer |
+| **Tue (Day 2)** | P1 atomic OIF writer (2h) | **P1 landed tonight.** Day 2 reserved for overflow / PR review / any smoke tests deferred from tonight | 0-1h buffer |
+| **Wed (Day 3)** | P2 fill-ACK gate (3h) | **P2 fill-ACK gate** — state machine 3-outcome per Phase 1 findings (ACK arrives / REJECTED / never arrives → check NT8 log). Uses corrected filename `<Account>_<orderId>.txt`. | 3-3.5h |
+| **Thu (Day 4)** | P4 (4h) + P4b (1h) = 5h | **P4 JSON + JSONL** (2h). P4b already landed tonight. | 2h |
+| **Fri (Day 5)** | P5 (2h) + P13 (0.5h) + P6 (1.5h) + P6b (1h) = 5h | P5 (2h) + P13 (0.5h) + **P6 Option A Python-only** (2.5h, now including silent-stall breaker rule enabled by B7) + P6b (1h) | 6h |
+| **Week 1 total** | ~16.5h | ~12-13h | **~4h saved** by the tonight-compression + P4/P6 estimate corrections |
 
 Week 2 gains: P10 scope work absorbs 2.5-4.5 extra hours (P10a: 2-3h Day 7; P10b: 1.5-2h; P10c: 0.5-1h post-P2). Net Week 2 effort still fits the original schedule with minor shuffling.
 
@@ -332,44 +340,36 @@ v2 plan P21 total was 2h including pre-commit setup + test runner standardizatio
 
 ---
 
-## Open questions — need user input before tonight's implementation starts
+## Open questions — need user input before sprint starts
 
-### Q1. Tonight's pre-P5b diagnostic tests — run them first?
+### Q1. B4 account-scoped CANCELALLORDERS test (resolved — "during P5b smoke test")
 
-Two 10-minute tests that would simplify P5b implementation if run BEFORE:
+Summary line item #2 locks this in: B4 account-scoped form will be verified during P5b's live smoke test rather than as a pre-P5b diagnostic. P5b implementation should code the per-order CANCEL loop regardless; the account-scoped form is an optional simplification if the smoke test confirms NT8 accepts it.
 
-- **B4 account-scoped CANCELALLORDERS test**: confirm whether `CANCELALLORDERS;Sim101;;;;;;;;;;;;` is accepted. If yes, P5b can ship an account-scoped cancel instead of per-order loop (saves complexity now, can still migrate later when B1/P5 ships).
-- **17:30 CT FILLED-state delta pass**: observe actual `FILLED;<qty>;<price>` ACK + position-file format on live sim feed. Informs P2's state machine design (Day 3 work, but P5b lays foundation).
+**Action:** No pre-P5b test. Proceed directly to P5b; verify B4 scoping live.
 
-Both are non-blocking. Options:
-- **(a)** Run both tonight before P5b (extra 20 min, lower risk)
-- **(b)** Run just B4 test tonight (10 min, only B4 blocks P5b design)
-- **(c)** Defer both to Monday morning (start P5b immediately, accept per-order loop design for B4)
-
-### Q2. prod_bot signal_price verification
+### Q2. prod_bot signal_price verification — tonight or Week 2?
 
 P10a's slippage derivation requires `market_snapshot["signal_price"]` to be populated at entry. **Confirmed in lab_bot** (line 363). **Not verified in prod_bot.** Options:
-- **(a)** Add a 15-min prod_bot read tonight (quick grep, confirm entry path populates signal_price)
+- **(a)** 15-min prod_bot read tonight between items (quick grep, confirm entry path populates signal_price)
 - **(b)** Defer to Day 7 P10a implementation window
+
+**Recommendation:** (b) — P10a is Week 2; no need to rush verification tonight when all 11 sprint items already fill the session.
 
 ### Q3. `phoenix_action_plan_v2_post_migration.md` — commit where?
 
-This is the v2 plan document the deltas reference repeatedly (BEFORE/AFTER citations). Currently untracked at repo root. Your earlier guidance treated it as "counts as clean." Options:
-- **(a)** Leave untracked (current state) — references in deltas doc don't resolve in repo browsing
+This is the v2 plan document the deltas reference repeatedly (BEFORE/AFTER citations). Currently untracked at repo root. Options:
+- **(a)** Leave untracked — references in deltas doc don't resolve in repo browsing
 - **(b)** Commit as part of tonight's verification corpus (self-contained audit trail)
 - **(c)** Commit separately under `docs/` with a cleaner name
 
-### Q4. Line-ending renormalize — tonight or Day 9?
+**Recommendation:** (b) — committing under `docs/ACTION_PLAN_V2.md` or similar keeps the audit trail resolvable. Not blocking tonight's sprint either way.
 
-Doing the line-ending cleanup **before** tonight's implementation work would:
-- Stop the persistent `LF will be replaced by CRLF` warnings on every commit tonight
-- Mean tonight's commits land as clean LF (no EOL noise in diffs)
+### Q4. Line-ending renormalize — RESOLVED
 
-Doing it **Day 9 as planned** means tonight's commits inherit current autocrlf=true behavior. Options:
-- **(a)** Tonight, as an 0th step before P5b (15-20 min)
-- **(b)** Day 9 as originally planned
+**Decision (2026-04-19 evening):** Ships tonight as item 11 of 11. Lands AFTER all feature commits so feature diffs stay clean and the renormalize commit is atomic + isolated for easy `git blame --ignore-rev` handling.
 
-### Q5. B3 rollout safety concern
+### Q5. B3 rollout safety — needs decision before P5b
 
 Fixing B3 (`STOP` → `STOPMARKET`) activates NT8-side stop orders that have never been active. Strategies have been running for 697 trades with Python-side-only stop enforcement. Turning on NT8-side stops may:
 - Trigger unexpected premature stop-outs if NT8's stop handling differs from Python's (e.g., NT8 uses last-trade price, Python uses tick close)
@@ -382,6 +382,16 @@ Options:
 - **(d)** Defer B3 to a dedicated careful review session; ship B2/B4/B5 tonight without B3
 
 **Recommendation:** (b). Ship the fix with a kill-switch so rollback is instantaneous if behavior diverges.
+
+**Required before P5b starts.**
+
+### Q6. B7 test scope — pure unit tests or NT8-dependent integration?
+
+B7's `stale_watcher` correctness depends on subtle timing around heartbeat vs tick timestamps. Options:
+- **(a)** Pure unit tests only (inject fake timestamps, verify decisions) — fast CI, no NT8 dependency
+- **(b)** Unit tests + manual NT8 integration check (kill NT8 mid-session, verify stale_watcher distinguishes "connection dead" from "silent stall")
+
+**Recommendation:** (a) for tonight's sprint commit. Manual NT8 integration goes on the Monday pre-open smoke-test checklist.
 
 ---
 
