@@ -14,7 +14,7 @@ import os
 #   U = September (3rd Friday)
 #   Z = December  (3rd Friday)
 # Front-month typically rolls ~8 trading days before expiration.
-INSTRUMENT = "MNQM6 06-26"           # Current front month = June 2026
+INSTRUMENT = "MNQM6"                 # Match NT8 chart Data Series (rolling front month)
 CONTRACT_EXPIRATION = "2026-06-19"   # 3rd Friday of June 2026
 NEXT_CONTRACT = "MNQU6 09-26"        # Roll target: September 2026
 NEXT_CONTRACT_EXPIRATION = "2026-09-18"  # 3rd Friday of September 2026
