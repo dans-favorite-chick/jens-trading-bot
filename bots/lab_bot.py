@@ -113,6 +113,14 @@ LAB_STRATEGY_OVERRIDES = {
         "stop_ticks": 10,
         "target_rr": 20.0,           # 20:1 — reversal+stall exit drives this
     },
+    "vwap_band_pullback": {
+        # Lab: loosen HTF alignment so the 1σ-band algorithm can fire
+        # across more setups for data collection. Preserves RSI(2) +
+        # volume gates (those are the algorithm's core).
+        "skip_regime_overrides": True,
+        "min_volume_ratio": 0.5,     # Lab: broader volume tolerance
+        "target_rr": 5.0,            # 5:1 — exit on stall or trend break
+    },
 }
 
 

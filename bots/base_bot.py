@@ -357,11 +357,13 @@ class BaseBot:
         from strategies.dom_pullback import DOMPullback
         from strategies.orb import OpeningRangeBreakout
         from strategies.noise_area import NoiseAreaMomentum
+        from strategies.vwap_band_pullback import VwapBandPullback
 
         strategy_classes = {
             "bias_momentum": BiasMomentumFollow,
             "spring_setup": SpringSetup,
             "vwap_pullback": VWAPPullback,
+            "vwap_band_pullback": VwapBandPullback,
             "high_precision_only": HighPrecisionOnly,
             "ib_breakout": IBBreakout,
             "compression_breakout": CompressionBreakout,

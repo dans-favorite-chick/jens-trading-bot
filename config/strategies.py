@@ -215,4 +215,24 @@ STRATEGIES = {
         #   Does ATR-declining alone add value without a directional signal?
         #   Is exhaustion_tf_min = min_tf_votes-1 the right relaxation?
     },
+
+    "vwap_band_pullback": {
+        # 1σ/2σ VWAP-band pullback + RSI(2) — ported from b12 research.
+        # Runs alongside vwap_pullback (proximity) for head-to-head lab data.
+        # Author prediction (b12 header): PF 1.5-1.8 at WR 45-55%, RR 1.5-2:1.
+        "enabled": True,
+        "validated": False,   # Lab only — needs 50+ trades before prod promotion
+        "min_bars": 50,
+        "rsi_period": 2,
+        "rsi_long_threshold": 30,
+        "rsi_short_threshold": 70,
+        "atr_period": 14,
+        "min_volume_ratio": 0.8,
+        "target_rr": 2.0,
+        # NQ-research clamps (matches Fix 7 values). If natural 2σ-band
+        # stop > max_stop_ticks, signal is skipped (Fix 8-style guard).
+        "min_stop_ticks": 40,
+        "max_stop_ticks": 120,
+        "max_hold_min": 60,
+    },
 }
