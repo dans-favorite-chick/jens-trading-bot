@@ -606,6 +606,25 @@ Current `PositionManager` tracks a single position (`self.position: Position | N
 
 **Proceed-gate: Phase 4 findings support moving to Phase 5 (C# heartbeat feasibility).**
 
+### Step 4.5 — Empirical OIF field-position finding (2026-04-19 evening)
+
+`test_04_field_positions.py` line 32 populates field 11 of a PLACE OIF
+with a dummy value of the form `FIELD11_ID_<ts>`. NT8 interprets that
+field as the **STRATEGY slot** (ATM strategy template name) and tries
+to load `templates/AtmStrategy/FIELD11_ID_<ts>.xml`; file doesn't exist,
+so NT8 pops a modal error dialog.
+
+This is a deliberate field-position probe, NOT a production bug — it
+empirically confirms field 11 is the STRATEGY slot in the PLACE OIF
+format. Verified via full-codebase grep (`grep -r "FIELD11"`) that
+no production code path ever generates a `FIELD11_*` string. Any
+FIELD11 popup observed during production trading comes from accidental
+`test_04_field_positions.py` execution (manual run, pytest sweep, or
+agent-driven test run) — not from bot-originated orders.
+
+Documented as part of the B10 commit (2026-04-20) since B10 also
+touches a verification-sprint test file.
+
 ---
 
 ## Phase 5 — P6 C# NT8 indicator heartbeat feasibility
