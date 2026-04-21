@@ -23,7 +23,6 @@ Respond with ONLY a JSON object — no markdown fence, no prose around it:
 - Order flow (CVD, DOM, bar delta) confirming or diverging from signal direction?
 - Time of day appropriate for this strategy in this regime?
 - Multi-timeframe bias agreeing with the signal direction?
-- Consider `council_bias` as a broader market read — if signal direction contradicts a strong council verdict (6/7 or 7/7), lean CAUTION. If council verdict is UNKNOWN, ignore this factor.
 
 ## Discipline
 

@@ -29,7 +29,6 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
@@ -97,47 +96,6 @@ def _load_system_prompt() -> str:
         )
 
 
-def _build_council_bias_context() -> dict[str, Any]:
-    """Pull current council bias and normalize into the pretrade context shape.
-
-    Shape: {"verdict": "BULLISH"|"BEARISH"|"NEUTRAL"|"UNKNOWN",
-            "score": "X/7", "summary": str, "age_minutes": int}.
-    If council never ran today (or call fails), verdict="UNKNOWN".
-    """
-    unknown = {"verdict": "UNKNOWN", "score": "0/7",
-               "summary": "Council has not run.", "age_minutes": -1}
-    try:
-        from agents.council_gate import get_current_bias
-        bias = get_current_bias()
-    except Exception:
-        return unknown
-
-    if not isinstance(bias, dict) or not bias.get("timestamp"):
-        return unknown
-
-    verdict = str(bias.get("verdict", "UNKNOWN")).upper()
-    if verdict not in ("BULLISH", "BEARISH", "NEUTRAL"):
-        verdict = "UNKNOWN"
-
-    age_min = -1
-    ts = bias.get("timestamp")
-    if ts:
-        try:
-            dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            age_min = int((datetime.now(timezone.utc) - dt).total_seconds() // 60)
-        except Exception:
-            age_min = -1
-
-    return {
-        "verdict": verdict,
-        "score": str(bias.get("score", "0/7")),
-        "summary": str(bias.get("summary", "")),
-        "age_minutes": age_min,
-    }
-
-
 def build_user_prompt(
     signal: dict[str, Any],
     market: dict[str, Any],
@@ -145,7 +103,6 @@ def build_user_prompt(
     *,
     regime: str = "UNKNOWN",
     strategy_context: str = "",
-    council_bias: dict[str, Any] | None = None,
 ) -> str:
     """Build the compact per-call user prompt."""
     recent = [
@@ -159,8 +116,6 @@ def build_user_prompt(
         for t in (recent_trades or [])[-5:]
     ]
     ctx_block = f"\n## Strategy context\n{strategy_context}\n" if strategy_context else ""
-    if council_bias is None:
-        council_bias = _build_council_bias_context()
     return (
         "## Signal\n"
         f"{json.dumps(signal, default=str)}\n\n"
@@ -168,8 +123,6 @@ def build_user_prompt(
         f"regime={regime}\n"
         f"{json.dumps(market, default=str)}\n"
         f"{ctx_block}"
-        "\n## Council bias (broader market read)\n"
-        f"{json.dumps(council_bias, default=str)}\n"
         "\n## Recent trades (last 5, newest last)\n"
         f"{json.dumps(recent, default=str)}\n\n"
         'Respond with ONLY: {"verdict":"CLEAR|CAUTION|SIT_OUT","reason":"...","confidence":0-100}'
@@ -209,13 +162,10 @@ class PretradeFilter(BaseAgent):
         """
         start = time.monotonic()
 
-        council_bias = _build_council_bias_context()
-
         async def _run() -> Any:
             prompt = build_user_prompt(
                 signal, market, recent_trades or [],
                 regime=regime, strategy_context=strategy_context,
-                council_bias=council_bias,
             )
             return await self.client.ask_gemini(
                 prompt,
