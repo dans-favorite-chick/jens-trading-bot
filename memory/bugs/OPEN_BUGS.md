@@ -117,3 +117,36 @@ observability goal for lab data collection. Only SIGNAL events
 Prod stays INFO (production logs stay quiet). Commit e22a4a1,
 merge fbe215d.
 **Status**: RESOLVED
+
+## B26 — MenthorQ parser empty-value robustness
+**Discovered**: 2026-04-21 during gamma ingest blocker review
+**Severity**: Low
+**Root cause**: core/menthorq_gamma.parse_gamma_paste has not been
+tested against paste strings with empty values, e.g.
+`Put Support 0DTE, ,` (comma with whitespace where a number should
+be). Current parser may crash or swallow the key silently instead
+of treating empty values as explicit None.
+**Impact**: If Jennifer's paste accidentally includes a blank value
+on a Tier 1 field, the daily ingest could fail loudly or — worse —
+silently load with a corrupted level.
+**Fix owner**: TBD. Add test case + graceful None handling.
+**Status**: OPEN
+
+## B27 — GammaLevels schema ext: Net GEX + Total GEX magnitudes
+**Discovered**: 2026-04-21 during gamma ingest blocker review
+**Severity**: Low-Medium
+**Root cause**: GammaLevels dataclass stores individual strike
+levels but not the absolute Net GEX and Total GEX magnitudes that
+MenthorQ reports (e.g. Net GEX +3.92M, Total GEX 9.33M for
+2026-04-21). Current regime classification is *relative* —
+price vs HVL — with no use of GEX magnitude to distinguish
+POSITIVE_STRONG vs merely POSITIVE.
+**Impact**: Strategies cannot differentiate a high-conviction
+positive-gamma day (>3M net GEX) from a barely-positive day.
+No absolute regime strength information available to sizing or
+strategy selection.
+**Fix owner**: TBD. Requires (a) schema extension to parse
+`Net GEX` / `Total GEX` keys from paste (b) optional threshold
+constants for POSITIVE_STRONG/NEGATIVE_STRONG bands (c) updates
+to regime-dependent strategy gates to use the strength signal.
+**Status**: OPEN
