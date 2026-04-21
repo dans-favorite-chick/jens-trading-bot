@@ -28,31 +28,34 @@ from config.account_routing import (
 # opening_session sub-strategy routing (7)
 # ═══════════════════════════════════════════════════════════════════
 class TestOpeningSessionRouting:
+    # Account names are BYTE-EXACT NT8 display-name literals (incl.
+    # spaces and mixed case). See config/account_routing.py commit
+    # f5ee73f for the authoritative mapping.
     def test_open_drive_routes_to_simopendrive(self):
         assert get_account_for_signal("opening_session", "open_drive") == "SimOpenDrive"
 
-    def test_open_test_drive_shares_simopendrive(self):
-        assert get_account_for_signal("opening_session", "open_test_drive") == "SimOpenDrive"
+    def test_open_test_drive_routes_to_own_account(self):
+        assert get_account_for_signal("opening_session", "open_test_drive") == "SimOpen Test Drive"
 
     def test_orb_routes_to_simorb(self):
         assert get_account_for_signal("opening_session", "orb") == "SimORB"
 
-    def test_premarket_breakout_routes_to_simpremarketbreakout(self):
-        assert get_account_for_signal("opening_session", "premarket_breakout") == "SimPremarketBreakout"
+    def test_premarket_breakout_routes_to_correct_account(self):
+        assert get_account_for_signal("opening_session", "premarket_breakout") == "SimPremarket Breakout"
 
     def test_open_auction_in_routes_to_correct_account(self):
-        assert get_account_for_signal("opening_session", "open_auction_in") == "SimOpenAuctionInRange"
+        assert get_account_for_signal("opening_session", "open_auction_in") == "SimOpen Auction In Range"
 
     def test_open_auction_out_routes_to_correct_account(self):
-        assert get_account_for_signal("opening_session", "open_auction_out") == "SimOpenAuctionOutOfRange"
+        assert get_account_for_signal("opening_session", "open_auction_out") == "SimOpen Auction Out of Range"
 
     @pytest.mark.parametrize("sub,expected", [
-        ("open_drive", "SimOpenDrive"),
-        ("open_test_drive", "SimOpenDrive"),
-        ("open_auction_in", "SimOpenAuctionInRange"),
-        ("open_auction_out", "SimOpenAuctionOutOfRange"),
-        ("premarket_breakout", "SimPremarketBreakout"),
-        ("orb", "SimORB"),
+        ("open_drive",           "SimOpenDrive"),
+        ("open_test_drive",      "SimOpen Test Drive"),
+        ("open_auction_in",      "SimOpen Auction In Range"),
+        ("open_auction_out",     "SimOpen Auction Out of Range"),
+        ("premarket_breakout",   "SimPremarket Breakout"),
+        ("orb",                  "SimORB"),
     ])
     def test_each_opening_sub_strategy_has_account_assigned(self, sub, expected):
         assert get_account_for_signal("opening_session", sub) == expected
@@ -62,15 +65,34 @@ class TestOpeningSessionRouting:
 # Flat (single-account) strategy routing (3)
 # ═══════════════════════════════════════════════════════════════════
 class TestFlatStrategyRouting:
-    def test_bias_momentum_routes_to_simbiasmomentum(self):
-        assert get_account_for_signal("bias_momentum") == "SimBiasMomentum"
+    # Byte-exact NT8 display names (f5ee73f).
+    def test_bias_momentum_routes_to_correct_account(self):
+        assert get_account_for_signal("bias_momentum") == "SimBias Momentum"
 
-    def test_spring_setup_routes_to_simspringsetup(self):
-        assert get_account_for_signal("spring_setup") == "SimSpringSetup"
+    def test_spring_setup_routes_to_correct_account(self):
+        assert get_account_for_signal("spring_setup") == "SimSpring Setup"
 
-    def test_vwap_pullback_and_band_pullback_share_simvwapppullback(self):
-        assert get_account_for_signal("vwap_pullback") == "SimVWappPullback"
-        assert get_account_for_signal("vwap_band_pullback") == "SimVWappPullback"
+    def test_vwap_pullback_and_band_pullback_route_to_distinct_accounts(self):
+        # Post-f5ee73f these route to DIFFERENT accounts (not shared).
+        assert get_account_for_signal("vwap_pullback") == "SimVWapp Pullback"
+        assert get_account_for_signal("vwap_band_pullback") == "SimVwap Band Pullback"
+
+    def test_dom_pullback_routes_to_correct_account(self):
+        assert get_account_for_signal("dom_pullback") == "SimDom Pull Back"
+
+    def test_ib_breakout_routes_to_correct_account(self):
+        assert get_account_for_signal("ib_breakout") == "SimIB Breakout"
+
+    def test_compression_breakout_splits_by_timeframe(self):
+        assert get_account_for_signal("compression_breakout_15m") == "SimCompression Breakout"
+        assert get_account_for_signal("compression_breakout_30m") == "SimCompression Break out 30 MIN"
+
+    def test_noise_area_routes_to_correct_account(self):
+        assert get_account_for_signal("noise_area") == "SimNoise Area"
+
+    def test_top_level_orb_routes_to_standalone_account(self):
+        # Top-level `orb` is distinct from opening_session.orb.
+        assert get_account_for_signal("orb") == "SimStand alone ORB"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -89,19 +111,25 @@ class TestFallbackAndEdges:
         assert get_account_for_signal("opening_session", "made_up_sub") == "Sim101"
 
     def test_validate_account_map_returns_expected_count(self):
-        # 6 opening_session sub-accounts (1 shared) = 5 unique from nested
-        #   SimOpenDrive / SimOpenAuctionInRange / SimOpenAuctionOutOfRange /
-        #   SimPremarketBreakout / SimORB
-        # 7 flat strategies (2 share SimVWappPullback) = 7 unique flat accounts
-        #   SimBiasMomentum / SimSpringSetup / SimVWappPullback / SimDomPullBack /
-        #   SimIBBreakout / SimCompressionBreakout / SimNoiseArea
-        # + 1 Sim101 default = 13 unique NT8 accounts referenced by the map.
+        # Post-f5ee73f (byte-exact + compression split + top-level orb):
+        #
+        # opening_session (6 subs, all distinct accounts):
+        #   SimOpenDrive, SimOpen Test Drive, SimOpen Auction In Range,
+        #   SimOpen Auction Out of Range, SimPremarket Breakout, SimORB
+        # Flat strategies (10, all distinct):
+        #   SimBias Momentum, SimSpring Setup, SimVWapp Pullback,
+        #   SimVwap Band Pullback, SimDom Pull Back, SimIB Breakout,
+        #   SimCompression Breakout, SimCompression Break out 30 MIN,
+        #   SimNoise Area, SimStand alone ORB
+        # + Sim101 default = 17 unique NT8 accounts.
         accounts = validate_account_map()
-        assert len(accounts) == 13
+        assert len(accounts) == 17
         # Spot-check a few known members.
         assert "Sim101" in accounts
         assert "SimOpenDrive" in accounts
         assert "SimORB" in accounts
+        assert "SimStand alone ORB" in accounts
+        assert "SimCompression Break out 30 MIN" in accounts
 
 
 # ═══════════════════════════════════════════════════════════════════
