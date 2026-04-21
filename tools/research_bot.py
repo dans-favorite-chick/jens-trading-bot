@@ -461,7 +461,7 @@ def run_phase5(report_data: dict, json_path: str) -> Optional[str]:
     print("  PHASE 5: AI Analysis (Gemini)")
     print("=" * 60)
 
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
     if not api_key:
         print("  GEMINI_API_KEY not set. Skipping AI analysis.")
         print("  Set it with: set GEMINI_API_KEY=your_key_here")

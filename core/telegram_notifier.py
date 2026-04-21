@@ -231,7 +231,7 @@ async def notify_alert(alert_type: str, message: str,
 if __name__ == "__main__":
     import asyncio
     from dotenv import load_dotenv
-    load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+    load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"), override=True)
 
     # Re-read after dotenv
     TOKEN = os.environ.get("TELEGRAM_TOKEN", "")

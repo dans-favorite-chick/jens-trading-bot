@@ -30,7 +30,7 @@ logger = logging.getLogger("NewsScanner")
 try:
     from dotenv import load_dotenv
     _env_path = Path(__file__).resolve().parent.parent / ".env"
-    load_dotenv(_env_path)
+    load_dotenv(_env_path, override=True)
 except ImportError:
     pass
 

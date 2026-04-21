@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 
 try:
     from dotenv import load_dotenv
-    load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+    load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"), override=True)
 except ImportError:
     pass
 
