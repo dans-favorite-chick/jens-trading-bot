@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Phoenix Bot — System Architecture</title>
+<style>
+body { background: #0d1117; color: #e6edf3; font-family: 'Segoe UI', sans-serif; margin: 20px; }
+h1 { color: #ff6b35; text-align: center; font-size: 28px; }
+h2 { color: #58a6ff; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
+.diagram { max-width: 1200px; margin: 0 auto; }
+svg { width: 100%; height: auto; }
+.box { rx: 8; ry: 8; }
+.phase-label { font-size: 11px; font-weight: bold; fill: #8b949e; }
+</style>
+</head>
+<body>
+<div class="diagram">
+<h1>Phoenix Trading Bot — Complete System Architecture</h1>
+
+<svg viewBox="0 0 1200 1600" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#58a6ff"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#3fb950"/>
+    </marker>
+    <marker id="arrow-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6b35"/>
+    </marker>
+  </defs>
+
+  <!-- ===== LAYER 1: DATA SOURCES ===== -->
+  <text x="600" y="30" text-anchor="middle" class="phase-label" font-size="14">PHASE 1-3: DATA + EXECUTION</text>
+
+  <!-- NT8 -->
+  <rect x="40" y="50" width="200" height="60" fill="#1a2332" stroke="#58a6ff" class="box"/>
+  <text x="140" y="75" text-anchor="middle" fill="#58a6ff" font-weight="bold" font-size="13">NinjaTrader 8</text>
+  <text x="140" y="95" text-anchor="middle" fill="#8b949e" font-size="10">TickStreamer.cs (TCP :8765)</text>
+
+  <!-- Bridge -->
+  <rect x="320" y="50" width="200" height="60" fill="#1a2332" stroke="#3fb950" class="box"/>
+  <text x="420" y="75" text-anchor="middle" fill="#3fb950" font-weight="bold" font-size="13">Bridge Server</text>
+  <text x="420" y="95" text-anchor="middle" fill="#8b949e" font-size="10">TCP :8765 | WS :8766 | HTTP :8767</text>
+
+  <!-- OIF -->
+  <rect x="600" y="50" width="200" height="60" fill="#1a2332" stroke="#d29922" class="box"/>
+  <text x="700" y="75" text-anchor="middle" fill="#d29922" font-weight="bold" font-size="13">OIF Writer</text>
+  <text x="700" y="95" text-anchor="middle" fill="#8b949e" font-size="10">OCO Brackets | Fill Confirm</text>
+
+  <!-- Dashboard -->
+  <rect x="880" y="50" width="200" height="60" fill="#1a2332" stroke="#bc8cff" class="box"/>
+  <text x="980" y="75" text-anchor="middle" fill="#bc8cff" font-weight="bold" font-size="13">Dashboard :5000</text>
+  <text x="980" y="95" text-anchor="middle" fill="#8b949e" font-size="10">Health | Controls | Cockpit</text>
+
+  <!-- Arrows -->
+  <line x1="240" y1="80" x2="318" y2="80" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="520" y1="80" x2="598" y2="80" stroke="#3fb950" stroke-width="2" marker-end="url(#arrow-green)"/>
+
+  <!-- ===== LAYER 2: MARKET INTELLIGENCE ===== -->
+  <text x="600" y="150" text-anchor="middle" class="phase-label" font-size="14">PHASE 4: AI COUNCIL + 14 INTEL SOURCES</text>
+
+  <rect x="40" y="170" width="540" height="100" fill="#0d1f0d" stroke="#3fb950" class="box" stroke-dasharray="4"/>
+
+  <!-- Intel sources in a grid -->
+  <text x="60" y="192" fill="#3fb950" font-size="11" font-weight="bold">Market Intelligence (14 sources, concurrent)</text>
+  <text x="60" y="210" fill="#8b949e" font-size="10">VIX | Finnhub News | Economic Calendar | Market Context</text>
+  <text x="60" y="225" fill="#8b949e" font-size="10">Trump Sentiment | Reddit/WSB | FRED Macro | Crypto F&G</text>
+  <text x="60" y="240" fill="#8b949e" font-size="10">DXY | 10Y Yields | Put/Call | CNN F&G | Congress | NQ/ES RS</text>
+  <text x="60" y="258" fill="#ff6b35" font-size="10" font-weight="bold">All free APIs | 5s timeouts | Never blocks trading</text>
+
+  <!-- Council -->
+  <rect x="620" y="170" width="260" height="100" fill="#1a1a2e" stroke="#bc8cff" class="box"/>
+  <text x="750" y="192" text-anchor="middle" fill="#bc8cff" font-weight="bold" font-size="12">AI Council of Seven</text>
+  <text x="750" y="210" text-anchor="middle" fill="#8b949e" font-size="10">7 Gemini voters | Expert Knowledge</text>
+  <text x="750" y="225" text-anchor="middle" fill="#8b949e" font-size="10">14 patterns | 8 regime playbooks</text>
+  <text x="750" y="240" text-anchor="middle" fill="#8b949e" font-size="10">Pre-Trade Filter | Session Debrief</text>
+  <text x="750" y="258" text-anchor="middle" fill="#ff6b35" font-size="10">Algo Edge Concepts | Risk Wisdom</text>
+
+  <line x1="580" y1="220" x2="618" y2="220" stroke="#bc8cff" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- ===== LAYER 3: STRATEGIES ===== -->
+  <text x="600" y="310" text-anchor="middle" class="phase-label" font-size="14">PHASE 5: STRATEGIES + COMPETITIVE EDGES</text>
+
+  <!-- Strategy boxes -->
+  <rect x="40" y="330" width="160" height="70" fill="#1a2332" stroke="#ff6b35" class="box"/>
+  <text x="120" y="352" text-anchor="middle" fill="#ff6b35" font-weight="bold" font-size="11">Bias Momentum</text>
+  <text x="120" y="367" text-anchor="middle" fill="#8b949e" font-size="9">Regime-aware gates</text>
+  <text x="120" y="382" text-anchor="middle" fill="#3fb950" font-size="9">+Opening Range boost</text>
+  <text x="120" y="395" text-anchor="middle" fill="#3fb950" font-size="8">VALIDATED</text>
+
+  <rect x="220" y="330" width="160" height="70" fill="#1a2332" stroke="#ff6b35" class="box"/>
+  <text x="300" y="352" text-anchor="middle" fill="#ff6b35" font-weight="bold" font-size="11">IB Breakout</text>
+  <text x="300" y="367" text-anchor="middle" fill="#8b949e" font-size="9">96.2% break rate</text>
+  <text x="300" y="382" text-anchor="middle" fill="#8b949e" font-size="9">74.56% WR on NQ</text>
+  <text x="300" y="395" text-anchor="middle" fill="#3fb950" font-size="8">VALIDATED</text>
+
+  <rect x="400" y="330" width="160" height="70" fill="#1a2332" stroke="#d29922" class="box"/>
+  <text x="480" y="352" text-anchor="middle" fill="#d29922" font-weight="bold" font-size="11">Spring Setup</text>
+  <text x="480" y="367" text-anchor="middle" fill="#8b949e" font-size="9">Rule of Three</text>
+  <text x="480" y="382" text-anchor="middle" fill="#8b949e" font-size="9">Wick + VWAP + CVD</text>
+  <text x="480" y="395" text-anchor="middle" fill="#3fb950" font-size="8">VALIDATED</text>
+
+  <rect x="580" y="330" width="160" height="70" fill="#1a2332" stroke="#8b949e" class="box"/>
+  <text x="660" y="352" text-anchor="middle" fill="#8b949e" font-weight="bold" font-size="11">VWAP Pullback</text>
+  <text x="660" y="367" text-anchor="middle" fill="#8b949e" font-size="9">Pullback history</text>
+  <text x="660" y="382" text-anchor="middle" fill="#8b949e" font-size="9">Bounce confirm</text>
+  <text x="660" y="395" text-anchor="middle" fill="#d29922" font-size="8">LAB ONLY</text>
+
+  <rect x="760" y="330" width="160" height="70" fill="#1a2332" stroke="#8b949e" class="box"/>
+  <text x="840" y="352" text-anchor="middle" fill="#8b949e" font-weight="bold" font-size="11">High Precision</text>
+  <text x="840" y="367" text-anchor="middle" fill="#8b949e" font-size="9">4/4 TF alignment</text>
+  <text x="840" y="382" text-anchor="middle" fill="#8b949e" font-size="9">Tight candle precision</text>
+  <text x="840" y="395" text-anchor="middle" fill="#d29922" font-size="8">LAB ONLY</text>
+
+  <!-- DOM Analyzer -->
+  <rect x="940" y="330" width="160" height="70" fill="#1a2332" stroke="#f85149" class="box"/>
+  <text x="1020" y="352" text-anchor="middle" fill="#f85149" font-weight="bold" font-size="11">DOM Analyzer</text>
+  <text x="1020" y="367" text-anchor="middle" fill="#8b949e" font-size="9">Iceberg detection</text>
+  <text x="1020" y="382" text-anchor="middle" fill="#8b949e" font-size="9">Absorption patterns</text>
+  <text x="1020" y="395" text-anchor="middle" fill="#8b949e" font-size="9">71% accuracy on 10+t</text>
+
+  <!-- ===== LAYER 4: RISK + EXECUTION ===== -->
+  <text x="600" y="440" text-anchor="middle" class="phase-label" font-size="14">RISK MANAGEMENT + EXECUTION</text>
+
+  <rect x="40" y="460" width="220" height="80" fill="#2d0000" stroke="#f85149" class="box"/>
+  <text x="150" y="482" text-anchor="middle" fill="#f85149" font-weight="bold" font-size="12">Risk Manager</text>
+  <text x="150" y="500" text-anchor="middle" fill="#8b949e" font-size="10">Daily/Weekly limits | VIX filter</text>
+  <text x="150" y="515" text-anchor="middle" fill="#8b949e" font-size="10">Recovery mode | Cooloff</text>
+  <text x="150" y="530" text-anchor="middle" fill="#8b949e" font-size="10">Dynamic sizing (A++/B/C tiers)</text>
+
+  <rect x="300" y="460" width="220" height="80" fill="#1a2332" stroke="#d29922" class="box"/>
+  <text x="410" y="482" text-anchor="middle" fill="#d29922" font-weight="bold" font-size="12">Session Manager</text>
+  <text x="410" y="500" text-anchor="middle" fill="#8b949e" font-size="10">8 market regimes</text>
+  <text x="410" y="515" text-anchor="middle" fill="#8b949e" font-size="10">Size multipliers per regime</text>
+  <text x="410" y="530" text-anchor="middle" fill="#8b949e" font-size="10">Prod window: 08:30-10:00</text>
+
+  <rect x="560" y="460" width="220" height="80" fill="#0d2818" stroke="#3fb950" class="box"/>
+  <text x="670" y="482" text-anchor="middle" fill="#3fb950" font-weight="bold" font-size="12">Cockpit 12-Layer</text>
+  <text x="670" y="500" text-anchor="middle" fill="#8b949e" font-size="10">Regime | TF | VWAP | CVD | ATR</text>
+  <text x="670" y="515" text-anchor="middle" fill="#8b949e" font-size="10">VIX | News | Trump | DXY | Bonds</text>
+  <text x="670" y="530" text-anchor="middle" fill="#8b949e" font-size="10">Intermarket | Council Bias</text>
+
+  <rect x="820" y="460" width="220" height="80" fill="#1a2332" stroke="#58a6ff" class="box"/>
+  <text x="930" y="482" text-anchor="middle" fill="#58a6ff" font-weight="bold" font-size="12">Position Manager</text>
+  <text x="930" y="500" text-anchor="middle" fill="#8b949e" font-size="10">Trade IDs | EXIT_PENDING state</text>
+  <text x="930" y="515" text-anchor="middle" fill="#8b949e" font-size="10">Stop/Target/Time exits</text>
+  <text x="930" y="530" text-anchor="middle" fill="#8b949e" font-size="10">Multi-contract scaling</text>
+
+  <!-- ===== LAYER 5: PHASE 6 - LEARNING ENGINE ===== -->
+  <text x="600" y="590" text-anchor="middle" class="phase-label" font-size="14">PHASE 6: LIVE LEARNING ENGINE</text>
+
+  <rect x="40" y="610" width="260" height="90" fill="#1a0d2e" stroke="#bc8cff" class="box"/>
+  <text x="170" y="632" text-anchor="middle" fill="#bc8cff" font-weight="bold" font-size="12">Expectancy Engine</text>
+  <text x="170" y="650" text-anchor="middle" fill="#8b949e" font-size="10">MAE/MFE on every tick</text>
+  <text x="170" y="665" text-anchor="middle" fill="#8b949e" font-size="10">Entry slippage tracking</text>
+  <text x="170" y="680" text-anchor="middle" fill="#8b949e" font-size="10">Edge captured % | Time-to-MFE</text>
+  <text x="170" y="695" text-anchor="middle" fill="#ff6b35" font-size="9">THE key metric: realized expectancy</text>
+
+  <rect x="320" y="610" width="260" height="90" fill="#2d0d00" stroke="#ff6b35" class="box"/>
+  <text x="450" y="632" text-anchor="middle" fill="#ff6b35" font-weight="bold" font-size="12">No-Trade Fingerprint</text>
+  <text x="450" y="650" text-anchor="middle" fill="#8b949e" font-size="10">Learns losing conditions</text>
+  <text x="450" y="665" text-anchor="middle" fill="#8b949e" font-size="10">Blacklist patterns (advisory)</text>
+  <text x="450" y="680" text-anchor="middle" fill="#8b949e" font-size="10">Risk score 0-100 per signal</text>
+  <text x="450" y="695" text-anchor="middle" fill="#ff6b35" font-size="9">Stop repeating mistakes</text>
+
+  <rect x="600" y="610" width="260" height="90" fill="#0d1f0d" stroke="#3fb950" class="box"/>
+  <text x="730" y="632" text-anchor="middle" fill="#3fb950" font-weight="bold" font-size="12">Regime Transitions</text>
+  <text x="730" y="650" text-anchor="middle" fill="#8b949e" font-size="10">Detect shift moments</text>
+  <text x="730" y="665" text-anchor="middle" fill="#8b949e" font-size="10">First-signal bonus scoring</text>
+  <text x="730" y="680" text-anchor="middle" fill="#8b949e" font-size="10">Size boost on high-value shifts</text>
+  <text x="730" y="695" text-anchor="middle" fill="#3fb950" font-size="9">Attack the transition, not the steady state</text>
+
+  <rect x="880" y="610" width="260" height="90" fill="#1a2332" stroke="#58a6ff" class="box"/>
+  <text x="1010" y="632" text-anchor="middle" fill="#58a6ff" font-weight="bold" font-size="12">Execution Quality</text>
+  <text x="1010" y="650" text-anchor="middle" fill="#8b949e" font-size="10">Paper edge vs realized edge</text>
+  <text x="1010" y="665" text-anchor="middle" fill="#8b949e" font-size="10">Slippage per strategy/regime</text>
+  <text x="1010" y="680" text-anchor="middle" fill="#8b949e" font-size="10">Fill latency tracking</text>
+  <text x="1010" y="695" text-anchor="middle" fill="#58a6ff" font-size="9">Is the edge real after friction?</text>
+
+  <!-- Second row of Phase 6 -->
+  <rect x="40" y="720" width="260" height="80" fill="#1a2332" stroke="#d29922" class="box"/>
+  <text x="170" y="742" text-anchor="middle" fill="#d29922" font-weight="bold" font-size="12">Microstructure Filter</text>
+  <text x="170" y="758" text-anchor="middle" fill="#8b949e" font-size="10">Spread stability | DOM persistence</text>
+  <text x="170" y="773" text-anchor="middle" fill="#8b949e" font-size="10">Delta follow-through | No rejection</text>
+  <text x="170" y="790" text-anchor="middle" fill="#d29922" font-size="9">Is the tape actually tradeable?</text>
+
+  <rect x="320" y="720" width="260" height="80" fill="#1a2332" stroke="#f85149" class="box"/>
+  <text x="450" y="742" text-anchor="middle" fill="#f85149" font-weight="bold" font-size="12">Crowding Detector</text>
+  <text x="450" y="758" text-anchor="middle" fill="#8b949e" font-size="10">Prior day H/L | Overnight range</text>
+  <text x="450" y="773" text-anchor="middle" fill="#8b949e" font-size="10">Round numbers | Touch counts</text>
+  <text x="450" y="790" text-anchor="middle" fill="#f85149" font-size="9">Avoid the obvious everyone sees</text>
+
+  <rect x="600" y="720" width="260" height="80" fill="#2d0d00" stroke="#ff6b35" class="box"/>
+  <text x="730" y="742" text-anchor="middle" fill="#ff6b35" font-weight="bold" font-size="12">Counter-Edge Engine</text>
+  <text x="730" y="758" text-anchor="middle" fill="#8b949e" font-size="10">Mine losing clusters for reversals</text>
+  <text x="730" y="773" text-anchor="middle" fill="#8b949e" font-size="10">3+ losses same pattern = flip it</text>
+  <text x="730" y="790" text-anchor="middle" fill="#ff6b35" font-size="9">Turn mistakes into edge</text>
+
+  <rect x="880" y="720" width="260" height="80" fill="#0d2818" stroke="#3fb950" class="box"/>
+  <text x="1010" y="742" text-anchor="middle" fill="#3fb950" font-weight="bold" font-size="12">A/B Parameter Testing</text>
+  <text x="1010" y="758" text-anchor="middle" fill="#8b949e" font-size="10">5 variants tested automatically</text>
+  <text x="1010" y="773" text-anchor="middle" fill="#8b949e" font-size="10">Weighted scoring | Winner promoted</text>
+  <text x="1010" y="790" text-anchor="middle" fill="#3fb950" font-size="9">Self-evolution engine</text>
+
+  <!-- ===== LAYER 6: RESEARCH + FEEDBACK ===== -->
+  <text x="600" y="850" text-anchor="middle" class="phase-label" font-size="14">RESEARCH + FEEDBACK LOOP</text>
+
+  <rect x="40" y="870" width="350" height="80" fill="#1a2332" stroke="#58a6ff" class="box"/>
+  <text x="215" y="892" text-anchor="middle" fill="#58a6ff" font-weight="bold" font-size="12">Research Bot (Overnight)</text>
+  <text x="215" y="910" text-anchor="middle" fill="#8b949e" font-size="10">4-phase strategy discovery | Parameter sweep</text>
+  <text x="215" y="925" text-anchor="middle" fill="#8b949e" font-size="10">Regime analysis | Combination testing | Gemini AI review</text>
+  <text x="215" y="940" text-anchor="middle" fill="#58a6ff" font-size="9">Discovers new edges while you sleep</text>
+
+  <rect x="420" y="870" width="350" height="80" fill="#1a2332" stroke="#bc8cff" class="box"/>
+  <text x="595" y="892" text-anchor="middle" fill="#bc8cff" font-weight="bold" font-size="12">Learning System</text>
+  <text x="595" y="910" text-anchor="middle" fill="#8b949e" font-size="10">Strategy Tracker | Equity Curve | Trade Clustering</text>
+  <text x="595" y="925" text-anchor="middle" fill="#8b949e" font-size="10">Per-strategy per-regime win rates | Signal lifecycle</text>
+  <text x="595" y="940" text-anchor="middle" fill="#bc8cff" font-size="9">Every trade makes the bot smarter</text>
+
+  <rect x="800" y="870" width="340" height="80" fill="#1a2332" stroke="#3fb950" class="box"/>
+  <text x="970" y="892" text-anchor="middle" fill="#3fb950" font-weight="bold" font-size="12">Notifications</text>
+  <text x="970" y="910" text-anchor="middle" fill="#8b949e" font-size="10">Telegram: entry/exit/P&L alerts</text>
+  <text x="970" y="925" text-anchor="middle" fill="#8b949e" font-size="10">Commands: /status /aggressive /safe /pause</text>
+  <text x="970" y="940" text-anchor="middle" fill="#3fb950" font-size="9">Control the bot from your phone</text>
+
+  <!-- ===== STATS BOX ===== -->
+  <rect x="200" y="980" width="800" height="120" fill="#161b22" stroke="#ff6b35" stroke-width="2" class="box"/>
+  <text x="600" y="1005" text-anchor="middle" fill="#ff6b35" font-weight="bold" font-size="16">PHOENIX BOT — BY THE NUMBERS</text>
+  <text x="600" y="1030" text-anchor="middle" fill="#e6edf3" font-size="12">~15,000+ lines of Python | 67 tests | 26 commits | 6 phases complete</text>
+  <text x="600" y="1050" text-anchor="middle" fill="#e6edf3" font-size="12">6 strategies | 14 intel sources | 5 competitive edges | 7 learning modules</text>
+  <text x="600" y="1070" text-anchor="middle" fill="#e6edf3" font-size="12">12-layer cockpit | AI council of 7 | Telegram control | A/B self-evolution</text>
+  <text x="600" y="1090" text-anchor="middle" fill="#3fb950" font-size="13" font-weight="bold">From 34 trades in 90 days to 536+ | OPEN_MOMENTUM: +$933.50</text>
+
+</svg>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,121 @@
+# Phoenix Bot — Strategy Activation Matrix per Regime
+#
+# Maps each strategy to ON/REDUCED/OFF state per gamma × VIX regime class.
+# Read by base_bot on every evaluation cycle after regime detection.
+# Edit this file to change strategy activation — no code rebuild needed.
+#
+# Regime classes (rows):
+#   POS_GEX_LOW_VIX  = positive gamma, VIX < 20   — mean-reversion dominant, compressed range
+#   POS_GEX_HIGH_VIX = positive gamma, VIX 20-30  — mean-reversion but wider swings
+#   NEG_GEX_LOW_VIX  = negative gamma, VIX < 20   — trending, volatility rising
+#   NEG_GEX_HIGH_VIX = negative gamma, VIX > 20   — trend + amplified moves, dangerous
+#   UNKNOWN          = MenthorQ data stale or unavailable — conservative defaults
+#
+# States:
+#   ON       = strategy active at full conviction threshold
+#   REDUCED  = strategy active but requires higher score (+10 points), smaller size
+#   OFF      = strategy does not fire signals in this regime
+#
+# Research basis (2026-04-17 gamma regime playbooks):
+# - Pos GEX → dealer counter-trend flow → mean-reversion favored, breakouts fail
+# - Neg GEX → dealer procyclical flow → trends accelerate, mean-rev whipped
+# - High VIX → wider stops, reduced sizing, higher conviction required
+
+strategy_matrix:
+  # ─── Mean-reversion strategies ─────────────────────────────────────
+  # These thrive in positive gamma, compressed range. Whipped in neg gamma.
+  vwap_pullback:
+    POS_GEX_LOW_VIX:  ON
+    POS_GEX_HIGH_VIX: REDUCED
+    NEG_GEX_LOW_VIX:  OFF
+    NEG_GEX_HIGH_VIX: OFF
+    UNKNOWN:          REDUCED
+
+  dom_pullback:
+    POS_GEX_LOW_VIX:  ON
+    POS_GEX_HIGH_VIX: ON
+    NEG_GEX_LOW_VIX:  REDUCED
+    NEG_GEX_HIGH_VIX: OFF
+    UNKNOWN:          REDUCED
+
+  spring_setup:
+    # Spring = counter-trend reversal at support. Works both regimes with proper confirmation.
+    POS_GEX_LOW_VIX:  ON
+    POS_GEX_HIGH_VIX: ON
+    NEG_GEX_LOW_VIX:  REDUCED
+    NEG_GEX_HIGH_VIX: ON      # Fear-driven bounces have edge in neg gamma high VIX
+    UNKNOWN:          REDUCED
+
+  # ─── Trend-following strategies ────────────────────────────────────
+  # These thrive in negative gamma, expanding range.
+  bias_momentum:
+    POS_GEX_LOW_VIX:  REDUCED  # Small moves, limited edge
+    POS_GEX_HIGH_VIX: REDUCED
+    NEG_GEX_LOW_VIX:  ON       # Prime environment
+    NEG_GEX_HIGH_VIX: ON
+    UNKNOWN:          REDUCED
+
+  ib_breakout:
+    # Initial Balance breakout — works when breakouts persist (neg gamma > pos gamma)
+    POS_GEX_LOW_VIX:  REDUCED
+    POS_GEX_HIGH_VIX: REDUCED
+    NEG_GEX_LOW_VIX:  ON
+    NEG_GEX_HIGH_VIX: ON
+    UNKNOWN:          REDUCED
+
+  compression_breakout:
+    # Pre-explosion coil entry — needs room to run
+    POS_GEX_LOW_VIX:  OFF      # Breakouts fail in compressed regime
+    POS_GEX_HIGH_VIX: OFF
+    NEG_GEX_LOW_VIX:  ON
+    NEG_GEX_HIGH_VIX: ON
+    UNKNOWN:          OFF      # Conservative: skip if unsure
+
+  # ─── Selective / quality strategies ────────────────────────────────
+  high_precision_only:
+    # DEMOTION CANDIDATE per KNOWN_ISSUES.md — conf=30 = mostly losing trades.
+    # Keep OFF until param tuned or strategy retired (April 25 review).
+    POS_GEX_LOW_VIX:  OFF
+    POS_GEX_HIGH_VIX: OFF
+    NEG_GEX_LOW_VIX:  OFF
+    NEG_GEX_HIGH_VIX: OFF
+    UNKNOWN:          OFF
+
+  # ─── Reversal / climax strategies (Saturday new) ───────────────────
+  # reversal_detector (core/reversal_detector.py) generates these signals
+  # Classify setups by direction, but activation depends on regime:
+  climax_reversal_long:
+    # Buying selling climax → LONG at support (secondary-test entry only)
+    POS_GEX_LOW_VIX:  ON       # Dealer defense of put support reinforces
+    POS_GEX_HIGH_VIX: ON
+    NEG_GEX_LOW_VIX:  REDUCED  # Fighting trend is risky
+    NEG_GEX_HIGH_VIX: REDUCED  # But big bounces happen here too
+    UNKNOWN:          REDUCED
+
+  climax_reversal_short:
+    # Selling buying climax → SHORT at resistance (secondary-test entry only)
+    POS_GEX_LOW_VIX:  ON       # Dealer CR defense reinforces
+    POS_GEX_HIGH_VIX: ON
+    NEG_GEX_LOW_VIX:  REDUCED
+    NEG_GEX_HIGH_VIX: REDUCED
+    UNKNOWN:          REDUCED
+
+# ─── Global regime-specific modifiers ──────────────────────────────────
+# Applied on top of strategy-specific state above.
+
+global_modifiers:
+  POS_GEX_LOW_VIX:
+    max_concurrent_strategies: 3    # Can run several in parallel
+    signal_threshold_bonus: 0       # No adjustment
+  POS_GEX_HIGH_VIX:
+    max_concurrent_strategies: 2
+    signal_threshold_bonus: 5       # Require +5 score in elevated VIX
+  NEG_GEX_LOW_VIX:
+    max_concurrent_strategies: 2
+    signal_threshold_bonus: 0
+  NEG_GEX_HIGH_VIX:
+    max_concurrent_strategies: 1    # One strategy at a time, it gets amplified anyway
+    signal_threshold_bonus: 10      # Much higher conviction needed
+  UNKNOWN:
+    max_concurrent_strategies: 1
+    signal_threshold_bonus: 10      # Conservative when MQ data unavailable

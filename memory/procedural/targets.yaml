@@ -1,0 +1,33 @@
+# Phoenix Bot — Performance Targets
+#
+# Codified goals for the system. Decay monitor + WFO harness use these.
+# Strategies consistently missing these over 100+ trades → auto-demote candidate.
+
+performance_targets:
+  win_rate: 0.60           # 60% target
+  avg_rr: 1.5              # 1:1.5 R:R minimum
+  profit_factor: 2.25      # = WR × avg_win / ((1-WR) × avg_loss). Required minimum.
+  sharpe: 1.0              # Rolling 30-day, minimum acceptable
+  sortino: 1.5             # Downside-adjusted Sharpe
+  max_drawdown_pct: 0.15   # 15% max account drawdown
+  risk_of_ruin_pct: 0.05   # < 5% Monte Carlo risk of ruin
+
+# Warning thresholds — below these, decay monitor flags
+warning_thresholds:
+  win_rate: 0.50
+  profit_factor: 1.5
+  sharpe: 0.5
+  max_drawdown_pct: 0.20
+
+# Critical thresholds — below these, auto-demote (after 2-week shadow period)
+critical_thresholds:
+  win_rate: 0.40
+  profit_factor: 1.0       # Breakeven before costs = loser after costs
+  sharpe: 0.0              # Negative Sharpe = unambiguously bad
+  max_drawdown_pct: 0.25
+
+# Tradeoff notes
+#   60% WR + 1:1.5 R:R = PF 2.25 = healthy
+#   55% WR + 1:2 R:R = PF 2.44 = also healthy (what Renaissance-class aims for)
+#   70% WR + 1:1 R:R = PF 2.33 = similar expected value, tighter distribution
+#   Chasing 80% WR requires tiny targets = fragile to bad streaks

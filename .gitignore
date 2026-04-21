@@ -1,7 +1,25 @@
-.env
+venv/
 venv_stable/
 __pycache__/
-*.py[cod]
-*$py.class
-.pytest_cache/
-trading_journal_*.txt
+*.pyc
+*.pyo
+logs/
+tmp_*
+.env
+*.egg-info/
+dist/
+build/
+.claude/
+
+# Scratch directories (see SCRATCH_DIRS.md)
+Phoenix Rising Project/
+
+# Runtime data — keep folder shape only, ignore contents
+data/*.json
+data/knowledge_vectors/
+data/trade_vectors/
+# Pre-emptive: cover future binary formats anywhere under data/
+data/**/*.sqlite
+data/**/*.db
+data/**/*.parquet
+!data/.gitkeep

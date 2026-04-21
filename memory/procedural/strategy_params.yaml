@@ -1,0 +1,80 @@
+# Phoenix Bot — Strategy Parameters (Procedural Memory)
+#
+# Versioned snapshot of config/strategies.py as of 2026-04-17.
+# If code/strategies.py drifts from this, nightly integrity check regenerates.
+# Manual edits: update this file, run tools/memory_writeback.py --sync-procedural
+
+generated_from: "config/strategies.py"
+generated_at: "2026-04-17T17:35:00-05:00"
+
+# Global thresholds (dashboard sliders can override at runtime)
+globals:
+  min_confluence: 5.0
+  min_momentum_confidence: 80
+  min_precision: 48
+  risk_per_trade_usd: 15.0   # NOTE: small_account_config overrides this to 5.0 when account < 1500
+  max_daily_loss_usd: 45.0   # NOTE: small_account_config overrides this to 15.0 when account < 1500
+  base_rr_ratio: 5.0
+
+# Aggression profiles (dashboard buttons)
+profiles:
+  safe:
+    min_confluence: 6.0
+    min_momentum_confidence: 85
+    min_precision: 55
+    risk_per_trade_usd: 8.0
+    max_daily_loss_usd: 25.0
+  balanced:
+    min_confluence: 5.0
+    min_momentum_confidence: 80
+    min_precision: 48
+    risk_per_trade_usd: 15.0
+    max_daily_loss_usd: 45.0
+  aggressive:
+    min_confluence: 4.0
+    min_momentum_confidence: 70
+    min_precision: 35
+    risk_per_trade_usd: 20.0
+    max_daily_loss_usd: 50.0
+
+# Per-strategy parameters (only non-sensitive fields)
+# Full state in config/strategies.py — this is summary for Claude context
+strategies:
+  bias_momentum:
+    enabled: true
+    validated: true        # Runs in prod bot
+    stop_ticks: 20
+    target_rr: 5.0
+    notes: "Hotfixed 2026-04-17 for missing 'price'/'vwap' variable bug"
+
+  spring_setup:
+    enabled: true
+    validated: true
+    notes: "Rule of Three: spring wick + VWAP reclaim + CVD flip"
+
+  ib_breakout:
+    enabled: true
+    validated: true
+    notes: "Published 74.56% WR baseline. Proper ORB rewrite deferred to April 25."
+
+  dom_pullback:
+    enabled: true
+    validated: false       # Lab only
+    notes: "DOM absorption at EMA9/VWAP pullback"
+
+  vwap_pullback:
+    enabled: true
+    validated: false       # Lab only
+    notes: "First pullback to VWAP in trend; MID_MORNING regime"
+
+  high_precision_only:
+    enabled: true
+    validated: false       # Lab only — DEMOTION CANDIDATE
+    notes: "Firing at conf=30 generates mostly losing trades. Threshold should be raised to ≥60, or strategy retired."
+
+  compression_breakout:
+    enabled: true
+    validated: false       # Lab only
+    notes: "Pre-explosion coil entry"
+
+# Override matrix — deferred to memory/procedural/regime_matrix.yaml (Saturday build)
