@@ -291,6 +291,19 @@ def api_trades():
     return jsonify({"prod": prod_trades, "lab": lab_trades})
 
 
+@app.route("/api/strategy-risk")
+def api_strategy_risk():
+    """Per-strategy risk registry snapshot from the sim bot (balance, daily P&L, halt state)."""
+    with _state_lock:
+        sim_state = _state.get("sim", {}) or {}
+        sr = sim_state.get("strategy_risk") if isinstance(sim_state, dict) else None
+        sim_running = _bot_status("sim") == "running"
+    return safe_jsonify({
+        "sim_running": sim_running,
+        "strategy_risk": sr or {},
+    })
+
+
 @app.route("/api/strategies")
 def api_strategies():
     with _state_lock:

@@ -851,8 +851,13 @@ class BaseBot:
                         continue
 
                     # ── Trend Rider: runner management (single & multi-contract) ──
-                    pos = self.positions.position
-                    if pos and TREND_RIDER_ENABLED:
+                    # Phase C (2026-04-21): iterate ALL active positions so
+                    # rider-mode/scale-out logic applies correctly when multiple
+                    # strategies hold concurrent positions. list(...) snapshots
+                    # the set so in-loop exits don't break iteration.
+                    for pos in list(self.positions.active_positions):
+                        if not TREND_RIDER_ENABLED:
+                            break
 
                         if pos.rider_mode:
                             # ── RIDER MODE ─────────────────────────────────────────────
@@ -891,7 +896,8 @@ class BaseBot:
                             if stall["exit_signal"]:
                                 logger.info(f"[RIDER:{pos.trade_id}] Trend stall STRONG "
                                             f"— exiting runner. Reasons: {stall['reasons']}")
-                                await self._exit_trade(ws, price, "trend_stall")
+                                await self._exit_trade(ws, price, "trend_stall",
+                                                       trade_id=pos.trade_id)
                             elif stall["tighten_stop"]:
                                 _trail_stop(pos, price)
 
@@ -914,55 +920,62 @@ class BaseBot:
                     #   TREND days:  40t (10pts) — big moves have room, protect real gains
                     #   Other days:  20t (5pts)  — choppy P50 extension = 25t, gate at 40t
                     #                              would never fire; 20t still filters noise
-                    if self.positions.position and not self.positions.is_flat:
-                        _pos = self.positions.position
-                        if not _pos.rider_mode:
-                            from config.settings import TICK_SIZE as _TICK_SIZE
-                            _min_profit = 40 if self._day_type == "TREND" else 20
-                            smart = self._stall_detector.check_ema_dom_exit(
-                                snapshot, _pos.direction,
-                                tick_size=_TICK_SIZE,
-                                entry_price=_pos.entry_price,
-                                entry_time=_pos.entry_time,
-                                min_profit_ticks=_min_profit,
-                            )
-                            if smart["exit_signal"]:
-                                logger.info(f"[SMART EXIT:{_pos.trade_id}] {smart['reason']}")
-                                await self._exit_trade(ws, price, "ema_dom_exit")
+                    # Phase C: smart-exit per position (iterate all; rider-mode
+                    # positions are skipped as before).
+                    for _pos in list(self.positions.active_positions):
+                        if _pos.rider_mode:
+                            continue
+                        from config.settings import TICK_SIZE as _TICK_SIZE
+                        _min_profit = 40 if self._day_type == "TREND" else 20
+                        smart = self._stall_detector.check_ema_dom_exit(
+                            snapshot, _pos.direction,
+                            tick_size=_TICK_SIZE,
+                            entry_price=_pos.entry_price,
+                            entry_time=_pos.entry_time,
+                            min_profit_ticks=_min_profit,
+                        )
+                        if smart["exit_signal"]:
+                            logger.info(f"[SMART EXIT:{_pos.trade_id}] {smart['reason']}")
+                            await self._exit_trade(ws, price, "ema_dom_exit",
+                                                   trade_id=_pos.trade_id)
 
                     # ── Universal EoD flat hook ─────────────────────────────────
                     # Any position whose Signal set eod_flat_time_et gets
                     # auto-flattened when current ET time >= that value.
                     # Single code path — works for ORB, Noise Area, and any
                     # future strategy that opts in.
-                    if self.positions.position and getattr(self.positions.position, "eod_flat_time_et", None):
-                        try:
-                            from zoneinfo import ZoneInfo
-                            now_et = datetime.now(ZoneInfo("America/New_York"))
-                            eod_str = self.positions.position.eod_flat_time_et
-                            if now_et.strftime("%H:%M") >= eod_str:
+                    # Phase C: EoD flat per position.
+                    try:
+                        from zoneinfo import ZoneInfo
+                        _now_et = datetime.now(ZoneInfo("America/New_York"))
+                        _now_hm = _now_et.strftime("%H:%M")
+                        for _pos in list(self.positions.active_positions):
+                            _eod = getattr(_pos, "eod_flat_time_et", None)
+                            if _eod and _now_hm >= _eod:
                                 logger.info(
-                                    f"[EOD_FLAT:{self.positions.position.trade_id}] "
-                                    f"{now_et.strftime('%H:%M')} ET >= {eod_str} — closing"
+                                    f"[EOD_FLAT:{_pos.trade_id}] "
+                                    f"{_now_hm} ET >= {_eod} — closing"
                                 )
-                                await self._exit_trade(ws, price, "eod_flat_universal")
-                        except Exception as e:
-                            logger.debug(f"[EOD_FLAT] check error (non-blocking): {e}")
+                                await self._exit_trade(ws, price, "eod_flat_universal",
+                                                       trade_id=_pos.trade_id)
+                    except Exception as e:
+                        logger.debug(f"[EOD_FLAT] check error (non-blocking): {e}")
 
                     # ── Chandelier trail update + exit ──────────────────────────
                     # Strategies with exit_trigger starting "chandelier_trail"
                     # get a trail-state update each bar; bracket stop stays
                     # ALSO active as a disaster stop (whichever fires first).
-                    if (self.positions.position
-                            and getattr(self.positions.position, "trail_state", None) is not None
-                            and str(getattr(self.positions.position, "exit_trigger", "")).startswith("chandelier_trail")):
-                        try:
-                            _pos = self.positions.position
+                    # Phase C: chandelier trail per position.
+                    try:
+                        _bars = list(self.aggregator.bars_1m.completed)
+                        for _pos in list(self.positions.active_positions):
+                            if getattr(_pos, "trail_state", None) is None:
+                                continue
+                            if not str(getattr(_pos, "exit_trigger", "")).startswith("chandelier_trail"):
+                                continue
                             _cfg = _pos.trail_config or {}
                             _atr_key = f"atr_{_cfg.get('atr_timeframe', '5m')}"
                             _atr = market.get(_atr_key, 0) or 0
-                            # Use the most recent completed 1m bar for high/low
-                            _bars = list(self.aggregator.bars_1m.completed)
                             if _bars and _atr > 0:
                                 _last = _bars[-1]
                                 _pos.trail_state.update(_last.high, _last.low, _atr)
@@ -971,33 +984,37 @@ class BaseBot:
                                         f"[CHANDELIER:{_pos.trade_id}] price {price:.2f} "
                                         f"violated trail {_pos.trail_state.current_trail:.2f} — exiting"
                                     )
-                                    await self._exit_trade(ws, price, "chandelier_trail_hit")
-                        except Exception as e:
-                            logger.debug(f"[CHANDELIER] update error (non-blocking): {e}")
+                                    await self._exit_trade(ws, price, "chandelier_trail_hit",
+                                                           trade_id=_pos.trade_id)
+                    except Exception as e:
+                        logger.debug(f"[CHANDELIER] update error (non-blocking): {e}")
 
-                    # Managed-exit hook — strategies with dynamic exits (Noise Area)
-                    # get a chance to close the position on their own signal flip
-                    # before bracket-based checks fire.
-                    if self.positions.position and getattr(self.positions.position, "exit_trigger", None):
-                        _strat_name = self.positions.position.strategy
-                        _strat_obj = next((s for s in self.strategies if s.name == _strat_name), None)
-                        if _strat_obj is not None:
-                            try:
-                                _snap = self.aggregator.snapshot()
-                                _sess = self.session.to_dict()
-                                should_exit, exit_reason_mgd = _strat_obj.check_exit(
-                                    self.positions.position, _snap,
-                                    list(self.aggregator.bars_1m.completed),
-                                    _sess,
+                    # Phase C: managed-exit hook per position — strategies with
+                    # dynamic exits (Noise Area) get a chance to close their own
+                    # position on a signal flip before bracket checks fire.
+                    for _pos in list(self.positions.active_positions):
+                        if not getattr(_pos, "exit_trigger", None):
+                            continue
+                        _strat_obj = next((s for s in self.strategies if s.name == _pos.strategy), None)
+                        if _strat_obj is None:
+                            continue
+                        try:
+                            _snap = self.aggregator.snapshot()
+                            _sess = self.session.to_dict()
+                            should_exit, exit_reason_mgd = _strat_obj.check_exit(
+                                _pos, _snap,
+                                list(self.aggregator.bars_1m.completed),
+                                _sess,
+                            )
+                            if should_exit:
+                                logger.info(
+                                    f"[MANAGED_EXIT:{_pos.trade_id}] "
+                                    f"{_pos.strategy} → {exit_reason_mgd}"
                                 )
-                                if should_exit:
-                                    logger.info(
-                                        f"[MANAGED_EXIT:{self.positions.position.trade_id}] "
-                                        f"{_strat_name} → {exit_reason_mgd}"
-                                    )
-                                    await self._exit_trade(ws, price, exit_reason_mgd)
-                            except Exception as e:
-                                logger.debug(f"[MANAGED_EXIT] check_exit error (non-blocking): {e}")
+                                await self._exit_trade(ws, price, exit_reason_mgd,
+                                                       trade_id=_pos.trade_id)
+                        except Exception as e:
+                            logger.debug(f"[MANAGED_EXIT] check_exit error (non-blocking): {e}")
 
                     # Normal stop/target/time exits
                     _max_hold = None

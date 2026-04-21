@@ -22,6 +22,21 @@ import requests
 
 logger = logging.getLogger("Telegram")
 
+# Phase C routing: pull optional overrides + tag flag from settings.
+# Import is defensive — if settings import fails (e.g. stripped test env),
+# fall back to no-overrides + tagging enabled.
+try:
+    from config import settings as _settings
+    TELEGRAM_STRATEGY_CHAT_OVERRIDES: dict = dict(
+        getattr(_settings, "TELEGRAM_STRATEGY_CHAT_OVERRIDES", {}) or {}
+    )
+    TELEGRAM_TAG_STRATEGY: bool = bool(
+        getattr(_settings, "TELEGRAM_TAG_STRATEGY", True)
+    )
+except Exception:  # pragma: no cover — defensive
+    TELEGRAM_STRATEGY_CHAT_OVERRIDES = {}
+    TELEGRAM_TAG_STRATEGY = True
+
 
 # P14: canonical HTML-escape helper for all user-supplied string fields.
 # Telegram's HTML parse_mode treats <, >, & as markup. Any strategy name,
@@ -49,14 +64,36 @@ def _is_configured() -> bool:
     return bool(TOKEN) and bool(CHAT_ID)
 
 
-def send_sync(text: str, parse_mode: str = "HTML") -> bool:
+def _resolve_chat_id(strategy: str | None) -> str:
+    """Phase C routing: strategy → override chat_id, else default CHAT_ID."""
+    if strategy and strategy in TELEGRAM_STRATEGY_CHAT_OVERRIDES:
+        return TELEGRAM_STRATEGY_CHAT_OVERRIDES[strategy]
+    return CHAT_ID
+
+
+def _apply_tag(msg: str, strategy: str | None) -> str:
+    """Phase C tagging: prepend [strategy] once, if enabled and provided."""
+    if not TELEGRAM_TAG_STRATEGY or not strategy:
+        return msg
+    # Escape strategy for HTML parse_mode (strategy keys may contain & etc.)
+    tag = f"[{_esc(strategy)}]"
+    raw_tag = f"[{strategy}]"
+    # Don't duplicate if the message already starts with the tag (escaped or raw)
+    if msg.startswith(tag) or msg.startswith(raw_tag):
+        return msg
+    return f"{tag} {msg}"
+
+
+def send_sync(text: str, parse_mode: str = "HTML",
+              chat_id: str | None = None) -> bool:
     """
     Send a Telegram message synchronously. Non-blocking safe.
     Returns True if sent, False on failure.
     """
     global _last_send_time
 
-    if not _is_configured():
+    target_chat = chat_id if chat_id else CHAT_ID
+    if not TOKEN or not target_chat:
         logger.debug("[TG] Not configured — skipping")
         return False
 
@@ -68,7 +105,7 @@ def send_sync(text: str, parse_mode: str = "HTML") -> bool:
     try:
         url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
         payload = {
-            "chat_id": CHAT_ID,
+            "chat_id": target_chat,
             "text": text,
             "parse_mode": parse_mode,
             "disable_notification": False,
@@ -90,10 +127,11 @@ def send_sync(text: str, parse_mode: str = "HTML") -> bool:
         return False
 
 
-async def send(text: str, parse_mode: str = "HTML") -> bool:
+async def send(text: str, parse_mode: str = "HTML",
+               chat_id: str | None = None) -> bool:
     """Async wrapper — runs send_sync in executor to avoid blocking."""
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, send_sync, text, parse_mode)
+    return await loop.run_in_executor(None, send_sync, text, parse_mode, chat_id)
 
 
 # ─── Trade Notification Formatters ─────────────────────────────────
@@ -113,7 +151,7 @@ async def notify_entry(trade_id: str, direction: str, strategy: str,
         f"Regime: {_esc(regime)}\n"
         f"ID: <code>{_esc(trade_id)}</code>"
     )
-    await send(msg)
+    await send(_apply_tag(msg, strategy), chat_id=_resolve_chat_id(strategy))
 
 
 async def notify_exit(trade_id: str, direction: str, strategy: str,
@@ -138,12 +176,13 @@ async def notify_exit(trade_id: str, direction: str, strategy: str,
         f"Hold: {hold_min:.1f} min\n"
         f"ID: <code>{_esc(trade_id)}</code>"
     )
-    await send(msg)
+    await send(_apply_tag(msg, strategy), chat_id=_resolve_chat_id(strategy))
 
 
 async def notify_daily_summary(daily_pnl: float, trades: int, wins: int,
                                 losses: int, win_rate: float,
-                                recovery_mode: bool):
+                                recovery_mode: bool,
+                                strategy: str | None = None):
     """Send end-of-day summary."""
     emoji = "\U0001F4CA"  # chart
     pnl_str = f"+${daily_pnl:.2f}" if daily_pnl >= 0 else f"-${abs(daily_pnl):.2f}"
@@ -156,10 +195,11 @@ async def notify_daily_summary(daily_pnl: float, trades: int, wins: int,
         f"Win Rate: {win_rate:.0f}%\n"
         f"Status: {_esc(status)}"
     )
-    await send(msg)
+    await send(_apply_tag(msg, strategy), chat_id=_resolve_chat_id(strategy))
 
 
-async def notify_council(bias: str, vote_count: str, summary: str):
+async def notify_council(bias: str, vote_count: str, summary: str,
+                         strategy: str | None = None):
     """Send council bias vote result."""
     emoji = {
         "BULLISH": "\U0001F7E2",   # green
@@ -174,14 +214,16 @@ async def notify_council(bias: str, vote_count: str, summary: str):
         f"Vote: {_esc(vote_count)}\n"
         f"{safe_summary}"
     )
-    await send(msg)
+    await send(_apply_tag(msg, strategy), chat_id=_resolve_chat_id(strategy))
 
 
-async def notify_alert(alert_type: str, message: str):
+async def notify_alert(alert_type: str, message: str,
+                       strategy: str | None = None):
     """Send general alert (recovery mode, kill switch, news gate, etc.).
-    P14: both alert_type and message are user-supplied → escape both."""
+    P14: both alert_type and message are user-supplied → escape both.
+    Phase C: optional strategy routes + tags."""
     msg = f"\U000026A0 <b>ALERT: {_esc(alert_type)}</b>\n{_esc(message)}"
-    await send(msg)
+    await send(_apply_tag(msg, strategy), chat_id=_resolve_chat_id(strategy))
 
 
 # ─── Standalone Test ───────────────────────────────────────────────

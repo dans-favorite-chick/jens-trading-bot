@@ -489,6 +489,16 @@ class SimBot(BaseBot):
         except Exception as e:
             logger.error(f"[SIM] registry update failed on trade close: {e}")
 
+    def to_dict(self) -> dict:
+        """Extend base state with per-strategy risk registry snapshot."""
+        result = super().to_dict()
+        try:
+            result["strategy_risk"] = self.risk_registry.snapshot()
+        except Exception as e:
+            logger.debug(f"to_dict: strategy_risk failed: {e}")
+            result["strategy_risk"] = {}
+        return result
+
     def set_profile(self, profile_name: str):
         """IGNORED — Sim bot has zero gates at bot level; per-strategy
         risk is governed by the registry."""

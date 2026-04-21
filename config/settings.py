@@ -207,6 +207,16 @@ STRATEGY_HALT_STATE_FILE = os.path.join(
 DAILY_FLATTEN_HOUR_CT = 16
 DAILY_FLATTEN_MINUTE_CT = 0
 
+# ─── Phase C per-strategy Telegram routing (optional) ──────────────
+# Map strategy key → chat_id override. Missing keys fall through to
+# the default channel (TELEGRAM_CHAT_ID env var). Strategy keys use
+# "strategy" or "strategy.sub_strategy" form matching account_routing.
+TELEGRAM_STRATEGY_CHAT_OVERRIDES: dict[str, str] = {
+    # Example: "bias_momentum": "-100123456789",
+    # Leave empty dict to route all to the default channel.
+}
+TELEGRAM_TAG_STRATEGY = True   # Prepend [strategy] tag to every msg
+
 # ─── Logging ────────────────────────────────────────────────────────
 LOG_DIR = "logs"
 BRIDGE_LOG = "logs/bridge.log"
