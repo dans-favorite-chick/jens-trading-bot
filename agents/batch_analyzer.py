@@ -421,7 +421,7 @@ async def main():
                         format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
     try:
         from dotenv import load_dotenv
-        load_dotenv()
+        load_dotenv(override=True)
     except ImportError:
         pass
 

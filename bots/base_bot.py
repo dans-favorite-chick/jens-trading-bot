@@ -19,10 +19,14 @@ from datetime import datetime, date
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-# Load .env for API keys (GEMINI_API_KEY)
+# Load .env for API keys (GEMINI_API_KEY, ANTHROPIC_API_KEY, etc.)
+# CRITICAL: override=True — host OS may have these vars set (e.g. empty
+# ANTHROPIC_API_KEY from Claude Code OAuth shim). Without override, dotenv
+# silently skips keys that already exist in os.environ, even if empty,
+# which leaves agents in DEGRADED mode. (B42 2026-04-21)
 try:
     from dotenv import load_dotenv
-    load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+    load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"), override=True)
 except ImportError:
     pass
 

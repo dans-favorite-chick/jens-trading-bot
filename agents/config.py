@@ -22,6 +22,17 @@ from pathlib import Path
 
 logger = logging.getLogger("agents.config")
 
+# B42: self-load .env with override=True so this module's key reads work
+# even when importer didn't call load_dotenv first. Host OS may have
+# ANTHROPIC_API_KEY="" set (e.g. Claude Code OAuth shim) which without
+# override would silently preempt the real key from .env.
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _PROJECT_ROOT_FOR_ENV = Path(__file__).resolve().parent.parent
+    _load_dotenv(_PROJECT_ROOT_FOR_ENV / ".env", override=True)
+except ImportError:
+    pass
+
 # ─── Model identifiers ───────────────────────────────────────────────────
 
 MODEL_GEMINI_FLASH = os.environ.get("AGENT_MODEL_GEMINI_FLASH", "gemini-2.5-flash")

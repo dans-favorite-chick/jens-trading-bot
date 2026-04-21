@@ -45,7 +45,7 @@ async def _main() -> int:
     )
     try:
         from dotenv import load_dotenv  # optional
-        load_dotenv()
+        load_dotenv(override=True)
     except Exception:
         pass
 
