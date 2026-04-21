@@ -74,7 +74,8 @@ def _build_entry_line(side: str, qty: int, order_type: str,
         lp, sp = f"{limit_price:.2f}", f"{stop_price:.2f}"
     else:  # MARKET
         lp, sp = "0", "0"
-    return f"PLACE;{acct};{INSTRUMENT};{side};{qty};{ot};{lp};{sp};DAY;{oco_id};;;"
+    # B41: sim sub-accounts don't accept TIF=DAY; use GTC (same as stops/targets).
+    return f"PLACE;{acct};{INSTRUMENT};{side};{qty};{ot};{lp};{sp};GTC;{oco_id};;;"
 
 
 def _build_stop_line(side: str, qty: int, stop_price: float,

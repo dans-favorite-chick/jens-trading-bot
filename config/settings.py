@@ -195,6 +195,13 @@ PER_STRATEGY_ACCOUNT_SIZE = 2000.00     # starting balance
 PER_STRATEGY_DAILY_LOSS_CAP = 200.00    # daily stop; resets at daily rollover
 PER_STRATEGY_FLOOR = 1500.00            # halt + alert, MANUAL re-enable only
 
+# ─── B40 — NT8 ATI multi-account routing flag ─────────────────────
+# TRUE = route each strategy to its dedicated NT8 Sim sub-account.
+# FALSE = kill-switch; forces everything to Sim101 (emergency fallback).
+# Keep True by default. If NT8 is silently dropping named-account orders,
+# the fix is on the NT8 side (ATI config), NOT here.
+MULTI_ACCOUNT_ROUTING_ENABLED = True
+
 # Halt state persists to this file so a bot restart doesn't resurrect a
 # halted strategy. Cleared via tools/reenable_strategy.py.
 STRATEGY_HALT_STATE_FILE = os.path.join(

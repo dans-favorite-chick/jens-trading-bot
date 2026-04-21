@@ -75,7 +75,23 @@ def get_account_for_signal(
     """
     Resolve a strategy (and optional sub-strategy) to its NT8 account.
     Unknown strategies and unknown sub-strategies fall back to _default.
+
+    2026-04-21 HOTFIX (B40): NT8 ATI is not currently configured to
+    auto-execute orders routed to the 16 dedicated Sim sub-accounts — only
+    Sim101 receives actual fills. Until multi-account ATI is wired up in
+    NT8, `MULTI_ACCOUNT_ROUTING_ENABLED=False` in settings forces every
+    strategy to Sim101 so trades actually execute. Per-strategy risk
+    isolation remains intact (that's Python-side via StrategyRiskRegistry).
     """
+    # ── Multi-account ATI kill-switch (B40) ────────────────────────────
+    # Dynamic attribute read so tests / runtime can toggle the flag.
+    try:
+        import config.settings as _s
+        if not getattr(_s, "MULTI_ACCOUNT_ROUTING_ENABLED", True):
+            return _DEFAULT_ACCOUNT
+    except Exception:
+        pass  # Import failure → legacy multi-account behavior
+
     mapping = STRATEGY_ACCOUNT_MAP.get(strategy_name)
     default = STRATEGY_ACCOUNT_MAP.get("_default", _DEFAULT_ACCOUNT)
 

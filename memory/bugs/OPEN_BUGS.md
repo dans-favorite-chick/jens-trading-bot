@@ -6,6 +6,47 @@ separately via the pytest suite itself.
 
 ---
 
+## B40 — NT8 ATI not configured for multi-account routing (HOTFIXED)
+**Status**: HOTFIXED 2026-04-21 via `MULTI_ACCOUNT_ROUTING_ENABLED=False`.
+Proper fix still required.
+
+**Root cause of B39 (phantom fills):** Python routes OIFs to 16 dedicated
+Sim sub-accounts (`SimSpring Setup`, `SimBias Momentum`, etc.) — all
+visible and green in NT8's Accounts panel — but NT8's ATI executor
+apparently only auto-fills orders routed to **`Sim101`**. Orders targeted
+at named sub-accounts were silently dropped (no fill confirmation written
+to `outgoing/`), which cascaded into B39.
+
+**Evidence**:
+- `outgoing/` contains ~100 `Sim101_T05_STPB_*.txt` fill files up to 16:24 CT
+- Zero fill files for any `SimSpring Setup / SimBias Momentum / ...` account
+- 16:24 is approximately when sim_bot started emitting OIFs with named-account
+  routing (post-DailyFlattener 16:00 transition)
+- OIF file format is correct NT8-ATI (`PLACE;<account>;MNQM6;BUY;...`)
+- All 16 accounts exist in NT8 (Accounts tab screenshot confirms green "My
+  Coinbase" connection)
+
+**Hotfix applied:**
+- Added `MULTI_ACCOUNT_ROUTING_ENABLED` boolean to `config/settings.py`
+  (default `False`).
+- `config/account_routing.get_account_for_signal()` short-circuits to
+  `Sim101` when flag is off.
+- Per-strategy risk isolation is unaffected — that's `StrategyRiskRegistry`
+  (Python-side). Only NT8-side P&L split per account is lost.
+
+**Proper fix** (required before multi-account execution resumes):
+1. Investigate NT8 ATI configuration. Options:
+   - `Tools → Options → ATI` — verify "Enable ATI Server" + order routing
+   - Possibly need to start ATI for each connection / each account
+   - NT8 docs on "Order Instruction File" with non-default account routing
+2. Integration probe: write a test OIF directly to a named account and
+   verify fill appears in `outgoing/` with matching account prefix.
+3. Flip `MULTI_ACCOUNT_ROUTING_ENABLED=True` once named accounts fill.
+4. Add watchdog/startup probe that writes a zero-qty test order per
+   account and asserts fill-ACK before the bot takes real signals.
+
+---
+
 ## B39 — Silent phantom-fill divergence in sim_bot (HIGH PRIORITY)
 **Status**: OPEN
 **Discovered**: 2026-04-21 evening, first sim_bot run after Phase C flip

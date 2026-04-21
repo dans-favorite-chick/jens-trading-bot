@@ -22,6 +22,12 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+# B40: force multi-account routing ON so tests validate map logic, not
+# the runtime kill-switch. Production default is False until NT8 ATI is
+# configured for multi-account execution.
+import config.settings as _s
+_s.MULTI_ACCOUNT_ROUTING_ENABLED = True
+
 from config.account_routing import (
     STRATEGY_ACCOUNT_MAP,
     get_account_for_signal,
