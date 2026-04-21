@@ -293,3 +293,94 @@ def test_approve_rejects_unsafe_proposal(tmp_path: Path):
         ap.approve(pid, dry_run=True,
                    proposals_dir=proposals_dir,
                    strategies_file=strategies_file)
+
+
+# ─── Telegram notification on new proposals ────────────────────────────
+
+def _write_pending(tmp_path: Path, recs: list) -> tuple[Path, Path, Path]:
+    pending = tmp_path / "pending_recommendations.json"
+    proposals_dir = tmp_path / "proposals"
+    rejected_log = tmp_path / "rejected.jsonl"
+    pending.write_text(json.dumps(recs), encoding="utf-8")
+    return pending, proposals_dir, rejected_log
+
+
+def test_telegram_notified_on_new_proposals(tmp_path, monkeypatch):
+    from agents import adaptive_params as ap
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+
+    calls = []
+    fake_mod = type("M", (), {"send_sync": lambda text, **kw: calls.append(text) or True})
+    monkeypatch.setitem(__import__("sys").modules, "core.telegram_notifier", fake_mod)
+
+    recs = [
+        _rec(param="stop_atr_mult", current=2.0, proposed=1.8),
+        _rec(param="min_stop_ticks", current=40, proposed=20),
+    ]
+    pending, proposals_dir, rejected_log = _write_pending(tmp_path, recs)
+    result = ap.process_pending(
+        pending_file=pending, proposals_dir=proposals_dir, rejected_log=rejected_log
+    )
+    assert len(result.accepted) == 2
+    assert len(calls) == 1
+    assert "2 new proposals" in calls[0]
+    assert "tools/list_proposals.py" in calls[0]
+
+
+def test_telegram_skipped_when_token_missing(tmp_path, monkeypatch):
+    from agents import adaptive_params as ap
+
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_TOKEN", raising=False)
+
+    calls = []
+    fake_mod = type("M", (), {"send_sync": lambda text, **kw: calls.append(text) or True})
+    monkeypatch.setitem(__import__("sys").modules, "core.telegram_notifier", fake_mod)
+
+    recs = [_rec(param="stop_atr_mult", current=2.0, proposed=1.8)]
+    pending, proposals_dir, rejected_log = _write_pending(tmp_path, recs)
+    result = ap.process_pending(
+        pending_file=pending, proposals_dir=proposals_dir, rejected_log=rejected_log
+    )
+    assert len(result.accepted) == 1
+    assert calls == []
+
+
+def test_telegram_failure_does_not_raise(tmp_path, monkeypatch):
+    from agents import adaptive_params as ap
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+
+    def _boom(text, **kw):
+        raise RuntimeError("telegram down")
+
+    fake_mod = type("M", (), {"send_sync": staticmethod(_boom)})
+    monkeypatch.setitem(__import__("sys").modules, "core.telegram_notifier", fake_mod)
+
+    recs = [_rec(param="stop_atr_mult", current=2.0, proposed=1.8)]
+    pending, proposals_dir, rejected_log = _write_pending(tmp_path, recs)
+    # Must return normally
+    result = ap.process_pending(
+        pending_file=pending, proposals_dir=proposals_dir, rejected_log=rejected_log
+    )
+    assert len(result.accepted) == 1
+
+
+def test_telegram_not_sent_when_zero_accepted(tmp_path, monkeypatch):
+    from agents import adaptive_params as ap
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+
+    calls = []
+    fake_mod = type("M", (), {"send_sync": lambda text, **kw: calls.append(text) or True})
+    monkeypatch.setitem(__import__("sys").modules, "core.telegram_notifier", fake_mod)
+
+    # All rejected
+    recs = [_rec(param="risk_per_trade", current=15, proposed=500)]
+    pending, proposals_dir, rejected_log = _write_pending(tmp_path, recs)
+    result = ap.process_pending(
+        pending_file=pending, proposals_dir=proposals_dir, rejected_log=rejected_log
+    )
+    assert len(result.accepted) == 0
+    assert calls == []

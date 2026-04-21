@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -316,7 +317,27 @@ def process_pending(
         path = write_proposal(rec, proposals_dir=pd)
         result.accepted.append(path)
 
+    _notify_new_proposals(len(result.accepted))
     return result
+
+
+def _notify_new_proposals(count: int) -> None:
+    """Send a Telegram alert when N>0 new proposals were written.
+
+    Silent no-op if TELEGRAM_BOT_TOKEN / TELEGRAM_TOKEN is unset. Never raises.
+    """
+    if count <= 0:
+        return
+    if not (os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN")):
+        return
+    try:
+        from core import telegram_notifier
+        telegram_notifier.send_sync(
+            f"[AI] {count} new proposals pending review. "
+            f"Run: python tools/list_proposals.py"
+        )
+    except Exception as e:
+        logger.warning("telegram notify failed: %s", e)
 
 
 __all__ = [
