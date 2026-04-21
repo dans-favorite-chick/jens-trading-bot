@@ -291,7 +291,8 @@ class OpeningSessionStrategy(BaseStrategy):
             target_rr = 1.0
 
         metadata = {
-            "sub_name": sub_name,
+            "sub_name": sub_name,        # legacy/log alias
+            "sub_strategy": sub_name,    # 4C: routing key for account resolver
             "t1": t1,
             "be_milestone": be_milestone,
             "time_exit_ct": time_exit_ct,

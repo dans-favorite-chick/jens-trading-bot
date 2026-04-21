@@ -32,6 +32,14 @@ class Position:
     reason: str
     market_snapshot: dict  # Snapshot of market data at entry
 
+    # ── Phase 4C multi-account routing ─────────────────────────────
+    # account is the NT8 sim account the entry was routed to; exit /
+    # scale-out / BE-stop OIFs must use the same account.
+    # sub_strategy is the opening_session sub-evaluator name (or None
+    # for flat strategies) — used by resolver at exit time.
+    account: str = "Sim101"
+    sub_strategy: Optional[str] = None
+
     # ── Scale-out / Trend Rider state ───────────────────────────────
     original_contracts: int = 0    # Set at open (0 = not in rider mode)
     scaled_out: bool = False       # True once partial scale-out has been executed
@@ -74,7 +82,8 @@ class PositionManager:
                       strategy: str, reason: str, market_snapshot: dict = None,
                       exit_trigger: str = None, eod_flat_time_et: str = None,
                       metadata: dict = None,
-                      scale_out_rr: float = None, trail_config: dict = None):
+                      scale_out_rr: float = None, trail_config: dict = None,
+                      account: str = "Sim101", sub_strategy: str | None = None):
         """Open a new position. Raises if already in a position."""
         if self.position is not None:
             logger.warning(f"[{trade_id}] Cannot open position — already in trade")
@@ -111,9 +120,13 @@ class PositionManager:
             scale_out_rr=scale_out_rr,
             trail_config=trail_config,
             trail_state=trail_state,
+            account=account,
+            sub_strategy=sub_strategy,
         )
         logger.info(f"[OPEN:{trade_id}] {direction} {contracts}x @ {entry_price} "
-                     f"SL={stop_price} TP={target_price} strat={strategy}")
+                     f"SL={stop_price} TP={target_price} strat={strategy} "
+                     f"account={account}"
+                     + (f"/{sub_strategy}" if sub_strategy else ""))
         return True
 
     def close_position(self, exit_price: float, exit_reason: str) -> dict | None:

@@ -584,5 +584,41 @@ class TestExitPlan:
             s.determine_exits(sig, snapshot={}, contract_count=2)
 
 
+# ═══════════════════════════════════════════════════════════════════
+# Phase 4C: sub_strategy metadata on every sub-evaluator
+# (Required by config.account_routing.get_account_for_signal for routing.)
+# ═══════════════════════════════════════════════════════════════════
+class TestSubStrategyMetadata:
+    def test_open_drive_emits_sub_strategy(self):
+        sig = make_strategy().evaluate(open_drive_market())
+        assert sig is not None
+        assert sig.metadata["sub_strategy"] == "open_drive"
+
+    def test_open_test_drive_emits_sub_strategy(self):
+        sig = make_strategy().evaluate(open_test_drive_market())
+        assert sig is not None
+        assert sig.metadata["sub_strategy"] == "open_test_drive"
+
+    def test_open_auction_in_emits_sub_strategy(self):
+        sig = make_strategy().evaluate(auction_in_market())
+        assert sig is not None
+        assert sig.metadata["sub_strategy"] == "open_auction_in"
+
+    def test_open_auction_out_emits_sub_strategy(self):
+        sig = make_strategy().evaluate(auction_out_market())
+        assert sig is not None
+        assert sig.metadata["sub_strategy"] == "open_auction_out"
+
+    def test_premarket_breakout_emits_sub_strategy(self):
+        sig = make_strategy().evaluate(pm_market())
+        assert sig is not None
+        assert sig.metadata["sub_strategy"] == "premarket_breakout"
+
+    def test_orb_emits_sub_strategy(self):
+        sig = make_strategy().evaluate(orb_market())
+        assert sig is not None
+        assert sig.metadata["sub_strategy"] == "orb"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
