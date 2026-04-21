@@ -154,3 +154,77 @@ accepts K/M/B suffixes. Migration touched 2 call sites inside
 `config/settings.py`. Paste format documented in
 `data/menthorq/gamma/README.md`.
 **Status**: FIXED
+
+## B23 — Third-party DEBUG log noise
+**Discovered**: 2026-04-20 post-restart observation + 2026-04-21 crash review
+**Severity**: LOW-MEDIUM
+**Root cause**: After B22 raised lab to DEBUG log level, `websockets.client`
+emits ~10 lines/sec of raw tick dumps and yfinance/peewee/httpcore emit
+dozens of lines per intermarket cycle. Log grew 199 MB in 22h, drowning
+the Fix 5 [EVAL] reject-reason output and potentially contributing to
+silent-crash hypothesis (log I/O pressure).
+**Resolution**: 2026-04-21 commit 62b2085. Added logger-level overrides
+in bots/lab_bot.py immediately after basicConfig: websockets.client/server,
+yfinance, httpcore (+ connection + http11), peewee, chromadb all set to INFO.
+Bot-level DEBUG preserved for strategy observability.
+**Effect**: Reduces log volume ~10× while keeping [EVAL] signal visibility.
+Takes hold on next lab restart.
+**Status**: FIXED
+
+## B32 — Alpaca VIX API returning 401 Unauthorized
+**Discovered**: 2026-04-21 during lab session reconciliation
+**Severity**: MEDIUM
+**Root cause**: Alpaca API credentials for VIX endpoint appear invalid or expired;
+intermarket filter unable to fetch VIX readings, running blind on one signal.
+**Impact**: Intermarket filter degrades gracefully but VIX-based regime input absent.
+**Fix owner**: TBD — rotate Alpaca key or investigate whether VIX moved to different endpoint.
+**Status**: OPEN
+
+## B33 — menthorq_daily.json stale since 2026-04-17
+**Discovered**: 2026-04-21 during lab startup log review
+**Severity**: MEDIUM
+**Root cause**: Manual file `data/menthorq/menthorq_daily.json` hasn't been updated
+in 4 days. Separate from `data/menthorq/gamma/*_levels.txt` which IS fresh (2026-04-20).
+**Impact**: Unknown — depends on which code paths read menthorq_daily.json vs
+gamma/*_levels.txt. If any strategy reads the daily JSON for levels, it's running
+on stale data.
+**Fix owner**: Grep codebase for menthorq_daily.json readers; determine authoritative
+source; consider removing one if redundant.
+**Status**: OPEN
+
+## B35 — bots/base_bot.py:2421 missing account= parameter
+**Discovered**: 2026-04-21 during CC code review
+**Resolution**: FALSE ALARM. Line 2421 is a `return` statement, not a write_oif call.
+Earlier grep output misread due to PowerShell Select-String row-duplication artifact.
+Verified via Read: line 2702 is the single EXIT write_oif call site and correctly
+passes account=pos.account. No bug exists.
+**Status**: CLOSED (not a bug)
+
+## B36 — Lab bot silent crash PID 40908 (23.7 min uptime)
+**Discovered**: 2026-04-21 10:42:40 CT during 4C verification session
+**Severity**: LOW (parked pending recurrence)
+**Signature**: WS close code=1006, no Python traceback, no Windows Error Reporting event,
+no shutdown log, process vanished.
+**Hypotheses investigated and ruled out**:
+- Native extension crash: no WER event
+- Missing account→ValueError: all call sites correctly pass account=
+- Log-volume threshold: PID 32412 has exceeded 40908's log size without crashing
+**Remaining hypothesis**: event-triggered transient (bad tick sequence, transient
+resource spike, yfinance/intermarket API stall during RTH burst).
+**Mitigation in flight**: B23 (log-noise silencer, commit 62b2085) may address
+the log-pressure sub-hypothesis even if the primary trigger is something else.
+Takes effect on next lab restart.
+**Fix owner**: Monitor for recurrence. If crash #3 happens, capture last 500 non-websockets
+log lines + Windows System event log around crash timestamp.
+**Status**: PARKED
+
+## B37 — 4C integration test gap
+**Discovered**: 2026-04-21 during test coverage review
+**Severity**: LOW
+**Root cause**: test_account_routing.py covers map correctness, _require_account raises,
+and wire-format position — all unit-level. No end-to-end integration test covers
+signal → bot._enter_trade → bridge → write_oif path with account plumbing, nor
+bridge-side handling of missing account in WS message, nor write_bracket_order's
+delegated guard.
+**Fix owner**: Add tests/test_4c_integration.py in a follow-up testing sprint.
+**Status**: OPEN
