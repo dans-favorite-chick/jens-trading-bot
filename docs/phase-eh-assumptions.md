@@ -134,3 +134,46 @@ assumed, why, and where to revisit if the assumption turns out wrong.
 - **Fallback discipline**: Claude failure (exception, None, or missing sections) → deterministic 5-section markdown still written. Header tagged `source=fallback` so downstream tooling can detect degraded output.
 - **Preserved legacy path**: existing Gemini-based `run_debrief()` function kept intact for back-compat; new `SessionDebriefer` class added alongside.
 - **Hook marker**: used `# [AI-DEBRIEF-HOOK]` in `bots/sim_bot.py::_daily_flatten_loop`. No `# [AI-PRETRADE-HOOK]` marker observed; safe for S6 co-edit.
+
+## S9 — Adaptive Params (2026-04-21)
+
+### A-S9.1 — Proposal ID format
+- **Assumption:** `<YYYYMMDD>_<HHMMSS>_<strategy_slug>_<param_slug>` (UTC).
+  Matches task spec example `20260421_163022_bias_momentum`.
+- **Revisit if:** S8 learner emits its own ID scheme — switch to its IDs.
+
+### A-S9.2 — Source-of-truth for safety bounds
+- **Assumption:** Hardcoded in `agents/adaptive_params.py::SafetyBounds`.
+  Bounds can only be widened via a human code edit + code review, not at
+  runtime. This is intentional — the whole point of S9 is that AI cannot
+  loosen its own leash.
+
+### A-S9.3 — Edit strategy for `config/strategies.py`
+- **Assumption:** targeted regex-within-block replacement of the literal
+  value after the matching `"param":` key, scoped to the matching
+  strategy's dict (or to `STRATEGY_DEFAULTS` top-level). AST-verified
+  re-parse guards against syntax errors. If the key can't be uniquely
+  located, we ABORT rather than guess.
+- **Revisit if:** strategies.py grows nested dicts where the same param
+  name appears at multiple depths within one strategy's block.
+
+### A-S9.4 — Stop-tick bound detection
+- **Assumption:** any param whose name contains both `stop` and `tick`
+  is a stop-distance in ticks (so min/max-ticks bounds apply). Covers
+  `min_stop_ticks`, `max_stop_ticks`, `stop_fallback_ticks`, etc.
+
+### A-S9.5 — approve_proposal never merges
+- **Assumption:** tool leaves the new branch checked out and prints the
+  `git merge` command for the human. Auto-merge would defeat the whole
+  human-approval design.
+
+## S6 — 4B Pre-Trade Filter (2026-04-21)
+
+- **Replaced legacy implementation**: `agents/pretrade_filter.py` was a pre-S4 Groq-based module with fail-CLOSED (SIT_OUT on any failure). S6 mission spec requires **fail-OPEN** (CLEAR on any failure) so trading never blocks on AI outage. The module was rewritten on S4 infra (`AIClient` / `BaseAgent`). The module-level `check()` function and `FilterVerdict.action` alias were preserved so the existing `bots/base_bot.py` integration keeps working.
+- **Model**: Gemini Flash (`MODEL_GEMINI_FLASH`) hard-coded; `model=` kwarg on the legacy shim is accepted and ignored.
+- **Timeout**: 3 s hard, applied twice — `ask_gemini(timeout_s=3.0)` plus an outer `asyncio.wait_for(timeout=3.5)` belt-and-braces guard so a misbehaving inner call can't stall the tick loop.
+- **`ai_filter_mode` config**: added `DEFAULT_AI_FILTER_MODE = "advisory"` to `config/strategies.py` and a bottom-of-file loop that backfills every entry in `STRATEGIES` with `"ai_filter_mode": "advisory"`. One line per strategy was rejected as noisy for 10+ entries; the loop accomplishes the same thing with one source of truth.
+- **Hook in `bots/base_bot.py`**: the rich context-gathering block (news/MQ/RAG injection, lines ~1065-1120) was kept — it is production wiring other streams consume. Only the verdict-handling block (previously ~14 lines including RAG near-miss logging on SIT_OUT) was replaced with a 5-line mode-aware gate tagged `# [AI-PRETRADE-HOOK]` at line ~1148.
+- **Default verdict on failure**: `CLEAR` with `source="default"`. Advisory mode means SIT_OUT is logged but the trade still proceeds; blocking mode respects SIT_OUT. CAUTION is logged at WARNING level; sizing reduction is already handled downstream in `_enter_trade` via `self._filter_verdict`.
+- **Cache**: none. Every signal triggers one fresh Gemini Flash call.
+- **Test strategy**: monkey-patched `AIClient.ask_gemini` via a `FakeAIClient` subclass for behavior-driven tests (clear/caution/sit_out/fenced/junk/none/raise/timeout). JSONL-write test stubs the lower-level `_gemini_once` to exercise the real retry/log path.

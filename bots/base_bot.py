@@ -1145,21 +1145,13 @@ class BaseBot:
                 logger.info(f"[FILTER] {verdict.action} ({verdict.confidence:.0f}%) "
                             f"in {verdict.latency_ms:.0f}ms: {verdict.reason}")
 
-                if verdict.action == "SIT_OUT":
-                    logger.info(f"[FILTER] SIT_OUT — skipping trade")
-                    self.last_rejection = f"AI filter: {verdict.reason}"
-                    try:
-                        sig_dict = {
-                            "direction": signal.direction, "strategy": signal.strategy,
-                            "confidence": signal.confidence, "entry_score": signal.entry_score,
-                            "reason": signal.reason,
-                        }
-                        self.history.log_near_miss(sig_dict, market_snap, f"filter_sit_out: {verdict.reason}")
-                        self.trade_rag.add_near_miss(sig_dict, market_snap)
-                    except Exception:
-                        pass
+                # [AI-PRETRADE-HOOK] S6/H-4B — mode-aware skip. Advisory = log only.
+                _mode = pretrade_filter.get_filter_mode(signal.strategy)
+                if _mode == "blocking" and verdict.action == "SIT_OUT":
+                    self.last_rejection = f"AI filter (blocking): {verdict.reason}"
+                    logger.info(f"[FILTER] SIT_OUT (blocking mode) — skipping {signal.strategy}")
                     return
-                # CAUTION handled in _enter_trade via self._filter_verdict
+                # advisory mode or non-SIT_OUT verdict: trade proceeds; CAUTION handled in _enter_trade
             except Exception as e:
                 logger.warning(f"[FILTER] Error (defaulting to CLEAR): {e}")
                 self._filter_verdict = {"action": "CLEAR", "reason": f"Error: {e}", "source": "default"}
