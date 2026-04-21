@@ -33,16 +33,35 @@ _oif_counter = int(time.time() * 1000) % 1000000  # Start from timestamp to avoi
 # Low-level OIF line builders
 # ═══════════════════════════════════════════════════════════════════════
 
+def _require_account(account: str | None, caller: str) -> str:
+    """
+    Phase 4C: PLACE/EXIT paths must carry an explicit NT8 account. A silent
+    fallback to the module-level ACCOUNT masked routing bugs — every trade
+    landed on Sim101 regardless of strategy. Raise loudly instead.
+    """
+    if account is None or not str(account).strip():
+        raise ValueError(
+            f"{caller}: account is required (Phase 4C multi-account routing). "
+            f"Callers must resolve via config.account_routing."
+            f"get_account_for_signal() and pass account=<SimFoo>."
+        )
+    return account
+
+
 def _build_entry_line(side: str, qty: int, order_type: str,
                       limit_price: float, stop_price: float,
-                      oco_id: str = "") -> str:
+                      oco_id: str = "",
+                      account: str | None = None) -> str:
     """side: BUY or SELL. Returns OIF line (no newline).
 
     B3 compliance: stop-loss orders route via _build_stop_line() and emit
     STOPMARKET. The "STOP" branch here is for stop-limit entries (a
     distinct order type — requires both stop trigger + limit fill), kept
     for backwards-compat on callers that historically passed "STOP".
+
+    4C: account must be explicit — routing per strategy/sub-strategy.
     """
+    acct = _require_account(account, "_build_entry_line")
     ot = order_type.upper()
     if ot == "LIMIT":
         lp, sp = f"{limit_price:.2f}", "0"
@@ -55,22 +74,31 @@ def _build_entry_line(side: str, qty: int, order_type: str,
         lp, sp = f"{limit_price:.2f}", f"{stop_price:.2f}"
     else:  # MARKET
         lp, sp = "0", "0"
-    return f"PLACE;{ACCOUNT};{INSTRUMENT};{side};{qty};{ot};{lp};{sp};DAY;{oco_id};;;"
+    return f"PLACE;{acct};{INSTRUMENT};{side};{qty};{ot};{lp};{sp};DAY;{oco_id};;;"
 
 
 def _build_stop_line(side: str, qty: int, stop_price: float,
-                     oco_id: str = "", tif: str = "GTC") -> str:
+                     oco_id: str = "", tif: str = "GTC",
+                     account: str | None = None) -> str:
     """Universal stop-loss = STOPMARKET. B3 fix: NT8 rejects bare "STOP" for
     stop-loss orders; "STOPMARKET" is the ATI-accepted form that triggers at
     stop_price and fills at market. side = SELL (protect LONG) or BUY (protect SHORT).
+
+    4C: account must be explicit — routing per strategy/sub-strategy.
     """
-    return f"PLACE;{ACCOUNT};{INSTRUMENT};{side};{qty};STOPMARKET;0;{stop_price:.2f};{tif};{oco_id};;;"
+    acct = _require_account(account, "_build_stop_line")
+    return f"PLACE;{acct};{INSTRUMENT};{side};{qty};STOPMARKET;0;{stop_price:.2f};{tif};{oco_id};;;"
 
 
 def _build_target_line(side: str, qty: int, target_price: float,
-                       oco_id: str = "", tif: str = "GTC") -> str:
-    """Universal target = LIMIT."""
-    return f"PLACE;{ACCOUNT};{INSTRUMENT};{side};{qty};LIMIT;{target_price:.2f};0;{tif};{oco_id};;;"
+                       oco_id: str = "", tif: str = "GTC",
+                       account: str | None = None) -> str:
+    """Universal target = LIMIT.
+
+    4C: account must be explicit — routing per strategy/sub-strategy.
+    """
+    acct = _require_account(account, "_build_target_line")
+    return f"PLACE;{acct};{INSTRUMENT};{side};{qty};LIMIT;{target_price:.2f};0;{tif};{oco_id};;;"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -99,6 +127,14 @@ def cancel_all_orders_line(account: str = None) -> str:
         ValueError: if `account` resolves to empty string.
     """
     if account is None:
+        # 4C: fallback retained here (unlike PLACE paths) because cancel-all
+        # is an emergency scope — we still want a valid account, just log
+        # loudly so missed routing surfaces in the logs.
+        logger.warning(
+            "[OIF] cancel_all_orders_line called without account — "
+            "falling back to module-level ACCOUNT=%s. Caller should pass "
+            "an explicit account.", ACCOUNT,
+        )
         account = ACCOUNT
     if not account or not str(account).strip():
         raise ValueError(
@@ -202,6 +238,7 @@ def write_bracket_order(
     target_price: float = None,   # None = managed exit (no bracket target)
     trade_id: str = "",
     oco_id: str = None,
+    account: str | None = None,   # 4C: required per-strategy NT8 account
 ) -> list[str]:
     """
     Atomic bracket order: stages entry + stop + target (or just entry + stop)
@@ -222,6 +259,8 @@ def write_bracket_order(
     if qty < 1:
         logger.error(f"[OIF:{trade_id}] refusing bracket with qty={qty}")
         return []
+    # 4C: surface missing account before any file IO.
+    _require_account(account, "write_bracket_order")
 
     # OCO group ensures stop/target cancel each other
     if oco_id is None:
@@ -232,11 +271,12 @@ def write_bracket_order(
 
     # Build lines
     entry_line = _build_entry_line(
-        entry_side, qty, entry_type, entry_price, entry_price  # stop-market entry uses entry_price as stop
+        entry_side, qty, entry_type, entry_price, entry_price,  # stop-market entry uses entry_price as stop
+        account=account,
     )
-    stop_line = _build_stop_line(exit_side, qty, stop_price, oco_id=oco_id)
+    stop_line = _build_stop_line(exit_side, qty, stop_price, oco_id=oco_id, account=account)
     target_line = (
-        _build_target_line(exit_side, qty, target_price, oco_id=oco_id)
+        _build_target_line(exit_side, qty, target_price, oco_id=oco_id, account=account)
         if target_price is not None else None
     )
 
@@ -278,18 +318,23 @@ def write_bracket_order(
 
 def write_oif(action: str, qty: int = 1, stop_price: float = None,
               target_price: float = None, trade_id: str = "",
-              order_type: str = "MARKET", limit_price: float = 0.0) -> list[str]:
+              order_type: str = "MARKET", limit_price: float = 0.0,
+              account: str | None = None) -> list[str]:
     """
     Legacy entrypoint. For new code prefer write_bracket_order().
 
     Args:
-        action: ENTER_LONG, ENTER_SHORT, EXIT, CANCEL_ALL
+        action: ENTER_LONG, ENTER_SHORT, EXIT, CANCEL_ALL, CANCEL, PARTIAL_EXIT_*,
+                PLACE_STOP_SELL, PLACE_STOP_BUY
         qty: Number of contracts (default 1)
         stop_price: Optional stop loss price (bracket OCO)
         target_price: Optional profit target price (bracket OCO)
         trade_id: Unique trade ID for correlation
         order_type: "MARKET" (default), "LIMIT", or "STOPMARKET"
         limit_price: Required when order_type="LIMIT". Price to limit entry at.
+        account: NT8 account name (4C). REQUIRED for every action except
+                 CANCEL (single-order by trade_id). For CANCEL_ALL, falls
+                 back to module-level ACCOUNT with a WARNING log if omitted.
 
     Returns:
         List of file paths written.
@@ -302,41 +347,54 @@ def write_oif(action: str, qty: int = 1, stop_price: float = None,
         logger.error(f"[OIF:{trade_id or 'N/A'}] Refusing to write entry with qty={qty}")
         return []
 
+    # 4C: enforce explicit account on every PLACE/EXIT path. Single-order
+    # CANCEL doesn't need one; CANCEL_ALL has its own fallback+warn path.
+    _PLACE_EXIT_ACTIONS = {
+        "ENTER_LONG", "BUY", "ENTER_SHORT", "SELL",
+        "EXIT", "EXIT_ALL", "CLOSE", "CLOSEPOSITION",
+        "PARTIAL_EXIT_LONG", "PARTIAL_EXIT_SHORT",
+        "PLACE_STOP_SELL", "PLACE_STOP_BUY",
+    }
+    if action in _PLACE_EXIT_ACTIONS:
+        _require_account(account, f"write_oif action={action}")
+
     # Bracket path
     if action in ("ENTER_LONG", "BUY") and stop_price and target_price:
         return write_bracket_order(
             "LONG", qty, order_type, limit_price or 0.0,
-            stop_price, target_price, trade_id,
+            stop_price, target_price, trade_id, account=account,
         )
     if action in ("ENTER_SHORT", "SELL") and stop_price and target_price:
         return write_bracket_order(
             "SHORT", qty, order_type, limit_price or 0.0,
-            stop_price, target_price, trade_id,
+            stop_price, target_price, trade_id, account=account,
         )
 
     # Non-bracket path (legacy single-order)
     cmds = []
     if action in ("ENTER_LONG", "BUY"):
-        cmds.append(_build_entry_line("BUY", qty, order_type, limit_price, 0.0) + "\n")
+        cmds.append(_build_entry_line("BUY", qty, order_type, limit_price, 0.0, account=account) + "\n")
     elif action in ("ENTER_SHORT", "SELL"):
-        cmds.append(_build_entry_line("SELL", qty, order_type, limit_price, 0.0) + "\n")
+        cmds.append(_build_entry_line("SELL", qty, order_type, limit_price, 0.0, account=account) + "\n")
     elif action in ("EXIT", "EXIT_ALL", "CLOSE", "CLOSEPOSITION"):
-        cmds.append(f"CLOSEPOSITION;{ACCOUNT};{INSTRUMENT};DAY;;;;;;;;;\n")
+        cmds.append(f"CLOSEPOSITION;{account};{INSTRUMENT};DAY;;;;;;;;;\n")
     elif action == "PARTIAL_EXIT_LONG":
-        cmds.append(f"PLACE;{ACCOUNT};{INSTRUMENT};SELL;{qty};MARKET;0;0;DAY;;;;\n")
+        cmds.append(f"PLACE;{account};{INSTRUMENT};SELL;{qty};MARKET;0;0;DAY;;;;\n")
     elif action == "PARTIAL_EXIT_SHORT":
-        cmds.append(f"PLACE;{ACCOUNT};{INSTRUMENT};BUY;{qty};MARKET;0;0;DAY;;;;\n")
+        cmds.append(f"PLACE;{account};{INSTRUMENT};BUY;{qty};MARKET;0;0;DAY;;;;\n")
     elif action == "PLACE_STOP_SELL":
         if stop_price:
-            cmds.append(_build_stop_line("SELL", qty, stop_price) + "\n")
+            cmds.append(_build_stop_line("SELL", qty, stop_price, account=account) + "\n")
     elif action == "PLACE_STOP_BUY":
         if stop_price:
-            cmds.append(_build_stop_line("BUY", qty, stop_price) + "\n")
+            cmds.append(_build_stop_line("BUY", qty, stop_price, account=account) + "\n")
     elif action == "CANCEL_ALL":
         # B2 + B4 fix: 13-semi account-scoped CANCELALLORDERS (was 15-semi
         # CANCELALLORDERS;{ACCOUNT};{INSTRUMENT};;;;;;;;;;;; which both
         # exceeded the spec and cross-accounted when parsed).
-        cmds.append(cancel_all_orders_line() + "\n")
+        # 4C: account optional here — cancel_all_orders_line has its own
+        # WARNING-logged fallback to module-level ACCOUNT if omitted.
+        cmds.append(cancel_all_orders_line(account=account) + "\n")
     elif action == "CANCEL":
         # B5: single-order cancel. trade_id doubles as ORDER ID here.
         if not trade_id:
@@ -384,19 +442,23 @@ def write_oif(action: str, qty: int = 1, stop_price: float = None,
 
 
 def write_partial_exit(direction: str, n_contracts: int = 1,
-                       trade_id: str = "") -> list[str]:
-    """Exit N contracts at market (partial close)."""
+                       trade_id: str = "",
+                       account: str | None = None) -> list[str]:
+    """Exit N contracts at market (partial close). 4C: account required."""
     action = "PARTIAL_EXIT_LONG" if direction.upper() == "LONG" else "PARTIAL_EXIT_SHORT"
-    paths = write_oif(action, qty=n_contracts, trade_id=trade_id)
+    paths = write_oif(action, qty=n_contracts, trade_id=trade_id, account=account)
     logger.info(f"[OIF:PARTIAL_EXIT:{trade_id}] {direction} close {n_contracts}x -> {paths}")
     return paths
 
 
 def write_be_stop(direction: str, stop_price: float, n_contracts: int = 1,
-                  trade_id: str = "") -> list[str]:
-    """Place a standalone STOPMARKET at break-even for remaining contracts."""
+                  trade_id: str = "",
+                  account: str | None = None) -> list[str]:
+    """Place a standalone STOPMARKET at break-even for remaining contracts.
+    4C: account required."""
     action = "PLACE_STOP_SELL" if direction.upper() == "LONG" else "PLACE_STOP_BUY"
-    paths = write_oif(action, qty=n_contracts, stop_price=stop_price, trade_id=trade_id)
+    paths = write_oif(action, qty=n_contracts, stop_price=stop_price,
+                      trade_id=trade_id, account=account)
     logger.info(f"[OIF:BE_STOP:{trade_id}] {direction} stop @ {stop_price:.2f} -> {paths}")
     return paths
 
@@ -474,13 +536,16 @@ if __name__ == "__main__":
     parser.add_argument("--qty", type=int, default=1)
     args = parser.parse_args()
 
+    # CLI test mode defaults to module-level ACCOUNT since there's no signal
+    # context here. Production callers must always pass account explicitly
+    # via config.account_routing.get_account_for_signal().
     if args.test:
         print(f"Writing test OIF to: {OIF_INCOMING}")
-        paths = write_oif("CLOSEPOSITION", 1)
+        paths = write_oif("CLOSEPOSITION", 1, account=ACCOUNT)
         print(f"Wrote: {paths}")
         time.sleep(1.5)
         fill = check_latest_fill()
         print(f"Latest fill: {fill}")
     else:
-        paths = write_oif(args.action, args.qty)
+        paths = write_oif(args.action, args.qty, account=ACCOUNT)
         print(f"Wrote: {paths}")
