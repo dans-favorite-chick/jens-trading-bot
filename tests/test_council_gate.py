@@ -272,10 +272,11 @@ def test_orchestrator_json_parse_failure_falls_back(have_keys, tmp_council_dir, 
 
 
 # ─── [COUNCIL-AUTO] Auto-trigger tests ──────────────────────────────
-# These cover the session-open date-guard and the regime-shift 15-min
-# debounce in bots/sim_bot.py without booting the full SimBot. We bind
-# the sim_bot methods onto a lightweight stub that only carries the
-# state those methods touch.
+# Covers the regime-shift 15-min debounce in bots/sim_bot.py without
+# booting the full SimBot. We bind sim_bot methods onto a lightweight
+# stub that only carries the state those methods touch.
+# (The 08:30 CT session-open trigger and its test were dropped per
+# Jennifer 2026-04-21 before ship.)
 
 from bots import sim_bot as _sim_bot  # noqa: E402
 
@@ -288,7 +289,6 @@ class _StubSimBot:
     COUNCIL_REGIME_DEBOUNCE_S = _sim_bot.SimBot.COUNCIL_REGIME_DEBOUNCE_S
 
     def __init__(self):
-        self._last_council_date = None
         self._last_regime_council_ts = 0.0
         self._last_seen_regime = None
         self.aggregator = None
@@ -310,39 +310,6 @@ class _FakeSession:
 
     def get_current_regime(self):
         return self.regime
-
-
-def test_council_session_open_guard_once_per_day():
-    """Second invocation on the same trading day is a no-op."""
-    bot = _StubSimBot()
-
-    # Fire once with today's date.
-    from datetime import date as _date
-    today = _date(2026, 4, 21)
-    assert bot._last_council_date != today
-
-    # Simulate the loop's core guard block twice for the same day.
-    async def _run_guard_once():
-        if bot._last_council_date != today:
-            bot._last_council_date = today
-            await bot._fire_council("session_open", f"session_open ({today})")
-
-    asyncio.run(_run_guard_once())
-    asyncio.run(_run_guard_once())
-    # Exactly one fire recorded.
-    assert len(bot.fired) == 1
-    assert bot.fired[0][0] == "session_open"
-
-    # A new day resets the guard.
-    next_day = _date(2026, 4, 22)
-
-    async def _run_guard_next():
-        if bot._last_council_date != next_day:
-            bot._last_council_date = next_day
-            await bot._fire_council("session_open", f"session_open ({next_day})")
-
-    asyncio.run(_run_guard_next())
-    assert len(bot.fired) == 2
 
 
 def test_council_regime_shift_debounce(monkeypatch):

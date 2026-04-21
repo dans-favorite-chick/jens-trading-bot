@@ -173,13 +173,12 @@ class SimBot(BaseBot):
             logger=logger,
         )
         # [COUNCIL-AUTO] S5 4A CouncilGate auto-trigger state.
-        # _last_council_date: guards the 8:30 AM CT session-open fire to
-        #                     at-most-once per trading day.
+        # Session-open 08:30 CT trigger dropped per Jennifer 2026-04-21;
+        # regime-shift is the only auto-trigger that ships.
         # _last_regime_council_ts: monotonic ts of the last regime-shift
         #                          fire — used for the 15-min debounce.
         # _last_seen_regime: last regime observed by the poll loop; used
         #                    to detect transitions (prev != new).
-        self._last_council_date = None
         self._last_regime_council_ts: float = 0.0
         self._last_seen_regime: str | None = None
 
@@ -218,9 +217,9 @@ class SimBot(BaseBot):
         standard base_bot async tasks."""
         # Launch daily flatten poller (30s cadence, mirrors base pattern).
         asyncio.ensure_future(self._daily_flatten_loop())
-        # [COUNCIL-AUTO] Launch council auto-trigger pollers. Same 30s
-        # cadence as the flatten poller, same safe-by-default semantics.
-        asyncio.ensure_future(self._council_session_open_loop())
+        # [COUNCIL-AUTO] Launch council regime-shift auto-trigger poller.
+        # Same 30s cadence as the flatten poller, same safe-by-default
+        # semantics. (Session-open 08:30 CT trigger dropped 2026-04-21.)
         asyncio.ensure_future(self._council_regime_shift_loop())
         await super().run()
 
@@ -265,12 +264,13 @@ class SimBot(BaseBot):
             logger.warning(f"[AI-DEBRIEF-HOOK] debrief skipped: {e}")
 
     # ─── [COUNCIL-AUTO] Auto-trigger CouncilGate ───────────────────
-    # Two independent pollers fire agents.council_gate.CouncilGate:
-    #   1. Daily 8:30 AM CT session open — once per trading day.
-    #   2. Regime shift — when SessionManager.get_current_regime() changes,
-    #      debounced at 15 min so rapid flips don't spam.
-    # Both wrap CouncilGate().run(ctx) in try/except so the bot never
+    # One poller fires agents.council_gate.CouncilGate:
+    #   Regime shift — when SessionManager.get_current_regime() changes,
+    #   debounced at 15 min so rapid flips don't spam.
+    # Wraps CouncilGate().run(ctx) in try/except so the bot never
     # crashes on council failure (safe_call semantics).
+    # (Daily 08:30 CT session-open trigger was dropped per Jennifer
+    # 2026-04-21 before ship.)
 
     COUNCIL_REGIME_DEBOUNCE_S = 15 * 60  # 15 minutes
 
@@ -302,30 +302,6 @@ class SimBot(BaseBot):
         except Exception as e:
             logger.warning(f"[COUNCIL] auto-fire failed ({reason}): {e}")
 
-    async def _council_session_open_loop(self):
-        """Poll every 30s; fire CouncilGate at 08:30 CT, once per trading day.
-
-        Mirrors the DailyFlattener pattern — time-gated, date-guarded.
-        """
-        from datetime import datetime as _dt, time as _time
-        from zoneinfo import ZoneInfo as _ZI
-        CT = _ZI("America/Chicago")
-        while True:
-            try:
-                now_ct = _dt.now(CT)
-                today_ct = now_ct.date()
-                if (now_ct.time() >= _time(8, 30)
-                        and now_ct.time() < _time(16, 0)
-                        and self._last_council_date != today_ct):
-                    self._last_council_date = today_ct
-                    await self._fire_council(
-                        trigger="session_open",
-                        reason=f"session_open 08:30 CT ({today_ct})",
-                    )
-            except Exception as e:
-                logger.warning(f"[COUNCIL] session-open poll error: {e}")
-            await asyncio.sleep(30)
-
     async def _council_regime_shift_loop(self):
         """Poll every 30s; on regime transition fire CouncilGate with a
         15-min debounce so rapid flips can't spam the council."""
@@ -347,7 +323,7 @@ class SimBot(BaseBot):
                             self._last_seen_regime = new_regime
                             await self._fire_council(
                                 trigger="regime_shift",
-                                reason=f"regime_shift {prev} -> {new_regime}",
+                                reason=f"regime-shift fired: {prev}->{new_regime}",
                             )
                         else:
                             logger.debug(
