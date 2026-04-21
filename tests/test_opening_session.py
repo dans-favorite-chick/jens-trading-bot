@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import date, datetime, time as dtime
+from datetime import date, datetime
 
 import pytest
 
@@ -136,6 +136,7 @@ def auction_out_market(**overrides) -> dict:
         "price": 25051.0,           # pullback to pd_high (acceptance)
         "rth_1min_volume": 130.0,
         "avg_1min_volume": 100.0,
+        "opening_holds_outside_at_845": True,
     }
     m.update(overrides)
     return m
@@ -165,6 +166,7 @@ def orb_market(**overrides) -> dict:
         "rth_open_price": 25020.0,
         "rth_5min_close_last": 25033.0,
         "price": 25033.0,
+        "orb_first_break_direction": None,  # no break yet (Phase 4 populates)
     }
     m.update(overrides)
     return m
@@ -226,6 +228,42 @@ class TestUniversalStopMath:
         )
         assert s.evaluate(m) is None
 
+    def test_stop_passes_through_when_in_range(self):
+        # Open Drive with ~64-tick structural stop — within [40, 100] → unchanged.
+        s = make_strategy()
+        m = open_drive_market()  # mid=25009, entry=25025 → 16pt = 64 ticks
+        sig = s.evaluate(m)
+        assert sig is not None
+        assert 40 <= sig.stop_ticks <= 100
+        # Structural stop was exactly (h5+l5)/2 = 25009; clamp should not widen it.
+        expected_structural = (m["rth_5min_high"] + m["rth_5min_low"]) / 2.0
+        assert sig.stop_price == pytest.approx(expected_structural)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Required-field gating
+# ═══════════════════════════════════════════════════════════════════
+class TestRequiredFieldGating:
+    def test_skips_when_required_field_missing_returns_none_not_crash(self):
+        s = make_strategy()
+        # Drop the pivot_pp field that Open Drive requires — evaluator
+        # must return None without raising (Phase 4 will populate it).
+        m = open_drive_market()
+        m.pop("pivot_pp")
+        assert s.evaluate(m) is None
+
+    def test_log_eval_emits_skip_reason_for_missing_fields(self, caplog):
+        import logging
+        s = make_strategy()
+        m = open_drive_market()
+        m.pop("pivot_pp")
+        with caplog.at_level(logging.DEBUG, logger="strategies.opening_session"):
+            s.evaluate(m)
+        assert any(
+            "SKIP open_drive missing_fields" in rec.getMessage()
+            for rec in caplog.records
+        )
+
 
 # ═══════════════════════════════════════════════════════════════════
 # Open Drive
@@ -260,7 +298,7 @@ class TestOpenDrive:
         # ORB fields absent, Auction windows blocked by opening_type; nothing fires.
         assert s.evaluate(m) is None
 
-    def test_open_drive_t1_is_pivot_pp(self):
+    def test_open_drive_target_is_pivot_pp(self):
         s = make_strategy()
         m = open_drive_market()
         sig = s.evaluate(m)
@@ -304,13 +342,41 @@ class TestOpenTestDrive:
         m = open_test_drive_market(price=25010.0)  # > rth_open=25008
         assert s.evaluate(m) is None
 
-    def test_open_test_drive_time_exit_75_min(self):
+    def test_open_test_drive_target_uses_prior_day_levels(self):
+        # SHORT: T1 = min(prior_day_poc, prior_day_val)
+        s = make_strategy()
+        m = open_test_drive_market()  # SHORT; pd_poc=24990, pd_val=24970
+        sig = s.evaluate(m)
+        assert sig is not None
+        assert sig.direction == "SHORT"
+        assert sig.metadata["t1"] == pytest.approx(min(m["prior_day_poc"], m["prior_day_val"]))
+
+        # LONG: T1 = max(prior_day_poc, prior_day_vah)
+        s2 = make_strategy()
+        m2 = open_test_drive_market(
+            rth_open_price=24992.0,
+            rth_5min_high=25000.0,
+            rth_5min_low=24985.0,
+            rth_5min_close=24998.0,
+            price=24999.0,
+            prior_day_high=25050.0,
+            prior_day_low=24990.0,
+            prior_day_vah=25020.0,
+            prior_day_val=24980.0,
+            prior_day_poc=25010.0,
+        )
+        sig2 = s2.evaluate(m2)
+        assert sig2 is not None
+        assert sig2.direction == "LONG"
+        assert sig2.metadata["t1"] == pytest.approx(max(m2["prior_day_poc"], m2["prior_day_vah"]))
+
+    def test_open_test_drive_time_exit_is_hhmm_string(self):
         s = make_strategy()
         m = open_test_drive_market(now_ct=ct(8, 50))
         sig = s.evaluate(m)
         assert sig is not None
-        # 08:50 + 75 min = 10:05
-        assert sig.metadata["time_exit_ct"] == dtime(10, 5)
+        # 08:50 + 75 min = 10:05 → "HH:MM"
+        assert sig.metadata["time_exit_ct"] == "10:05"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -380,6 +446,7 @@ class TestOpenAuctionOut:
         m = auction_out_market(
             rth_open_price=25060.0,     # smaller gap up (10 pts above pd_high)
             price=25049.0,              # back inside prior range
+            opening_holds_outside_at_845=False,
         )
         sig = s.evaluate(m)
         assert sig is not None
@@ -392,6 +459,7 @@ class TestOpenAuctionOut:
         m = auction_out_market(
             rth_open_price=24940.0,     # small gap down
             price=24951.0,              # back inside prior range
+            opening_holds_outside_at_845=False,
         )
         sig = s.evaluate(m)
         assert sig is not None
@@ -483,18 +551,13 @@ class TestORB:
         expected_t1 = m["price"] + 0.5 * or_size
         assert sig.metadata["t1"] == pytest.approx(expected_t1)
 
-    def test_orb_one_trade_per_day_after_first_break(self):
+    def test_orb_one_trade_per_day_after_first_break_other_direction(self):
         s = make_strategy()
-        # First break LONG fires.
-        first = s.evaluate(orb_market())
-        assert first is not None
-        assert first.direction == "LONG"
-        # Reset the trade counter so max-per-day doesn't confound the one-trade rule.
-        s._daily_trades_today = 0
-        # Second break in OPPOSITE direction must be rejected by the one-trade rule.
+        # Snapshot says the day's first OR break was LONG. A subsequent
+        # SHORT break attempt must be rejected by the one-trade rule.
         m = orb_market(
-            now_ct=ct(9, 5),
             rth_5min_close_last=25007.0, price=25007.0,
+            orb_first_break_direction="LONG",
         )
         assert s.evaluate(m) is None
 

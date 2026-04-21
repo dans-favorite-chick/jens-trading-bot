@@ -121,6 +121,11 @@ LAB_STRATEGY_OVERRIDES = {
         "min_volume_ratio": 0.5,     # Lab: broader volume tolerance
         "target_rr": 5.0,            # 5:1 — exit on stall or trend break
     },
+    "opening_session": {
+        # Lab mirrors prod defaults — thresholds are already tuned
+        # research values (Fix 6 stops, volume/wick ratios per paper).
+        # Empty override = use config/strategies.py values as-is.
+    },
 }
 
 

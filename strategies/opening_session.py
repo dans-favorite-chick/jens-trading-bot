@@ -35,7 +35,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, time as dtime, timedelta
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from config.settings import TICK_SIZE
 from core.session_levels import (
@@ -51,11 +51,20 @@ logger = logging.getLogger(__name__)
 # ─── Exit planning ──────────────────────────────────────────────────
 @dataclass
 class ExitPlan:
-    """Resolved exit plan for a single trade."""
+    """
+    Resolved exit plan for a single trade. 1-contract semantics:
+      - Full exit at primary_target (or at time_exit_ct, whichever first)
+      - Stop moves to entry when be_move_at price is touched
+      - If trail_after_target is True, after primary_target hits the
+        stop ratchets to trail_distance_ticks behind highest/lowest bar
+        until time_exit_ct or invalidation_check fires.
+    """
     primary_target: float
     be_move_at: Optional[float]
-    time_exit_ct: dtime
-    invalidation_check: Optional[Callable[..., bool]] = None
+    time_exit_ct: str                       # "HH:MM" in CT
+    invalidation_check: Optional[str] = None  # name of strategy-internal check
+    trail_after_target: bool = False
+    trail_distance_ticks: int = 20
     metadata: dict = field(default_factory=dict)
 
 
@@ -72,11 +81,10 @@ class OpeningSessionStrategy(BaseStrategy):
 
     def __init__(self, config: dict):
         super().__init__(config)
-        # Per-day state
+        # Per-day state (ORB's one-direction-per-day rule is driven by
+        # the orb_first_break_direction snapshot field — no internal state).
         self._daily_trades_today: int = 0
         self._trade_date: Optional[str] = None
-        # ORB: one-direction-per-day rule
-        self._orb_first_break_direction: Optional[str] = None
 
     # ── Daily reset ────────────────────────────────────────────────
     def _maybe_reset_daily(self, now_ct: datetime) -> None:
@@ -84,7 +92,6 @@ class OpeningSessionStrategy(BaseStrategy):
         if self._trade_date != today:
             self._trade_date = today
             self._daily_trades_today = 0
-            self._orb_first_break_direction = None
 
     # ── Logging helper ─────────────────────────────────────────────
     def _log_eval(self, msg: str) -> None:
@@ -187,17 +194,17 @@ class OpeningSessionStrategy(BaseStrategy):
         return signal
 
     # ── Universal stop math ────────────────────────────────────────
-    def _finalize_stop(
+    def _apply_universal_stop_clamp(
         self,
         entry_price: float,
         structural_stop: float,
         direction: str,
         sub_name: str,
-    ) -> Optional[tuple[float, int]]:
+    ) -> Optional[float]:
         """
-        Apply the MIN/MAX tick clamp. Returns (stop_price, stop_ticks)
-        or None if the structural stop exceeds MAX and the signal must
-        be rejected.
+        Apply the MIN/MAX tick clamp (Fix 6). Returns final stop_price,
+        or None if the structural distance exceeds MAX and the signal
+        must be rejected.
         """
         min_ticks = int(self.config.get("min_stop_ticks", 40))
         max_ticks = int(self.config.get("max_stop_ticks", 100))
@@ -211,14 +218,14 @@ class OpeningSessionStrategy(BaseStrategy):
             return None
 
         if dist_ticks < min_ticks:
-            # Widen to noise floor.
             if direction == "LONG":
-                stop_price = entry_price - (min_ticks * TICK_SIZE)
-            else:
-                stop_price = entry_price + (min_ticks * TICK_SIZE)
-            return (round(stop_price, 2), min_ticks)
+                return round(entry_price - (min_ticks * TICK_SIZE), 2)
+            return round(entry_price + (min_ticks * TICK_SIZE), 2)
 
-        return (round(structural_stop, 2), int(round(dist_ticks)))
+        return round(structural_stop, 2)
+
+    def _stop_ticks(self, entry_price: float, stop_price: float) -> int:
+        return int(round(abs(entry_price - stop_price) / TICK_SIZE))
 
     # ── Exit planner ───────────────────────────────────────────────
     def determine_exits(
@@ -232,20 +239,25 @@ class OpeningSessionStrategy(BaseStrategy):
                 be_move_at=targets.get("be_milestone"),
                 time_exit_ct=targets["time_exit"],
                 invalidation_check=targets.get("invalidation"),
+                trail_after_target=targets.get("trail_after_target", False),
+                trail_distance_ticks=targets.get("trail_ticks", 20),
                 metadata=targets.get("metadata", {}),
             )
 
-        # Multi-leg scaling stubbed for future contract_count > 1.
-        raise NotImplementedError("Multi-leg scaling not yet implemented")
+        raise NotImplementedError(
+            "Multi-leg scaling not yet implemented; 1-contract only for now"
+        )
 
     def _get_strategy_targets(self, signal: Signal, snapshot: dict) -> dict:
-        """Pull T1 / BE-milestone / time-exit from the signal's metadata."""
+        """Pull T1 / BE-milestone / time-exit / trail cfg from signal metadata."""
         md = signal.metadata or {}
         return {
             "t1": md.get("t1"),
             "be_milestone": md.get("be_milestone"),
             "time_exit": md.get("time_exit_ct"),
             "invalidation": md.get("invalidation"),
+            "trail_after_target": md.get("trail_after_target", False),
+            "trail_ticks": md.get("trail_ticks", 20),
             "metadata": md,
         }
 
@@ -259,7 +271,7 @@ class OpeningSessionStrategy(BaseStrategy):
         stop_ticks: int,
         t1: float,
         be_milestone: Optional[float],
-        time_exit_ct: dtime,
+        time_exit_ct: str,
         sub_name: str,
         reason: str,
         confluences: list[str],
@@ -341,10 +353,10 @@ class OpeningSessionStrategy(BaseStrategy):
 
         # Structural stop = midpoint of 5-min OR.
         structural_stop = (h5 + l5) / 2.0
-        finalized = self._finalize_stop(price, structural_stop, direction, sub)
-        if finalized is None:
+        stop_price = self._apply_universal_stop_clamp(price, structural_stop, direction, sub)
+        if stop_price is None:
             return None
-        stop_price, stop_ticks = finalized
+        stop_ticks = self._stop_ticks(price, stop_price)
 
         # 1R distance (points) for BE milestone.
         one_r = abs(price - stop_price)
@@ -357,7 +369,7 @@ class OpeningSessionStrategy(BaseStrategy):
             stop_ticks=stop_ticks,
             t1=pivot_pp,
             be_milestone=be_milestone,
-            time_exit_ct=_parse_hhmm("14:30"),
+            time_exit_ct="14:30",
             sub_name=sub,
             reason=f"Open Drive {direction} — break of 5-min OR with volume",
             confluences=[
@@ -369,7 +381,8 @@ class OpeningSessionStrategy(BaseStrategy):
             extra_metadata={
                 "or_high": h5,
                 "or_low": l5,
-                "trail_ticks_after_t1": int(self.config.get("open_drive_trail_ticks", 20)),
+                "trail_after_target": True,
+                "trail_ticks": int(self.config.get("open_drive_trail_ticks", 20)),
             },
         )
 
@@ -388,8 +401,11 @@ class OpeningSessionStrategy(BaseStrategy):
         pd_high = market.get("prior_day_high")
         pd_low = market.get("prior_day_low")
         pd_poc = market.get("prior_day_poc")
+        pd_vah = market.get("prior_day_vah")
+        pd_val = market.get("prior_day_val")
 
-        required = (rth_open, h5, l5, c5, price, v1, avg_v1, pd_high, pd_low, pd_poc)
+        required = (rth_open, h5, l5, c5, price, v1, avg_v1,
+                    pd_high, pd_low, pd_poc, pd_vah, pd_val)
         if any(v is None for v in required):
             self._log_eval(f"SKIP {sub} missing_fields")
             return None
@@ -420,22 +436,27 @@ class OpeningSessionStrategy(BaseStrategy):
         buf = buffer_ticks * TICK_SIZE
         structural_stop = (h5 + buf) if direction == "SHORT" else (l5 - buf)
 
-        finalized = self._finalize_stop(price, structural_stop, direction, sub)
-        if finalized is None:
+        stop_price = self._apply_universal_stop_clamp(price, structural_stop, direction, sub)
+        if stop_price is None:
             return None
-        stop_price, stop_ticks = finalized
+        stop_ticks = self._stop_ticks(price, stop_price)
 
         one_r = abs(price - stop_price)
         be_milestone = price + one_r if direction == "LONG" else price - one_r
 
-        # T1: prior_day_poc.
-        t1 = pd_poc
+        # T1: closest rotation-target on the trade side of POC.
+        # SHORT → min(POC, VAL); LONG → max(POC, VAH).
+        t1 = min(pd_poc, pd_val) if direction == "SHORT" else max(pd_poc, pd_vah)
 
-        # time_exit: entry_time + 75 minutes (encoded in metadata; resolved by determine_exits consumer).
+        # time_exit: entry_time + 75 min, formatted as "HH:MM"; hard cap
+        # fallback "10:30" if now_ct missing.
         time_exit_min = int(self.config.get("open_test_drive_time_exit_min", 75))
         now_ct = market.get("now_ct")
-        time_exit = (now_ct + timedelta(minutes=time_exit_min)).time() if isinstance(now_ct, datetime) \
-            else _parse_hhmm("14:30")
+        if isinstance(now_ct, datetime):
+            _exit_t = (now_ct + timedelta(minutes=time_exit_min)).time()
+            time_exit = f"{_exit_t.hour:02d}:{_exit_t.minute:02d}"
+        else:
+            time_exit = "10:30"
 
         return self._build_signal(
             direction=direction,
@@ -505,13 +526,13 @@ class OpeningSessionStrategy(BaseStrategy):
         buf = buffer_ticks * TICK_SIZE
         structural_stop = (ib_high + buf) if direction == "SHORT" else (ib_low - buf)
 
-        finalized = self._finalize_stop(price, structural_stop, direction, sub)
-        if finalized is None:
+        stop_price = self._apply_universal_stop_clamp(price, structural_stop, direction, sub)
+        if stop_price is None:
             return None
-        stop_price, stop_ticks = finalized
+        stop_ticks = self._stop_ticks(price, stop_price)
 
         t1 = pd_poc
-        time_exit = _parse_hhmm(self.config.get("open_auction_in_time_exit_ct", "12:30"))
+        time_exit = self.config.get("open_auction_in_time_exit_ct", "12:30")
 
         return self._build_signal(
             direction=direction,
@@ -545,8 +566,10 @@ class OpeningSessionStrategy(BaseStrategy):
         avg_v1 = market.get("avg_1min_volume")
         r1 = market.get("pivot_r1")
         s1 = market.get("pivot_s1")
+        holds_outside = market.get("opening_holds_outside_at_845")
 
-        required = (rth_open, pd_high, pd_low, pd_poc, price, v1, avg_v1, r1, s1)
+        required = (rth_open, pd_high, pd_low, pd_poc, price, v1, avg_v1, r1, s1,
+                    holds_outside)
         if any(v is None for v in required):
             self._log_eval(f"SKIP {sub} missing_fields")
             return None
@@ -565,11 +588,8 @@ class OpeningSessionStrategy(BaseStrategy):
             self._log_eval(f"NO_SIGNAL {sub} no_gap")
             return None
 
-        # Acceptance vs rejection at 8:45 check time.
-        if gap == "UP":
-            acceptance = price >= pd_high
-        else:
-            acceptance = price <= pd_low
+        # Snapshot tells us whether price held outside at 08:45 check.
+        acceptance = bool(holds_outside)
 
         buffer_ticks = int(self.config.get("open_auction_out_stop_buffer_ticks", 8))
         buf = buffer_ticks * TICK_SIZE
@@ -603,15 +623,15 @@ class OpeningSessionStrategy(BaseStrategy):
             t1 = pd_poc
             scenario = "REJECTION"
 
-        finalized = self._finalize_stop(price, structural_stop, direction, sub)
-        if finalized is None:
+        stop_price = self._apply_universal_stop_clamp(price, structural_stop, direction, sub)
+        if stop_price is None:
             return None
-        stop_price, stop_ticks = finalized
+        stop_ticks = self._stop_ticks(price, stop_price)
 
         one_r = abs(price - stop_price)
         be_milestone = price + one_r if direction == "LONG" else price - one_r
 
-        time_exit = _parse_hhmm(self.config.get("open_auction_out_time_exit_ct", "11:00"))
+        time_exit = self.config.get("open_auction_out_time_exit_ct", "11:00")
 
         return self._build_signal(
             direction=direction,
@@ -675,16 +695,16 @@ class OpeningSessionStrategy(BaseStrategy):
             self._log_eval(f"NO_SIGNAL {sub} no_pm_break")
             return None
 
-        finalized = self._finalize_stop(price, structural_stop, direction, sub)
-        if finalized is None:
+        stop_price = self._apply_universal_stop_clamp(price, structural_stop, direction, sub)
+        if stop_price is None:
             return None
-        stop_price, stop_ticks = finalized
+        stop_ticks = self._stop_ticks(price, stop_price)
 
-        # BE milestone = halfway to pivot_pp.
+        # BE milestone = halfway to pivot_pp (unique to PM breakout).
         dist_to_pp = pivot_pp - price if direction == "LONG" else price - pivot_pp
         be_milestone = price + dist_to_pp / 2.0 if direction == "LONG" else price - dist_to_pp / 2.0
 
-        time_exit = _parse_hhmm(self.config.get("premarket_breakout_time_exit_ct", "10:30"))
+        time_exit = self.config.get("premarket_breakout_time_exit_ct", "10:30")
 
         return self._build_signal(
             direction=direction,
@@ -714,6 +734,9 @@ class OpeningSessionStrategy(BaseStrategy):
         rth_open = market.get("rth_open_price")
         last_5m_close = market.get("rth_5min_close_last")
         price = market.get("price")
+        # Snapshot-provided (Phase 4 will populate): direction of first
+        # 5-min close that broke the 15-min OR today. None = no break yet.
+        first_break = market.get("orb_first_break_direction")
 
         required = (or_high, or_low, rth_open, last_5m_close, price)
         if any(v is None for v in required):
@@ -740,18 +763,16 @@ class OpeningSessionStrategy(BaseStrategy):
             return None
 
         # One-trade-per-day: reject if first break was the opposite direction.
-        if self._orb_first_break_direction is None:
-            self._orb_first_break_direction = direction
-        elif self._orb_first_break_direction != direction:
+        if first_break is not None and first_break != direction:
             self._log_eval(f"NO_SIGNAL {sub} opposite_of_first_break")
             return None
 
         # Structural stop = opposite side of OR.
         structural_stop = or_low if direction == "LONG" else or_high
-        finalized = self._finalize_stop(price, structural_stop, direction, sub)
-        if finalized is None:
+        stop_price = self._apply_universal_stop_clamp(price, structural_stop, direction, sub)
+        if stop_price is None:
             return None
-        stop_price, stop_ticks = finalized
+        stop_ticks = self._stop_ticks(price, stop_price)
 
         target_pct = float(self.config.get("orb_target_pct_of_or", 0.50))
         be_pct = float(self.config.get("orb_be_pct_of_or", 0.25))
@@ -765,7 +786,7 @@ class OpeningSessionStrategy(BaseStrategy):
             t1 = price - t1_dist
             be_milestone = price - be_dist
 
-        time_exit = _parse_hhmm(self.config.get("orb_time_exit_ct", "14:30"))
+        time_exit = self.config.get("orb_time_exit_ct", "14:30")
 
         return self._build_signal(
             direction=direction,
