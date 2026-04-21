@@ -80,12 +80,14 @@ class TestRecordTrade:
         rm.record_trade(-30.0)
         assert rm.state.recovery_mode is True
 
-    def test_record_trade_triggers_cooloff_after_3_consecutive_losses(self, rm):
-        rm.record_trade(-5.0)
-        rm.record_trade(-5.0)
+    def test_record_trade_triggers_cooloff_after_consecutive_losses(self, rm):
+        # Cooloff threshold is config-driven (COOLOFF_AFTER_CONSECUTIVE_LOSSES, currently 2).
+        from config.settings import COOLOFF_AFTER_CONSECUTIVE_LOSSES
+        for _ in range(COOLOFF_AFTER_CONSECUTIVE_LOSSES - 1):
+            rm.record_trade(-5.0)
         assert rm.state.cooloff_until == 0.0  # Not yet
 
-        rm.record_trade(-5.0)  # 3rd consecutive loss
+        rm.record_trade(-5.0)  # Nth consecutive loss triggers cooloff
         assert rm.state.cooloff_until > time.time()
 
     def test_record_trade_win_resets_consecutive_losses(self, rm):
