@@ -728,7 +728,7 @@ class SessionDebriefer(BaseAgent):
     @staticmethod
     def _maybe_send_telegram(md: str, target_date: date) -> None:
         """Fire-and-forget Telegram dispatch. Silent if unavailable."""
-        if not os.environ.get("TELEGRAM_BOT_TOKEN"):
+        if not (os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN")):
             return
         try:
             from core import telegram_notifier  # type: ignore
