@@ -52,10 +52,13 @@ STRATEGY_KEYS: list[str] = [
     "vwap_band_pullback",
     "dom_pullback",
     "ib_breakout",
+    "compression_breakout",
     "compression_breakout_15m",
     "compression_breakout_30m",
     "noise_area",
     "orb",
+    # Parent key for sub-strategy dispatch (opening_session evaluates all 6 subs)
+    "opening_session",
 ]
 
 
