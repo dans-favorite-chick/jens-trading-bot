@@ -73,3 +73,62 @@ python tools/menthorq_paste_helper.py
 
 It validates each paste before saving and reports the resulting
 regime vs. current NQ price.
+
+## Net GEX regime classification (B27)
+
+**Net GEX is the primary regime signal.** MenthorQ's Net GEX magnitude
+directly reflects dealer hedging direction — the ground-truth "am I in
+a positive-gamma or negative-gamma day" question. HVL position tells
+you *where price sits within the regime structure*, which is a
+different (and correlated but weaker) signal.
+
+### Classifier thresholds (`config/settings.py`)
+
+| Regime             | Net GEX range               |
+|--------------------|-----------------------------|
+| `POSITIVE_STRONG`  | `> +3M`                     |
+| `POSITIVE_NORMAL`  | `+500K … +3M`               |
+| `NEUTRAL`          | `−500K … +500K`             |
+| `NEGATIVE_NORMAL`  | `−3M … −500K`               |
+| `NEGATIVE_STRONG`  | `< −3M`                     |
+
+If Net GEX is **absent from the paste**, the classifier falls back to
+the HVL proxy (price vs. `hvl_0dte || hvl` with an 8-tick transition
+band) and emits a DEBUG log line `classifier using HVL proxy (no Net
+GEX in paste)`. The HVL fallback can only produce `POSITIVE_NORMAL`,
+`NEGATIVE_NORMAL`, or `NEUTRAL` — it cannot distinguish `STRONG` from
+`NORMAL` magnitudes.
+
+### How to include Net GEX in the daily paste
+
+Append three key/value pairs to the end of the `_levels.txt` line:
+
+```
+, Net GEX, <value>, Total GEX, <value>, IV, <pct>
+```
+
+Values accept signed integers and K / M / B suffixes (case-
+insensitive):
+
+- `3920000`  → 3,920,000
+- `+3.92M`   → 3,920,000
+- `-4.5M`    → −4,500,000
+- `500K`     → 500,000
+- `2.5B`     → 2,500,000,000
+
+### Example
+
+Old line (regime via HVL proxy only):
+
+```
+$NQM2026: Call Resistance, 26500, Put Support, 25000, HVL, 25275, ..., GEX 10, 26200
+```
+
+New line (regime via Net GEX, authoritative):
+
+```
+$NQM2026: Call Resistance, 26500, Put Support, 25000, HVL, 25275, ..., GEX 10, 26200, Net GEX, 3920000, Total GEX, 9330000, IV, 19.42
+```
+
+Net GEX / Total GEX / IV are **enrichment only** — they do not affect
+`is_complete`, which continues to require only the Tier 1 wall levels.
