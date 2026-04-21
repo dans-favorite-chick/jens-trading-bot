@@ -65,3 +65,45 @@ assumed, why, and where to revisit if the assumption turns out wrong.
 - Kept: `core.structural_bias.score_menthorq_gamma` (15-pt composite weight), `core.continuation_reversal` (uses `market.get("gamma_regime")` for context adjustment).
 
 **Tests**: new `tests/test_scoring_menthorq_gamma.py` (20 tests) covers enum regimes, string back-compat, graceful missing/UNKNOWN handling, Path A poisoning (proves Path B dominates), `open()`-patch proves zero file IO from scorer, wall proximity, clamp bounds. Full run `tests/test_scoring_menthorq_gamma.py tests/test_menthorq_gamma.py tests/test_b11_menthorq_bridge_health.py` → 52 passed.
+
+## 2026-04-21 — Stream S4 (agent-infra)
+
+### S4.1 — Extend, don't overwrite `agents/`
+- **Assumption:** existing `agents/__init__.py`, `ai_client.py`,
+  `council_gate.py`, etc. stay untouched. S4 adds NEW modules
+  (`config.py`, `base_agent.py`, `prompts/`) and re-exports them from
+  `__init__.py`.
+- **Why:** mission scope says "extend, don't overwrite." The existing
+  `ai_client.py` already provides tiered multi-provider routing (Groq /
+  Gemini / Grok / Ollama); S4 `base_agent.py` is a narrower, Phase-E-H
+  specific surface (Gemini + Claude only) sitting alongside it.
+
+### S4.2 — Optional-dep strategy
+- **Assumption:** `anthropic` and `aiohttp` are already in
+  `requirements.txt` (verified). `google-generativeai` is NOT added —
+  it is deprecated (per FutureWarning) in favour of `google-genai` used
+  by the existing `ai_client.py`. `base_agent.AIClient` tries to import
+  `google.generativeai` anyway (works if present) and falls back to
+  `aiohttp` REST call if missing — so no new pin required. Sub-streams
+  that want the newer SDK can use `agents.ai_client.ask_gemini`.
+- **Revisit if:** a sub-stream needs a feature of the newer `google-genai`
+  SDK in the base_agent surface — then switch the import shim to
+  `from google import genai` and drop the old path.
+
+### S4.3 — Defaults
+- **Timeout:** 10s. **Retries:** 3. **Backoff:** 1s initial, 2x
+  exponential. All overridable via env vars (`AGENT_TIMEOUT_S`,
+  `AGENT_MAX_ATTEMPTS`, `AGENT_BACKOFF_INITIAL_S`, `AGENT_BACKOFF_FACTOR`).
+
+### S4.4 — DEGRADED flag vs crash
+- **Assumption:** missing `GOOGLE_API_KEY` / `ANTHROPIC_API_KEY` logs
+  CRITICAL once and sets `agents.config.DEGRADED = True`. Agent code
+  must check the flag (or just call `ask_*` which short-circuits and
+  returns `default`). Importing `agents` in a no-key environment does
+  NOT crash.
+
+### S4.5 — Call log location
+- **Path:** `logs/agents/YYYY-MM-DD_agent_calls.jsonl` relative to
+  project root. Overridable via `AGENT_LOG_DIR`. Dir auto-created on
+  first write. Log-write failures are swallowed with a WARNING (never
+  affect the caller's return value).
