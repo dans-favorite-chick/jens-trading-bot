@@ -39,6 +39,15 @@ logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
 )
+# B23: silence third-party DEBUG noise while preserving bot-level DEBUG for strategy debugging.
+# Without this, websockets.client alone produces ~10 log lines/second of raw tick dumps
+# and yfinance/peewee emit dozens of lines per intermarket quote cycle — drowning the
+# Fix 5 [EVAL] reject-reason logs in noise and (hypothesis) possibly contributing to
+# the silent lab crashes observed 2026-04-20 and 2026-04-21 morning.
+for _noisy in ("websockets.client", "websockets.server", "yfinance",
+               "httpcore", "httpcore.connection", "httpcore.http11",
+               "peewee", "chromadb"):
+    logging.getLogger(_noisy).setLevel(logging.INFO)
 logger = logging.getLogger("LabBot")
 
 # ─── ZERO GATE Settings ──────────────────────────────────────────
