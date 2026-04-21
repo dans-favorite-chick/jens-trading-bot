@@ -6,6 +6,57 @@ separately via the pytest suite itself.
 
 ---
 
+## B39 — Silent phantom-fill divergence in sim_bot (HIGH PRIORITY)
+**Status**: OPEN
+**Discovered**: 2026-04-21 evening, first sim_bot run after Phase C flip
+**Symptom**: Python's PositionManager shows `active_positions=1` while NT8
+shows no active trade on the routed Sim account.
+
+**Root cause**: When `write_bracket_order` fires and the 5s fill-wait expires
+without a confirmation file appearing in `outgoing/`, the bot logs:
+```
+[OIF:<id>] No fill confirmation after 5.0s
+[<id>] No fill file (sim mode) — assuming filled
+[OPEN:<id>] LONG 1x @ <price> ... account=<Sim*>
+```
+…and *silently* opens the position in internal state anyway. This creates
+divergence: Python thinks it's in a trade (blocks other strategies via
+`is_flat_for`, bleeds imaginary P&L, eventually trips halts), while NT8 has
+no position so no actual fill/exit ever occurs.
+
+**Contributing factors suspected (not confirmed):**
+1. One or more of the 16 dedicated Sim accounts (`SimSpring Setup`, etc.)
+   may not exist in NT8 yet — orders route to nonexistent account → no fill
+2. After-hours MNQ liquidity too thin for immediate sim-fill
+3. `incoming/`/`outgoing/` path config mismatch between Python and NT8
+4. NT8 TickStreamer or OIF-reader indicator not consuming orders during
+   afterhours session
+
+**Required fix** (design):
+- When `live_trading=False` AND a fill-confirmation file is absent after
+  timeout, EITHER:
+  (a) Treat as paper-only: open Python position but tag it `paper_only=True`,
+      never route real NT8 exits to it, and emit a WARNING alert so the
+      operator knows NT8 didn't execute; OR
+  (b) Hard-fail: do NOT open internal position; log error + Telegram alert.
+- Add integration test: OIF writer + fill-reader round-trip, assert
+  divergence path either rejects or clearly marks paper-only.
+- Verify all 16 dedicated Sim account names exist in NT8 Control Center
+  before any trade fires. Add startup sanity check that queries NT8 for
+  account list via bridge and WARNs on missing accounts.
+
+**Immediate mitigation** (already applied 2026-04-21):
+- Killed sim_bot PIDs 32584+30464 to clear phantom position from memory.
+- Operator to verify all SimXxx accounts exist in NT8 before next restart.
+
+**Files to touch**:
+- `bots/base_bot.py` (fill-wait fallback logic)
+- `bridge/oif_writer.py` (or wherever fill-file polling lives)
+- `core/position_manager.py` (add `paper_only` flag to Position)
+- `tests/test_4c_integration.py` (extend with divergence path)
+
+---
+
 ## B12 — fix/b12-vwap-pullback-base-strategy SUPERSEDED
 **Status**: SUPERSEDED (not merged)
 **Reason**: b12's BaseStrategy-contract concern was already resolved

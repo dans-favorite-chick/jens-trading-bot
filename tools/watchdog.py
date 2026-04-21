@@ -21,7 +21,7 @@ Usage:
     python tools/watchdog.py                    # Run watchdog
     python tools/watchdog.py --no-restart       # Monitor only, no auto-restart
     python tools/watchdog.py --bots prod            # Only watch prod bot
-    python tools/watchdog.py --bots prod,lab,sim    # Watch all three (default)
+    python tools/watchdog.py                        # Default: watches prod+sim
 """
 
 import argparse

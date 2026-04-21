@@ -150,7 +150,6 @@ def _bot_status(name: str) -> str:
 
 _state = {
     "prod": {},
-    "lab": {},
     "sim": {},
     "bridge_health": {},
     "connection_log": [],
@@ -207,12 +206,10 @@ def api_status():
     with _state_lock:
         return safe_jsonify({
             "prod": _state["prod"],
-            "lab": _state["lab"],
             "sim": _state.get("sim", {}),
             "bridge": _state["bridge_health"],
             "bot_processes": {
                 "prod": _bot_status("prod"),
-                "lab": _bot_status("lab"),
                 "sim": _bot_status("sim"),
             },
             "connection_log": _state["connection_log"][-200:],
@@ -506,8 +503,8 @@ def api_get_commands():
 def api_start_bot():
     data = request.get_json(silent=True) or {}
     name = data.get("name", "")
-    if name not in ("prod", "lab", "sim"):
-        return jsonify({"ok": False, "error": "name must be 'prod', 'lab', or 'sim'"}), 400
+    if name not in ("prod", "sim"):
+        return jsonify({"ok": False, "error": "name must be 'prod' or 'sim' (lab retired 2026-04-21)"}), 400
     result = _start_bot(name)
     return jsonify(result)
 
@@ -516,8 +513,8 @@ def api_start_bot():
 def api_stop_bot():
     data = request.get_json(silent=True) or {}
     name = data.get("name", "")
-    if name not in ("prod", "lab", "sim"):
-        return jsonify({"ok": False, "error": "name must be 'prod', 'lab', or 'sim'"}), 400
+    if name not in ("prod", "sim"):
+        return jsonify({"ok": False, "error": "name must be 'prod' or 'sim' (lab retired 2026-04-21)"}), 400
     result = _stop_bot(name)
     return jsonify(result)
 
@@ -526,7 +523,6 @@ def api_stop_bot():
 def api_bot_proc_status():
     return jsonify({
         "prod": _bot_status("prod"),
-        "lab": _bot_status("lab"),
         "sim": _bot_status("sim"),
     })
 

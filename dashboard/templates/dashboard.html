@@ -243,7 +243,6 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
   <span id="h-bridge-nt" class="health-pill dead"><span class="dot"></span>Bridge :8765: <span class="age">--</span></span>
   <span id="h-bridge-bot" class="health-pill dead"><span class="dot"></span>Bridge :8766: <span class="age">--</span></span>
   <span id="h-prod" class="health-pill dead"><span class="dot"></span>Prod Bot: <span class="age">--</span></span>
-  <span id="h-lab" class="health-pill dead"><span class="dot"></span>Lab Bot: <span class="age">--</span></span>
   <span id="h-sim" class="health-pill dead"><span class="dot"></span>Sim Bot: <span class="age">--</span></span>
 </div>
 
@@ -278,7 +277,6 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
 <!-- ===== SECTION: Bot Tabs ===== -->
 <div class="tab-bar">
   <button class="tab-btn active" id="tab-prod" onclick="switchBot('prod', this)">Prod Bot</button>
-  <button class="tab-btn" id="tab-lab" onclick="switchBot('lab', this)">Lab Bot</button>
   <button class="tab-btn" id="tab-sim" onclick="switchBot('sim', this)">Sim Bot</button>
   <div class="bot-controls">
     <span class="bot-proc-status" id="bot-proc-label">Prod: stopped</span>
@@ -545,7 +543,7 @@ function renderHealth(h, procs) {
     `Bridge :8766: ${bots.length} bots`);
 
   // Bot pills: green=connected to bridge, yellow=process running but not connected, red=down
-  for (const bn of ['prod', 'lab', 'sim']) {
+  for (const bn of ['prod', 'sim']) {
     const bridgeOk = bots.includes(bn);
     const procOk = procs[bn] === 'running';
     const cls = bridgeOk ? 'live' : procOk ? 'stale' : 'dead';
