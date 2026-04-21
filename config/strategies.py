@@ -216,6 +216,61 @@ STRATEGIES = {
         #   Is exhaustion_tf_min = min_tf_votes-1 the right relaxation?
     },
 
+    "opening_session": {
+        # Opening-window family: 4 opening-type branches + Premarket Breakout
+        # + 15-min ORB. Lab only until Phase 4 wiring.
+        "enabled": True,
+        "stage": "lab",
+        "validated": False,
+
+        # Universal guards
+        "max_trades_per_day": 2,
+        "day_flat_time_ct": "14:30",
+        "news_blackout_min": 5,
+
+        # Universal stops (Fix 6 standard, locked 2026-04-20)
+        "min_stop_ticks": 40,
+        "max_stop_ticks": 100,
+
+        # Open Drive
+        "open_drive_min_displacement_pts": 15,
+        "open_drive_max_pullback_pct": 0.30,
+        "open_drive_min_volume_ratio": 1.4,
+        "open_drive_entry_volume_ratio": 1.2,
+        "open_drive_trail_ticks": 20,
+
+        # Open Test Drive
+        "open_test_drive_test_buffer_ticks": 8,
+        "open_test_drive_reversal_volume_ratio": 1.3,
+        "open_test_drive_stop_buffer_ticks": 4,
+        "open_test_drive_time_exit_min": 75,
+
+        # Open Auction In
+        "open_auction_in_wick_pct_min": 0.60,
+        "open_auction_in_volume_ratio": 1.2,
+        "open_auction_in_stop_buffer_ticks": 8,
+        "open_auction_in_time_exit_ct": "12:30",
+
+        # Open Auction Out
+        "open_auction_out_wait_min": 15,
+        "open_auction_out_stop_buffer_ticks": 8,
+        "open_auction_out_time_exit_ct": "11:00",
+
+        # Premarket Breakout
+        "premarket_breakout_min_range_pts": 10,
+        "premarket_breakout_volume_ratio": 1.4,
+        "premarket_breakout_buffer_ticks": 2,
+        "premarket_breakout_stop_buffer_ticks": 8,
+        "premarket_breakout_time_exit_ct": "10:30",
+
+        # ORB
+        "orb_window_min": 15,
+        "orb_max_range_pct": 0.008,
+        "orb_target_pct_of_or": 0.50,
+        "orb_be_pct_of_or": 0.25,
+        "orb_time_exit_ct": "14:30",
+    },
+
     "vwap_band_pullback": {
         # 1σ/2σ VWAP-band pullback + RSI(2) — ported from b12 research.
         # Runs alongside vwap_pullback (proximity) for head-to-head lab data.
