@@ -180,17 +180,44 @@ intermarket filter unable to fetch VIX readings, running blind on one signal.
 **Fix owner**: TBD — rotate Alpaca key or investigate whether VIX moved to different endpoint.
 **Status**: OPEN
 
-## B33 — menthorq_daily.json stale since 2026-04-17
-**Discovered**: 2026-04-21 during lab startup log review
-**Severity**: MEDIUM
-**Root cause**: Manual file `data/menthorq/menthorq_daily.json` hasn't been updated
-in 4 days. Separate from `data/menthorq/gamma/*_levels.txt` which IS fresh (2026-04-20).
-**Impact**: Unknown — depends on which code paths read menthorq_daily.json vs
-gamma/*_levels.txt. If any strategy reads the daily JSON for levels, it's running
-on stale data.
-**Fix owner**: Grep codebase for menthorq_daily.json readers; determine authoritative
-source; consider removing one if redundant.
-**Status**: OPEN
+## B33 — Parallel MenthorQ data sources with stale Path A feeding structural_bias
+**Discovered**: 2026-04-21 during post-merge 4C verification session
+**Severity**: MEDIUM (downgraded from initial HIGH after scope precision)
+
+**Architecture diagnosis** (confirmed via code-archaeology on 2026-04-21):
+Two independent MenthorQ data paths currently coexist:
+
+Path A — `data/menthorq/menthorq_daily.json` (stale since 2026-04-17):
+  - Writer: dashboard/server.py (user edits via UI)
+  - Reader: core/menthorq_feed.py → market_snapshot["menthorq"]
+  - Consumer: core/structural_bias.py score_menthorq_gamma() — 15-pt weight
+
+Path B — `data/menthorq/gamma/YYYY-MM-DD_levels.txt` (fresh, B14/B27):
+  - Writer: user paste
+  - Reader: core/menthorq_gamma.py → self.gamma_levels + B27 regime classifier
+  - Consumers:
+    * bots/base_bot.py entry-wall gate (critical path)
+    * strategies/opening_session.py is_entry_into_wall() (direct)
+    * snapshot enrichment (market_snapshot["gamma_regime"])
+
+**Impact**: structural_bias scoring layer is degraded (reading 4-day-old gamma),
+  biasing composite scores based on stale Net GEX. Entry-wall gate and
+  opening_session direct gamma checks remain on fresh data — not broken,
+  but bias-scored trades are being evaluated against stale context.
+
+**NOT affected** (contrary to startup warning text in menthorq_feed.py):
+  - spring_setup.py (zero menthorq references)
+  - gamma_flip_detector.py (zero menthorq references)
+  - Fix: tighten the warning message to mention structural_bias only.
+
+**Fix plan**:
+  (a) Tactical: update menthorq_daily.json daily alongside the gamma paste
+      until (b) lands. Zero-risk, 5-min add to paste ritual.
+  (b) Strategic: re-wire score_menthorq_gamma to read from
+      market_snapshot["gamma_regime"] (the B27 6-value enum) instead of
+      the legacy menthorq dict. Retire Path A once structural_bias migrated.
+
+**Status**: OPEN (tactical fix applicable immediately; strategic fix queued)
 
 ## B35 — bots/base_bot.py:2421 missing account= parameter
 **Discovered**: 2026-04-21 during CC code review
