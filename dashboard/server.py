@@ -54,7 +54,7 @@ _bot_proc_lock = threading.Lock()
 
 
 def _start_bot(name: str) -> dict:
-    """Start a bot subprocess. name = 'prod' or 'lab'."""
+    """Start a bot subprocess. name = 'prod', 'lab', or 'sim'."""
     # Check if already running externally (connected to bridge)
     if _bot_status(name) == "running":
         return {"ok": False, "error": f"{name} bot already running (started externally)"}
@@ -151,6 +151,7 @@ def _bot_status(name: str) -> str:
 _state = {
     "prod": {},
     "lab": {},
+    "sim": {},
     "bridge_health": {},
     "connection_log": [],
     "last_update": 0,
@@ -207,10 +208,12 @@ def api_status():
         return safe_jsonify({
             "prod": _state["prod"],
             "lab": _state["lab"],
+            "sim": _state.get("sim", {}),
             "bridge": _state["bridge_health"],
             "bot_processes": {
                 "prod": _bot_status("prod"),
                 "lab": _bot_status("lab"),
+                "sim": _bot_status("sim"),
             },
             "connection_log": _state["connection_log"][-200:],
             "ts": time.time(),
@@ -503,8 +506,8 @@ def api_get_commands():
 def api_start_bot():
     data = request.get_json(silent=True) or {}
     name = data.get("name", "")
-    if name not in ("prod", "lab"):
-        return jsonify({"ok": False, "error": "name must be 'prod' or 'lab'"}), 400
+    if name not in ("prod", "lab", "sim"):
+        return jsonify({"ok": False, "error": "name must be 'prod', 'lab', or 'sim'"}), 400
     result = _start_bot(name)
     return jsonify(result)
 
@@ -513,8 +516,8 @@ def api_start_bot():
 def api_stop_bot():
     data = request.get_json(silent=True) or {}
     name = data.get("name", "")
-    if name not in ("prod", "lab"):
-        return jsonify({"ok": False, "error": "name must be 'prod' or 'lab'"}), 400
+    if name not in ("prod", "lab", "sim"):
+        return jsonify({"ok": False, "error": "name must be 'prod', 'lab', or 'sim'"}), 400
     result = _stop_bot(name)
     return jsonify(result)
 
@@ -524,6 +527,7 @@ def api_bot_proc_status():
     return jsonify({
         "prod": _bot_status("prod"),
         "lab": _bot_status("lab"),
+        "sim": _bot_status("sim"),
     })
 
 
