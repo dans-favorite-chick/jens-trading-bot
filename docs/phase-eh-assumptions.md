@@ -107,3 +107,11 @@ assumed, why, and where to revisit if the assumption turns out wrong.
   project root. Overridable via `AGENT_LOG_DIR`. Dir auto-created on
   first write. Log-write failures are swallowed with a WARNING (never
   affect the caller's return value).
+
+## S2 test-cleanup (2026-04-21)
+
+- **test_close_long/short_pnl_correct** — stale; `pnl_dollars` is NET of commission (B13). Updated tests to assert `gross_pnl` equals raw tick P&L and `pnl_dollars == gross - commission`.
+- **test_record_trade_triggers_cooloff_after_3_consecutive_losses** — stale; `COOLOFF_AFTER_CONSECUTIVE_LOSSES` moved 3→2 in config. Renamed test and parametrized it against the config constant so further tuning doesn't re-break it.
+- **test_prod_window_at_close** — stale; primary prod window is now 08:30–11:00 CST (was 08:30–10:00). Rewrote to assert closed at 12:00 (primary/secondary gap) and 11:00 (exclusive at primary close).
+- **test_bias_momentum_uses_regime_overrides / test_non_golden_regime_has_tighter_gates** — stale; `_REGIME_OVERRIDES` schema changed. No `min_tf_votes` key anymore (direction gate is hardcoded in `evaluate()`); golden regimes now gate at `min_momentum=80`, off-hours at 60. Tests rewritten to assert contract (keys present per regime) and the invariant (off-hours < live) rather than specific numeric thresholds, so future recalibrations don't re-break them.
+- **G-B37 4C integration test** — added `tests/test_4c_integration.py` (12 tests, ~170 lines). Uses real `STRATEGY_ACCOUNT_MAP`; monkeypatches only `oif_writer.OIF_INCOMING` to a tmp dir. Covers guard rejection, nested+flat routing through `write_bracket_order`, byte-exact survival of account strings (incl. spaces/mixed case) in the semicolon OIF format, and the Sim101 default-fallback path.
