@@ -66,6 +66,45 @@ assumed, why, and where to revisit if the assumption turns out wrong.
 
 **Tests**: new `tests/test_scoring_menthorq_gamma.py` (20 tests) covers enum regimes, string back-compat, graceful missing/UNKNOWN handling, Path A poisoning (proves Path B dominates), `open()`-patch proves zero file IO from scorer, wall proximity, clamp bounds. Full run `tests/test_scoring_menthorq_gamma.py tests/test_menthorq_gamma.py tests/test_b11_menthorq_bridge_health.py` → 52 passed.
 
+## 2026-04-21 — Stream S8 (4D historical learner)
+
+### S8.1 — History filename suffix
+- **Assumption:** history JSONL files are named `{date}_{prod|lab}.jsonl`
+  (confirmed by `logs/history/` listing). Spec referenced `_sim.jsonl`, so
+  the loader accepts `prod`, `lab`, AND `sim` suffixes to be future-proof
+  without forcing a rename.
+
+### S8.2 — Trade data source
+- **Assumption:** `logs/trade_memory.json` is the authoritative source for
+  closed-trade P&L, regime, strategy, confluences, entry_time. History
+  JSONL is skimmed only for signal-count / regime-bar context. This split
+  avoids double-counting and matches the shape of existing files (history
+  events are `bar`/`eval`/`entry`/`exit` separately; trade_memory has the
+  joined closed-trade record).
+
+### S8.3 — Hourly buckets = CT, naive UTC-6
+- **Assumption:** hour-of-day buckets use `UTC - 6` and ignore DST. The
+  NY-session primary window (08:30-10:00 CT) is well away from the DST
+  transition hour. Off-by-1 inside the DST ambiguity window is accepted.
+
+### S8.4 — Recommendation schema enforcement
+- **Assumption:** recs missing ANY of the six required fields
+  (`strategy`, `param`, `current`, `proposed`, `rationale`,
+  `expected_impact`) are dropped silently, not coerced. Final count may
+  fall below 3-7 target — we accept whatever passes validation rather
+  than fabricating fields for S9.
+
+### S8.5 — Non-blocking outputs
+- **Assumption:** both the markdown report and
+  `pending_recommendations.json` are written even when Claude returns
+  nothing (empty recs list + degraded message in the MD). S9 reading an
+  empty `recommendations: []` must treat it as "no-op this week."
+
+### S8.6 — `pending_recommendations.json` is mutable-single
+- **Assumption:** overwritten each run (not appended / version-history).
+  The dated `weekly_YYYY-MM-DD.md` is the archive; the JSON is strictly
+  the current pending queue for S9.
+
 ## 2026-04-21 — Stream S4 (agent-infra)
 
 ### S4.1 — Extend, don't overwrite `agents/`
