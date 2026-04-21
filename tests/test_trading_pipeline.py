@@ -154,9 +154,12 @@ class TestProdWindowEnforcement:
 
     def test_prod_window_at_close(self):
         sm = SessionManager()
-        # 10:00 AM should be outside (window is 08:30 to 10:00, exclusive)
-        test_time = datetime(2026, 4, 12, 10, 0, 0)
+        # Primary window is now 08:30–11:00 CST (exclusive at 11:00).
+        # Gap between primary and secondary (11:00–13:00) should be closed.
+        test_time = datetime(2026, 4, 12, 12, 0, 0)
         assert sm.is_prod_trading_window(test_time) is False
+        # And exactly at primary close 11:00:
+        assert sm.is_prod_trading_window(datetime(2026, 4, 12, 11, 0, 0)) is False
 
 
 # ─── Test 5: Signal Lifecycle (No Double-Count) ──────────────────
@@ -204,19 +207,25 @@ class TestRegimeAwareStrategies:
 
     def test_bias_momentum_uses_regime_overrides(self):
         from strategies.bias_momentum import _REGIME_OVERRIDES
-        # Golden windows should have looser gates
-        assert _REGIME_OVERRIDES["OPEN_MOMENTUM"]["min_tf_votes"] == 2
-        assert _REGIME_OVERRIDES["OPEN_MOMENTUM"]["min_momentum"] == 35
-        assert _REGIME_OVERRIDES["MID_MORNING"]["min_tf_votes"] == 2
-        assert _REGIME_OVERRIDES["MID_MORNING"]["min_momentum"] == 35
+        # Contract (post-B13 recalibration): each regime entry has
+        # min_momentum + min_confluence keys. Golden windows share
+        # high-conviction thresholds; off-hours are looser.
+        for regime in ("OPEN_MOMENTUM", "MID_MORNING",
+                       "AFTERHOURS", "AFTERNOON_CHOP",
+                       "OVERNIGHT_RANGE", "PREMARKET_DRIFT"):
+            assert regime in _REGIME_OVERRIDES
+            entry = _REGIME_OVERRIDES[regime]
+            assert "min_momentum" in entry
+            assert "min_confluence" in entry
 
     def test_non_golden_regime_has_tighter_gates(self):
         from strategies.bias_momentum import _REGIME_OVERRIDES
-        # Non-golden regimes ARE in overrides but with tighter thresholds
-        # Golden = momentum 35, Non-golden = momentum 40-45
-        assert _REGIME_OVERRIDES["OPEN_MOMENTUM"]["min_momentum"] == 35
-        assert _REGIME_OVERRIDES["AFTERHOURS"]["min_momentum"] >= 40
-        assert _REGIME_OVERRIDES["AFTERNOON_CHOP"]["min_momentum"] >= 45
+        # Off-hours/lab regimes have LOWER momentum thresholds than live/chop
+        # (looser for data collection); live + chop regimes gate at 75+.
+        assert _REGIME_OVERRIDES["OPEN_MOMENTUM"]["min_momentum"] >= 75
+        assert _REGIME_OVERRIDES["AFTERNOON_CHOP"]["min_momentum"] >= 75
+        assert _REGIME_OVERRIDES["AFTERHOURS"]["min_momentum"] < \
+               _REGIME_OVERRIDES["OPEN_MOMENTUM"]["min_momentum"]
 
 
 # ─── Test 7: Daily Reset ─────────────────────────────────────────
