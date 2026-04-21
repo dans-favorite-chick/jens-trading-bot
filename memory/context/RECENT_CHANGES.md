@@ -5,6 +5,79 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+## 2026-04-21 late evening — B41 TIF fix + B40 diagnosis + dashboard cleanup
+
+**Critical production bug discovered during first sim_bot live trading:**
+
+### B39/B40/B41 — silent phantom positions traced to TIF mismatch
+- **B39 symptom**: Python PositionManager showed `active_positions=1` while
+  NT8 showed no active trade on the routed Sim account. OIF files sitting
+  unconsumed in `incoming/`.
+- **B40 initial misdiagnosis**: suspected NT8 ATI multi-account config
+  issue. Tried kill-switch `MULTI_ACCOUNT_ROUTING_ENABLED=False` — user
+  rejected. Reverted.
+- **B41 ROOT CAUSE** (from NT8 Log tab): `'time in force parameter not
+  supported by this account "DAY"'`. Entry orders used TIF=DAY which the
+  "My Coinbase"-style 24/7 connection rejects. Stops/targets already used
+  GTC and were landing — so bracket orders were half-submitted.
+- **Fix (commits `65cc9d6` + `66a8e7a`)**: change all OIF TIFs from DAY
+  to GTC — universally accepted per NT8 docs
+  (https://ninjatrader.com/support/helpguides/nt8/timeinforce.htm).
+  Paths fixed: `_build_entry_line`, `CLOSEPOSITION`, `PARTIAL_EXIT_LONG/SHORT`.
+- **End-to-end validation**: direct OIF injection to `SimBias Momentum`
+  (18:59 CDT) and `SimVwap Band Pullback` (19:02 CDT) — both FILLED.
+  Position files confirmed: `LONG;1;26741.25` → flatten → `FLAT;0;0`.
+
+### Dashboard cleanup (commits `97fdf98` + `46dd214`)
+- Added Sim Bot health pill + tab to dashboard UI (fixed watchdog
+  auto-restart path that was 400-rejecting `name=sim`)
+- Removed retired Lab Bot from UI + `/api/bot/start|stop|status`
+- `_state` dict + `/api/status` now include sim, exclude lab
+- Watchdog docstring updated (default was already prod,sim)
+
+### STRATEGY_KEYS parent aliases (commit `b8b505e`)
+- Added `compression_breakout` + `opening_session` as parent-key aliases
+  in `core/strategy_risk_registry.STRATEGY_KEYS` to suppress the
+  `[RISK] unknown strategy key` warnings on every eval. Strategies
+  register under bare names; registry needed the aliases.
+
+### Sim banner clarity (commit `94ee5f5`)
+- `[SIM] 10 strategies → 16 account destinations loaded` instead of
+  just `10 strategies loaded`. `opening_session` dispatches to 6 subs;
+  `compression_breakout` has 15m + 30m timeframes. All 16 destinations
+  confirmed tracked by StrategyRiskRegistry.
+
+### AI agent activation status
+- **Gemini Flash + Gemini Pro agents (Council, Pretrade)**: live and
+  working. Council auto-trigger wired for regime-shift only
+  (commit `5c013f2`) per Jennifer decision. Pretrade hook in
+  `bots/base_bot.py:1148` (commit `7788a62` + attribution `6259d90`).
+- **Claude Sonnet agents (Debriefer, Learner)**: **DEGRADED** —
+  `ANTHROPIC_API_KEY` is present in `.env` but empty (0 chars). Every
+  Claude call today returned `outcome: degraded, error_msg:
+  ANTHROPIC_API_KEY missing`. Fallback deterministic templates are
+  being emitted instead of real Claude analysis. Fix requires Jennifer
+  to paste a valid key into `.env`.
+- **Daily learner scheduled** (Windows Task `PhoenixLearner`) runs at
+  23:30 CT with `--days 7` rolling window. Will produce empty/fallback
+  recommendations until Anthropic key is set.
+- **Session Debriefer**: first real run fired at 17:22:56 then 18:19:43.
+  Both wrote `logs/ai_debrief/2026-04-21.md` with the deterministic
+  fallback template. Telegram dispatch is working.
+- **Adaptive Params Telegram**: now accepts either `TELEGRAM_BOT_TOKEN`
+  or `TELEGRAM_TOKEN` (commit `a7283fd`).
+
+### Open follow-ups
+- Paste valid `ANTHROPIC_API_KEY` into `.env` to unlock Claude-powered
+  Session Debrief + Weekly Learner. Gemini agents are unaffected.
+- `[INTERMARKET] Feed error: float() argument must be a string or a real
+  number, not 'dict'` — pre-existing unrelated bug, not a Phases E–H
+  regression. Logged for separate ticket.
+- Update `data/menthorq_daily.json` daily per `docs/daily_ritual.md`.
+  Currently 104h+ stale → regime fields using HVL proxy.
+
+---
+
 ## 2026-04-21 evening — Phases E/F/G/H sprint merged to main
 
 **Branch:** `feature/phases-e-h` → merged to `main` (merge commit `bdff605`).

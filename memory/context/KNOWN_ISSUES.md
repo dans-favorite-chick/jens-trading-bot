@@ -4,6 +4,36 @@ _Open issues that haven't been resolved yet. Resolved issues moved to semantic/l
 
 ## 🔴 OPEN
 
+### ANTHROPIC_API_KEY empty — Claude agents DEGRADED (2026-04-21 evening)
+
+**Status**: OPEN, requires Jennifer action.
+
+**Symptom**: `.env` has `ANTHROPIC_API_KEY=` (name present, value empty).
+Every Claude call today returned `outcome: degraded, error_msg:
+"ANTHROPIC_API_KEY missing"`. Agents fall back to deterministic templates.
+
+**Affected agents**:
+- 4C Session Debriefer → emits fallback template (today's
+  `logs/ai_debrief/2026-04-21.md` header says "AI unavailable
+  (claude-returned-none); deterministic fallback emitted")
+- 4D Historical Learner → will emit empty recommendations list on
+  weekly run until fixed
+
+**NOT affected**: Council Gate (4A), Pre-Trade Filter (4B), Adaptive
+Params (4E) — they use Gemini or are deterministic.
+
+**Fix**: Jennifer pastes a valid Anthropic API key into `.env` root
+under `ANTHROPIC_API_KEY=`. No bot restart required — agents re-read
+env on each call via safe_call / importlib path.
+
+**Verification after fix**:
+```powershell
+python -c "from dotenv import load_dotenv; import os; load_dotenv(); print('ANTHROPIC_API_KEY chars:', len(os.environ.get('ANTHROPIC_API_KEY','')))"
+```
+Should print a number > 50.
+
+---
+
 ### NT8 indicator install path discrepancy — RESOLVED 2026-04-18
 
 CLAUDE.md says NT8 indicators folder is `C:\Users\Trading PC\AppData\Roaming\NinjaTrader 8\bin\Custom\Indicators\` but the active install on this machine is at `C:\Users\Trading PC\OneDrive\Documents\NinjaTrader 8\bin\Custom\Indicators\` (OneDrive path). All future NT8 indicator operations should use OneDrive path.

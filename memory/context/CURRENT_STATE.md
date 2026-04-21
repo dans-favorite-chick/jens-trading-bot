@@ -1,6 +1,6 @@
 # Phoenix Bot — Current State
 
-_Last updated: 2026-04-21 evening Central Daylight Time (post Phases E–H merge)_
+_Last updated: 2026-04-21 ~19:20 Central Daylight Time (post B41 TIF fix)_
 _Next Claude session: read this FIRST for situational awareness_
 
 ## Bot operational state (as of Tuesday afternoon, 2026-04-21)
@@ -68,13 +68,42 @@ Full suite: **566 passing** / 6 B15-backlog pre-existing failures (unchanged).
 - 1D range: 26,421.44 – 27,076.06
 - Regime classification: **NEGATIVE_NORMAL** (price below 0DTE HVL by ~50+ ticks)
 
-## Phases E–H sprint (2026-04-21 evening) — merged to main
+## Phases E–H sprint (2026-04-21 evening) — merged to main + B41 hotfix
 
 - **700 tests passing / 0 failing** (was 566 + 6 failing at sprint start)
-- **Main commit:** `bd04875` (merge: `bdff605`)
-- **AI agent stack built but NOT yet activated on the live bot** — agent hooks wired into `bots/base_bot.py` and `bots/sim_bot.py`, but require `.env` API keys + bot restart.
+- **HEAD:** `94ee5f5` — merged E/F/G/H + B39/B40/B41 TIF fix + dashboard cleanup
 - Phase E (gamma rewire), Phase F (B15 backlog cleared), Phase G (B26/B37/B38), Phase H (5 agents + infra) — all shipped.
 - See `docs/phase-eh-deployment.md` for runbook.
+
+## B41 TIF fix (2026-04-21 ~19:00 CDT)
+
+First live sim_bot run revealed entries using TIF=DAY were being silently
+rejected by the "My Coinbase"-style 24/7 connection. Stops/targets used
+GTC and landed, but entry orders died — creating phantom Python positions
+(B39). Fixed across entry + exit + close + partial paths via commits
+`65cc9d6` and `66a8e7a`. Validated with direct OIF injection on
+`SimBias Momentum` and `SimVwap Band Pullback` — both filled.
+
+## AI agent live status (2026-04-21 late evening)
+
+- **Gemini (Council, Pre-Trade Filter)**: ACTIVE — API key works, agents
+  making real calls.
+- **Claude (Session Debriefer, Historical Learner)**: **DEGRADED** —
+  `ANTHROPIC_API_KEY` is in `.env` but empty (0 chars). Agents emit
+  deterministic fallback templates, no crashes. Today's `logs/ai_debrief/
+  2026-04-21.md` says "AI unavailable (claude-returned-none); deterministic
+  fallback emitted."
+- **Required action**: Jennifer must paste a valid Anthropic API key into
+  `.env` to unlock Claude-powered debrief + learner.
+
+## Running process state (2026-04-21 ~19:20 CDT)
+
+- Bridge :8765/6/7 — PID 32232 (UP)
+- Dashboard :5000 — PID 50696 (UP, lab removed from UI, sim pill + tab added)
+- Watchdog :5001 — PID 10652 (UP, tracking prod+sim, 21 sim restarts lifetime)
+- Prod bot — PID 424 (UP)
+- Sim bot — PID 22624 (UP, 10 strategies → 16 account destinations, fresh code)
+- Daily learner — scheduled task `PhoenixLearner` registered, fires 23:30 CT daily (--days 7)
 
 ## Immediate to-dos
 
