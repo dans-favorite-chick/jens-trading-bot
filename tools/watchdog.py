@@ -577,8 +577,9 @@ def main():
     parser = argparse.ArgumentParser(description="Phoenix Bot Watchdog")
     parser.add_argument("--no-restart", action="store_true",
                         help="Monitor only — don't auto-restart bots")
-    parser.add_argument("--bots", type=str, default="prod,lab,sim",
-                        help="Comma-separated bot names to watch (default: prod,lab,sim)")
+    parser.add_argument("--bots", type=str, default="prod,sim",
+                        help="Comma-separated bot names to watch (default: prod,sim). "
+                             "Pass 'prod,lab,sim' to co-monitor lab during transition.")
     parser.add_argument("--analyze", action="store_true",
                         help="Analyze disconnect forensics log and exit")
     parser.add_argument("--api-port", type=int, default=5001,

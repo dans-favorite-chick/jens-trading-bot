@@ -5,6 +5,69 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+### 2026-04-21 15:40 Central Daylight Time — Phase C sprint: Lab → Sim live flip
+
+**Scope:** Transform lab_bot (paper-only) into sim_bot (live NT8 sim trading
+on 16 dedicated sub-accounts, 24/7, per-strategy risk isolation). Merged
+feature branch `feature/knowledge-injection-systems` → `main` at `4f444eb`.
+
+**Commits landed (on feature, then merged to main):**
+- `f5ee73f` — byte-exact NT8 account-name fix + compression 15m/30m split + top-level orb
+- `33e5ad6` — test_account_routing updated to byte-exact names (34/34 pass)
+- `e460bd2` — **PositionManager multi-position refactor** (dict storage keyed by trade_id,
+  back-compat single-position API preserved, new `active_positions` / `is_flat_for(strategy)` /
+  `check_exits_all()` / `close_all()` methods)
+- `634bfe9` — **StrategyRiskRegistry** + Phase C settings constants
+  (`PER_STRATEGY_ACCOUNT_SIZE=$2000`, `PER_STRATEGY_DAILY_LOSS_CAP=$200`,
+  `PER_STRATEGY_FLOOR=$1500`, 16 strategy keys, halt persistence to
+  `logs/strategy_halts.json`, 24/24 tests)
+- `03687ef` — **sim_bot.py** + **daily_flatten.py** + **reenable_strategy.py** CLI
+  (5 files, +989 lines, 20 new tests)
+- `d6d318f` — multi-position tick-exit loop in base_bot + watchdog `--bots prod,lab,sim`
+  + `docs/phase-c-deployment.md` (187 lines operator playbook)
+- `d4fb979` — **Phase C follow-ups** (3): dashboard per-strategy risk panel
+  (`/api/strategy-risk` + sortable table + halt highlighting),
+  Telegram per-strategy routing (`TELEGRAM_STRATEGY_CHAT_OVERRIDES` + auto-tag,
+  8 tests), base_bot rider/smart-exit/EoD/chandelier/managed iteration over
+  active_positions (multi-position correctness)
+- `4f444eb` — **Merge to main** (unrelated histories, --theirs strategy;
+  feature content wins, 234 files, 66,988 insertions)
+
+**Operational flip (15:38 CDT):**
+- Killed lab_bot PIDs 42188 + 37424
+- Killed old watchdog PIDs 41988 + 40408
+- Started `python bots/sim_bot.py` → banner confirms 10 strategies loaded,
+  LIVE execution, $2000/$200/$1500 limits, 16:00 CT flatten, 16 registry keys
+- Started `python tools/watchdog.py` → tracking prod + sim (lab dropped from
+  default --bots list since lab is deprecated)
+- Bridge + prod + dashboard untouched throughout
+
+**Test suite delta:**
+- Baseline pre-sprint: 513 pass / 6 B15-backlog
+- Post-sprint: 566 pass / 6 B15-backlog (+53 new tests, zero new failures)
+
+**Files changed (high signal):**
+- `bots/sim_bot.py` (NEW, 545 lines)
+- `bots/daily_flatten.py` (NEW, 96 lines)
+- `bots/base_bot.py` (multi-position iteration for rider/smart/EoD/chandelier/managed)
+- `bots/lab_bot.py` (preserved on disk — rollback safety net)
+- `core/strategy_risk_registry.py` (NEW, 261 lines)
+- `core/position_manager.py` (dict-based multi-position, +286 lines)
+- `core/telegram_notifier.py` (per-strategy routing + tagging)
+- `core/history_logger.py` (unchanged — sim writes to `_sim.jsonl` via `bot_name="sim"`)
+- `config/settings.py` (Phase C constants + Telegram overrides)
+- `config/account_routing.py` (byte-exact names + split + top-level orb)
+- `dashboard/server.py` (+`/api/strategy-risk` endpoint)
+- `dashboard/templates/dashboard.html` (per-strategy panel)
+- `tools/reenable_strategy.py` (NEW, 87 lines)
+- `tools/watchdog.py` (tracks sim by default)
+- `docs/phase-c-deployment.md` (NEW, 187 lines)
+- 5 new test files: `test_strategy_risk_registry.py`, `test_daily_flatten.py`,
+  `test_reenable_strategy_tool.py`, `test_telegram_routing.py`, position_manager
+  tests expanded for multi-position invariants
+
+---
+
 ### 2026-04-19 20:28 Central Daylight Time — Session changes: 8 files modified
 
 **Files changed:**
