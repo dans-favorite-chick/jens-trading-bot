@@ -71,8 +71,12 @@ class TestOpenPosition:
         assert pm.position.direction == "LONG"
         assert pm.position.entry_price == 18500.0
 
-    def test_open_position_rejects_if_already_in_trade(self, pm):
-        _open_long(pm)
+    def test_open_position_rejects_same_strategy_duplicate(self, pm):
+        # Phase C (2026-04-21) multi-position refactor: PositionManager now
+        # supports concurrent positions from DIFFERENT strategies. The
+        # invariant that remains is per-strategy uniqueness — opening a
+        # second position for the SAME strategy must reject.
+        _open_long(pm)  # strategy="test_strat"
         result = pm.open_position(
             trade_id="test-dup",
             direction="SHORT",
@@ -80,12 +84,33 @@ class TestOpenPosition:
             contracts=1,
             stop_price=18514.0,
             target_price=18502.0,
-            strategy="test",
+            strategy="test_strat",  # same strategy — must reject
             reason="dup",
         )
         assert result is False
         # Original position unchanged
         assert pm.position.direction == "LONG"
+        assert pm.active_count == 1
+
+    def test_open_position_allows_different_strategies_concurrently(self, pm):
+        # Phase C: different strategies trade independently on their own
+        # NT8 sub-accounts and may hold positions concurrently.
+        _open_long(pm)  # strategy="test_strat"
+        result = pm.open_position(
+            trade_id="test-strat-b",
+            direction="SHORT",
+            entry_price=18510.0,
+            contracts=1,
+            stop_price=18514.0,
+            target_price=18502.0,
+            strategy="different_strat",
+            reason="concurrent",
+        )
+        assert result is True
+        assert pm.active_count == 2
+        assert pm.is_flat_for("test_strat") is False
+        assert pm.is_flat_for("different_strat") is False
+        assert pm.is_flat_for("never_opened") is True
 
 
 # ─── close_position() ────────────────────────────────────────────────

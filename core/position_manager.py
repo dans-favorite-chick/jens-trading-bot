@@ -1,7 +1,15 @@
 """
-Phoenix Bot — Position Manager
+Phoenix Bot — Position Manager (multi-position capable)
 
 Tracks open positions, unrealized P&L, and manages stop/target exits.
+
+Phase C (2026-04-21): refactored to multi-position storage keyed by
+trade_id. Legacy single-position API (self.position, is_flat,
+close_position(price, reason), check_exits) preserved for back-compat
+so existing callers continue to work. New multi-position methods
+expose active_positions, is_flat_for(strategy), get_position(trade_id),
+close_all(), and trade_id-scoped variants of scale_out / move_stop /
+close / check_exits.
 """
 
 import time
@@ -61,21 +69,98 @@ class Position:
 
 
 class PositionManager:
+    """Multi-position manager keyed by trade_id.
+
+    Legacy single-position callers use `.position` (returns the sole
+    active position if there's exactly one, else the most-recently-
+    opened one), `.is_flat`, and `.close_position(price, reason)` —
+    these now operate on the sole active position when there's
+    exactly one, matching pre-refactor semantics.
+
+    Phase C multi-position callers use `.active_positions`,
+    `.is_flat_for(strategy)`, `.get_position(trade_id)`, `.close_all()`,
+    and trade_id-scoped variants.
+    """
+
     def __init__(self):
-        self.position: Position | None = None
+        # Canonical storage: trade_id -> Position
+        self._positions: dict[str, Position] = {}
+        # Trade history (closed trades) — list of trade dicts
         self.trade_history: list[dict] = []
+        # Insertion-order tracker for "most-recently-opened" semantics
+        # (used when legacy .position is called with multiple positions).
+        self._open_order: list[str] = []
+
+    # ─── Legacy single-position API (back-compat) ──────────────────────
+
+    @property
+    def position(self) -> Position | None:
+        """Legacy: returns the sole active position, or the most-recently-
+        opened if multiple are open, or None if flat.
+
+        In single-position mode (pre-Phase-C runtime) this returns exactly
+        what callers expect. In multi-position mode, callers should migrate
+        to `.get_position(trade_id)` or `.active_positions`.
+        """
+        if not self._positions:
+            return None
+        if len(self._positions) == 1:
+            return next(iter(self._positions.values()))
+        # Multiple open — return most recently opened (insertion order)
+        last_id = self._open_order[-1]
+        return self._positions.get(last_id)
 
     @property
     def is_flat(self) -> bool:
-        return self.position is None
+        """Legacy: True if NO positions are open anywhere."""
+        return len(self._positions) == 0
 
     @property
     def is_long(self) -> bool:
-        return self.position is not None and self.position.direction == "LONG"
+        """Legacy: True if the sole active position is LONG."""
+        pos = self.position
+        return pos is not None and pos.direction == "LONG"
 
     @property
     def is_short(self) -> bool:
-        return self.position is not None and self.position.direction == "SHORT"
+        """Legacy: True if the sole active position is SHORT."""
+        pos = self.position
+        return pos is not None and pos.direction == "SHORT"
+
+    # ─── Multi-position API (Phase C) ──────────────────────────────────
+
+    @property
+    def active_positions(self) -> list[Position]:
+        """All currently-open positions."""
+        return list(self._positions.values())
+
+    @property
+    def active_count(self) -> int:
+        return len(self._positions)
+
+    def is_flat_for(self, strategy: str) -> bool:
+        """True if the given strategy has NO active position.
+
+        Used by _evaluate_strategies in multi-position runtime to allow
+        each strategy to independently enter when its own slot is free.
+        """
+        for pos in self._positions.values():
+            if pos.strategy == strategy:
+                return False
+        return True
+
+    def get_position(self, trade_id: str) -> Position | None:
+        """Exact lookup by trade_id."""
+        return self._positions.get(trade_id)
+
+    def get_position_by_strategy(self, strategy: str) -> Position | None:
+        """First active position for a given strategy (None if none)."""
+        for pos in self._positions.values():
+            if pos.strategy == strategy:
+                return pos
+        return None
+
+    # ─── Open ─────────────────────────────────────────────────────────
 
     def open_position(self, trade_id: str, direction: str, entry_price: float,
                       contracts: int, stop_price: float, target_price: float,
@@ -84,9 +169,21 @@ class PositionManager:
                       metadata: dict = None,
                       scale_out_rr: float = None, trail_config: dict = None,
                       account: str = "Sim101", sub_strategy: str | None = None):
-        """Open a new position. Raises if already in a position."""
-        if self.position is not None:
-            logger.warning(f"[{trade_id}] Cannot open position — already in trade")
+        """Open a new position.
+
+        Rejects if a position already exists with the same trade_id OR
+        the same strategy (prevents double-opening for one strategy).
+        Multiple DIFFERENT strategies may have concurrent positions.
+        """
+        if trade_id in self._positions:
+            logger.warning(f"[{trade_id}] Cannot open position — trade_id already active")
+            return False
+        if not self.is_flat_for(strategy):
+            existing = self.get_position_by_strategy(strategy)
+            logger.warning(
+                f"[{trade_id}] Cannot open position — strategy '{strategy}' "
+                f"already has trade_id={existing.trade_id if existing else '?'} open"
+            )
             return False
 
         # Lazy-instantiate the Chandelier trail if the Signal asked for one.
@@ -102,7 +199,7 @@ class PositionManager:
             except Exception as e:
                 logger.warning(f"[{trade_id}] Chandelier trail init failed (non-blocking): {e}")
 
-        self.position = Position(
+        pos = Position(
             trade_id=trade_id,
             direction=direction.upper(),
             entry_price=entry_price,
@@ -123,18 +220,45 @@ class PositionManager:
             account=account,
             sub_strategy=sub_strategy,
         )
+        self._positions[trade_id] = pos
+        self._open_order.append(trade_id)
         logger.info(f"[OPEN:{trade_id}] {direction} {contracts}x @ {entry_price} "
                      f"SL={stop_price} TP={target_price} strat={strategy} "
                      f"account={account}"
                      + (f"/{sub_strategy}" if sub_strategy else ""))
         return True
 
-    def close_position(self, exit_price: float, exit_reason: str) -> dict | None:
-        """Close current position and return trade record."""
-        if self.position is None:
+    # ─── Close ────────────────────────────────────────────────────────
+
+    def _resolve_trade_id(self, trade_id: str | None) -> str | None:
+        """Legacy-callers passed no trade_id and assumed exactly one
+        position is open. Resolve to the sole active trade_id, or None."""
+        if trade_id is not None:
+            return trade_id
+        if len(self._positions) == 0:
+            return None
+        if len(self._positions) == 1:
+            return next(iter(self._positions.keys()))
+        # Ambiguous — multiple open. Caller must supply trade_id.
+        logger.error(
+            f"Ambiguous close_position() — {len(self._positions)} positions "
+            f"open, no trade_id provided. Refusing to close blindly."
+        )
+        return None
+
+    def close_position(self, exit_price: float, exit_reason: str,
+                       trade_id: str | None = None) -> dict | None:
+        """Close a position.
+
+        Legacy call signature close_position(price, reason) works when
+        exactly one position is open. Multi-position callers must pass
+        trade_id explicitly.
+        """
+        tid = self._resolve_trade_id(trade_id)
+        if tid is None or tid not in self._positions:
             return None
 
-        pos = self.position
+        pos = self._positions[tid]
         if pos.direction == "LONG":
             ticks_pnl = (exit_price - pos.entry_price) / TICK_SIZE
         else:
@@ -160,6 +284,8 @@ class PositionManager:
             "result": "WIN" if dollar_pnl > 0 else "LOSS",
             "hold_time_s": round(hold_time, 1),
             "strategy": pos.strategy,
+            "sub_strategy": pos.sub_strategy,
+            "account": pos.account,
             "entry_reason": pos.reason,
             "exit_reason": exit_reason,
             "entry_time": pos.entry_time,
@@ -168,7 +294,11 @@ class PositionManager:
         }
 
         self.trade_history.append(trade)
-        self.position = None
+        del self._positions[tid]
+        try:
+            self._open_order.remove(tid)
+        except ValueError:
+            pass
 
         logger.info(f"[CLOSE:{pos.trade_id}] {trade['direction']} @ {exit_price} "
                      f"P&L=${trade['pnl_dollars']:.2f} ({trade['pnl_ticks']}t) "
@@ -176,22 +306,39 @@ class PositionManager:
 
         return trade
 
-    def scale_out_partial(self, exit_price: float, n_contracts: int,
-                          exit_reason: str = "scale_out") -> dict | None:
-        """
-        Exit N contracts, keep remaining open. Records a partial trade.
-        If n_contracts >= current contracts, delegates to close_position().
+    def close_all(self, exit_price: float, exit_reason: str) -> list[dict]:
+        """Close ALL active positions (e.g. 4pm CT daily flatten).
 
-        Returns the partial trade record, or None if flat.
+        Returns list of trade records in the order closed.
         """
-        if self.position is None:
+        closed = []
+        # Snapshot the keys because we're mutating during iteration.
+        for tid in list(self._positions.keys()):
+            trade = self.close_position(exit_price, exit_reason, trade_id=tid)
+            if trade is not None:
+                closed.append(trade)
+        if closed:
+            logger.info(f"[CLOSE_ALL] flattened {len(closed)} position(s) reason={exit_reason}")
+        return closed
+
+    # ─── Scale-out / move-stop (trade_id-aware, legacy-compatible) ─────
+
+    def scale_out_partial(self, exit_price: float, n_contracts: int,
+                          exit_reason: str = "scale_out",
+                          trade_id: str | None = None) -> dict | None:
+        """Exit N contracts, keep remaining open. Records a partial trade.
+
+        Legacy callers: trade_id=None works when exactly one position is open.
+        """
+        tid = self._resolve_trade_id(trade_id)
+        if tid is None or tid not in self._positions:
             return None
 
-        pos = self.position
+        pos = self._positions[tid]
 
         # Delegate to full close if exiting everything
         if n_contracts >= pos.contracts:
-            return self.close_position(exit_price, exit_reason)
+            return self.close_position(exit_price, exit_reason, trade_id=tid)
 
         # Compute P&L for exited portion only
         if pos.direction == "LONG":
@@ -216,6 +363,8 @@ class PositionManager:
             "result":        "WIN" if dollar_pnl > 0 else "LOSS",
             "hold_time_s":   round(time.time() - pos.entry_time, 1),
             "strategy":      pos.strategy,
+            "sub_strategy":  pos.sub_strategy,
+            "account":       pos.account,
             "entry_reason":  pos.reason,
             "exit_reason":   exit_reason,
             "entry_time":    pos.entry_time,
@@ -235,14 +384,16 @@ class PositionManager:
                     f"{pos.contracts}x still open")
         return partial_trade
 
-    def move_stop_to_be(self, be_price: Optional[float] = None):
+    def move_stop_to_be(self, be_price: Optional[float] = None,
+                        trade_id: str | None = None):
+        """Move stop price to break-even (entry by default). Safety-clamped.
+
+        Legacy callers: trade_id=None works when exactly one position is open.
         """
-        Move the stop price to break-even (entry price by default).
-        Only moves stop in the favorable direction — never worsens risk.
-        """
-        if self.position is None:
+        tid = self._resolve_trade_id(trade_id)
+        if tid is None or tid not in self._positions:
             return
-        pos = self.position
+        pos = self._positions[tid]
         if be_price is None:
             be_price = pos.entry_price
 
@@ -257,16 +408,35 @@ class PositionManager:
         pos.be_stop_active = True
         logger.info(f"[BE_STOP:{pos.trade_id}] Stop {old_stop:.2f} -> {be_price:.2f} (BE locked)")
 
-    def check_exits(self, current_price: float, max_hold_min: float = None) -> str | None:
+    # ─── Exit triggers ────────────────────────────────────────────────
+
+    def check_exits(self, current_price: float, max_hold_min: float = None,
+                    trade_id: str | None = None) -> str | None:
+        """Legacy single-position exit check.
+
+        Returns exit reason string for the sole active position, or None.
+        When multiple positions are open, caller should use check_exits_all()
+        to iterate. If trade_id is supplied, checks that specific position.
         """
-        Check if stop, target, or time stop is hit.
-        Returns exit reason string, or None if no exit.
-        """
-        if self.position is None:
+        tid = self._resolve_trade_id(trade_id)
+        if tid is None or tid not in self._positions:
             return None
+        return self._check_exit_one(self._positions[tid], current_price, max_hold_min)
 
-        pos = self.position
+    def check_exits_all(self, current_price: float,
+                        max_hold_min: float = None) -> list[tuple[str, str]]:
+        """Multi-position exit check. Returns list of (trade_id, reason)
+        tuples for every position whose stop/target/time-stop triggered."""
+        triggers: list[tuple[str, str]] = []
+        for tid, pos in self._positions.items():
+            reason = self._check_exit_one(pos, current_price, max_hold_min)
+            if reason is not None:
+                triggers.append((tid, reason))
+        return triggers
 
+    @staticmethod
+    def _check_exit_one(pos: Position, current_price: float,
+                        max_hold_min: float = None) -> str | None:
         # Stop loss
         if pos.direction == "LONG" and current_price <= pos.stop_price:
             return "stop_loss"
@@ -287,22 +457,44 @@ class PositionManager:
 
         return None
 
-    def unrealized_pnl(self, current_price: float) -> float:
-        """Calculate unrealized P&L in dollars."""
-        if self.position is None:
-            return 0.0
+    # ─── P&L + serialization ──────────────────────────────────────────
 
-        pos = self.position
+    def unrealized_pnl(self, current_price: float,
+                       trade_id: str | None = None) -> float:
+        """Unrealized P&L in dollars.
+
+        Legacy: with trade_id=None, returns the sole active position's P&L,
+        or the SUM across all active positions when multiple are open.
+        Multi-position callers should pass trade_id for per-position P&L.
+        """
+        if not self._positions:
+            return 0.0
+        if trade_id is not None:
+            pos = self._positions.get(trade_id)
+            if pos is None:
+                return 0.0
+            return self._unrealized_one(pos, current_price)
+        # Aggregate
+        return sum(self._unrealized_one(p, current_price)
+                   for p in self._positions.values())
+
+    @staticmethod
+    def _unrealized_one(pos: Position, current_price: float) -> float:
         if pos.direction == "LONG":
             ticks = (current_price - pos.entry_price) / TICK_SIZE
         else:
             ticks = (pos.entry_price - current_price) / TICK_SIZE
-
         return ticks * DOLLAR_PER_TICK * pos.contracts
 
     def to_dict(self, current_price: float = 0.0) -> dict:
-        """Serialize for dashboard."""
-        if self.position is None:
+        """Serialize for dashboard.
+
+        Legacy: when 0 or 1 positions open, returns the pre-refactor
+        single-position shape. When multiple are open, returns the
+        most-recently-opened for primary fields and includes a new
+        `all_positions` list for multi-position dashboards.
+        """
+        if not self._positions:
             return {
                 "status": "FLAT",
                 "direction": None,
@@ -313,10 +505,13 @@ class PositionManager:
                 "strategy": None,
                 "unrealized_pnl": 0.0,
                 "hold_time_s": 0,
+                "active_count": 0,
+                "all_positions": [],
             }
 
+        # Primary = most recently opened (legacy .position semantics)
         pos = self.position
-        return {
+        primary = {
             "status": "IN_TRADE",
             "direction": pos.direction,
             "entry_price": pos.entry_price,
@@ -326,12 +521,29 @@ class PositionManager:
             "original_contracts": pos.original_contracts,
             "strategy": pos.strategy,
             "reason": pos.reason,
-            "unrealized_pnl": round(self.unrealized_pnl(current_price), 2),
+            "unrealized_pnl": round(self._unrealized_one(pos, current_price), 2),
             "hold_time_s": round(time.time() - pos.entry_time, 0),
             "scaled_out": pos.scaled_out,
             "be_stop_active": pos.be_stop_active,
             "rider_mode": pos.rider_mode,
         }
+        primary["active_count"] = len(self._positions)
+        primary["all_positions"] = [
+            {
+                "trade_id": p.trade_id,
+                "strategy": p.strategy,
+                "direction": p.direction,
+                "entry_price": p.entry_price,
+                "stop_price": p.stop_price,
+                "target_price": p.target_price,
+                "contracts": p.contracts,
+                "account": p.account,
+                "unrealized_pnl": round(self._unrealized_one(p, current_price), 2),
+                "hold_time_s": round(time.time() - p.entry_time, 0),
+            }
+            for p in self._positions.values()
+        ]
+        return primary
 
     def recent_trades(self, n: int = 20) -> list[dict]:
         """Return last N trades for dashboard trade log."""
