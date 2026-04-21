@@ -378,11 +378,12 @@ def write_oif(action: str, qty: int = 1, stop_price: float = None,
     elif action in ("ENTER_SHORT", "SELL"):
         cmds.append(_build_entry_line("SELL", qty, order_type, limit_price, 0.0, account=account) + "\n")
     elif action in ("EXIT", "EXIT_ALL", "CLOSE", "CLOSEPOSITION"):
-        cmds.append(f"CLOSEPOSITION;{account};{INSTRUMENT};DAY;;;;;;;;;\n")
+        # B41: GTC universal — DAY rejected by 24/7 connections (Coinbase etc.)
+        cmds.append(f"CLOSEPOSITION;{account};{INSTRUMENT};GTC;;;;;;;;;\n")
     elif action == "PARTIAL_EXIT_LONG":
-        cmds.append(f"PLACE;{account};{INSTRUMENT};SELL;{qty};MARKET;0;0;DAY;;;;\n")
+        cmds.append(f"PLACE;{account};{INSTRUMENT};SELL;{qty};MARKET;0;0;GTC;;;;\n")
     elif action == "PARTIAL_EXIT_SHORT":
-        cmds.append(f"PLACE;{account};{INSTRUMENT};BUY;{qty};MARKET;0;0;DAY;;;;\n")
+        cmds.append(f"PLACE;{account};{INSTRUMENT};BUY;{qty};MARKET;0;0;GTC;;;;\n")
     elif action == "PLACE_STOP_SELL":
         if stop_price:
             cmds.append(_build_stop_line("SELL", qty, stop_price, account=account) + "\n")
