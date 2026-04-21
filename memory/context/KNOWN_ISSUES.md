@@ -4,9 +4,15 @@ _Open issues that haven't been resolved yet. Resolved issues moved to semantic/l
 
 ## 🔴 OPEN
 
-### ANTHROPIC_API_KEY empty — Claude agents DEGRADED (2026-04-21 evening)
+### ANTHROPIC_API_KEY empty — Claude agents DEGRADED (2026-04-21 evening) — RESOLVED
 
-**Status**: OPEN, requires Jennifer action.
+**Status**: RESOLVED 2026-04-21 via commit `eac5ae4` (B42 `load_dotenv
+override=True`). Key was never missing — 108-char value on line 19 of
+`.env`. Root cause: host OS had `ANTHROPIC_API_KEY=""` set by Claude
+Code's OAuth shim; `load_dotenv()` default behavior skips any key already
+present in os.environ even if empty. Fix: `override=True` across all
+load_dotenv call sites. Direct Claude test post-fix returned "OK".
+Remaining text preserved for audit:
 
 **Symptom**: `.env` has `ANTHROPIC_API_KEY=` (name present, value empty).
 Every Claude call today returned `outcome: degraded, error_msg:
