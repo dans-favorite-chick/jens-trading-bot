@@ -208,7 +208,7 @@ class BaseBot:
 
     def __init__(self):
         _validate_nt8_paths()
-        self.aggregator = TickAggregator()
+        self.aggregator = TickAggregator(bot_name=self.bot_name)
         # Restore aggregator state from disk (survive restarts — no warmup needed)
         self._aggregator_state_path = os.path.join(
             os.path.dirname(__file__), "..", "data", f"aggregator_state_{self.bot_name}.json"
@@ -401,6 +401,7 @@ class BaseBot:
         from strategies.orb import OpeningRangeBreakout
         from strategies.noise_area import NoiseAreaMomentum
         from strategies.vwap_band_pullback import VwapBandPullback
+        from strategies.opening_session import OpeningSessionStrategy
 
         strategy_classes = {
             "bias_momentum": BiasMomentumFollow,
@@ -413,6 +414,7 @@ class BaseBot:
             "dom_pullback": DOMPullback,
             "orb": OpeningRangeBreakout,
             "noise_area": NoiseAreaMomentum,
+            "opening_session": OpeningSessionStrategy,
         }
 
         is_prod = (self.bot_name == "prod")
@@ -484,6 +486,9 @@ class BaseBot:
 
         # B14 Phase 4: MenthorQ gamma reload watcher (60s poll)
         asyncio.ensure_future(self._gamma_reload_watcher())
+
+        # Phase 4B: session-levels prior-day refresh at 00:01 CT daily
+        asyncio.ensure_future(self._session_levels_refresh_task())
 
         while True:
             try:
@@ -619,6 +624,41 @@ class BaseBot:
             market["gamma_nearest_wall"] = short_wall
         market["gamma_in_pin_zone"] = is_at_hvl_gravity(price, levels)
         return market
+
+    async def _session_levels_refresh_task(self):
+        """
+        Phase 4B: recompute prior-day OHLC + volume profile + pivots at
+        00:01 CT each day so a long-running bot picks up the newly
+        written JSONL history without a restart. Errors are logged and
+        the loop retries in 1 hour so one bad day doesn't wedge the task.
+        """
+        from datetime import datetime as _dt, timedelta as _td
+        while True:
+            try:
+                now = _dt.now()
+                next_refresh = now.replace(hour=0, minute=1, second=0, microsecond=0)
+                if next_refresh <= now:
+                    next_refresh += _td(days=1)
+                sleep_secs = (next_refresh - now).total_seconds()
+                logger.info(
+                    f"[SESSION_LEVELS] next refresh in {sleep_secs / 3600:.1f}h"
+                )
+                await asyncio.sleep(sleep_secs)
+                sl = getattr(self.aggregator, "session_levels", None)
+                if sl is not None:
+                    sl.load_prior_day()
+                    logger.info(
+                        f"[SESSION_LEVELS] refreshed prior-day "
+                        f"H={sl.prior_day_high} L={sl.prior_day_low} "
+                        f"POC={sl.prior_day_poc} PP={sl.pivot_pp}"
+                    )
+                else:
+                    logger.warning(
+                        "[SESSION_LEVELS] refresh skipped — aggregator has no session_levels"
+                    )
+            except Exception as e:
+                logger.error(f"[SESSION_LEVELS] refresh task error: {e!r}")
+                await asyncio.sleep(3600)  # retry in 1h rather than tight-loop
 
     async def _heartbeat_loop(self):
         """Send periodic heartbeat to bridge so it can detect hung bots."""
