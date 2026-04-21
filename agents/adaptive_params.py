@@ -331,7 +331,8 @@ def _notify_new_proposals(count: int) -> None:
     if not (os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN")):
         return
     try:
-        from core import telegram_notifier
+        import importlib
+        telegram_notifier = importlib.import_module("core.telegram_notifier")
         telegram_notifier.send_sync(
             f"[AI] {count} new proposals pending review. "
             f"Run: python tools/list_proposals.py"
