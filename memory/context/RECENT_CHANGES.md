@@ -5,6 +5,49 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+## 2026-04-21 evening — Phases E/F/G/H sprint merged to main
+
+**Branch:** `feature/phases-e-h` → merged to `main` (merge commit `bdff605`).
+**Test suite:** 566 passing + 6 failing → **700 passing / 0 failing**.
+
+### Phase E — Gamma integration
+- `docs/daily_ritual.md` — documents daily MenthorQ paste (both `menthorq_daily.json` + `gamma/*_levels.txt`)
+- `core/menthorq_feed.py` — CRITICAL log if `menthorq_daily.json` >24h stale; parser hardened (`_coerce_float` handles empty/NaN/None/negative-zero) — this was G-B26
+- `core/structural_bias.score_menthorq_gamma` — rewired Path A → Path B (reads `market_snapshot["gamma_regime"]` enum directly; retired stale-JSON read). Overclaiming warning corrected to list only real consumers.
+
+### Phase F — B15 test backlog cleared
+All 6 previously-failing tests now green. All were test-stale (B13 commission math, B13-era 3→2 cooloff threshold, 08:30–11:00 window, new `_REGIME_OVERRIDES` schema). Zero code regressions.
+
+### Phase G — Bug fixes
+- **B37**: new `tests/test_4c_integration.py` (12 tests, real routing map + OIF round-trip)
+- **B38**: `core/history_logger.log_eval` now emits `gamma_regime` as first-class field
+
+### Phase H — AI agent stack
+Five agents + infrastructure:
+- **Infra**: `agents/base_agent.py` (AIClient + BaseAgent + safe_call + JSONL logger), `agents/config.py`. Degraded mode on missing API key — bot never crashes.
+- **4A Council Gate** (`agents/council_gate.py`) — 7 Gemini Flash voters + Gemini Pro orchestrator. Auto-trigger: **regime-shift only** (15-min debounce). Session-open fire dropped per Jennifer.
+- **4B Pre-Trade Filter** (`agents/pretrade_filter.py`) — single Gemini Flash call, 3s timeout, fail-OPEN to CLEAR. All strategies default `ai_filter_mode="advisory"`. Hook in `bots/base_bot.py` ~L1148.
+- **4C Session Debriefer** (`agents/session_debriefer.py`) — Claude Sonnet post-16:00-CT flatten, writes `logs/ai_debrief/YYYY-MM-DD.md`. Hook in `bots/sim_bot.py::_maybe_run_debrief`. Optional Telegram dispatch.
+- **4D Historical Learner** (`agents/historical_learner.py` + `tools/run_weekly_learner.py`) — weekly Claude aggregate, writes `logs/ai_learner/weekly_*.md` + `pending_recommendations.json`.
+- **4E Adaptive Params** (`agents/adaptive_params.py` + `tools/approve_proposal.py` + `tools/list_proposals.py`) — safety-bounded (risk_per_trade ≤$100, stops 4-200 ticks, no gate disables, no account_routing edits, no LIVE_TRADING flips). **Never auto-applies.** Always CLI → git branch → human merge. Telegram fires on new proposal count.
+
+### Decisions (Jennifer 2026-04-21 evening):
+- Council auto-trigger: **B only** (regime-shift). A (8:30 session-open) dropped.
+- Pretrade filter does **NOT** consume council bias — would over-tighten and reduce trade count. Reverted commit `6549900`.
+- Telegram fires on proposal creation. **Yes.**
+
+### Docs shipped
+- `docs/phase-eh-deployment.md` — runbook
+- `docs/phase-eh-report.md` — end-of-sprint summary with assumption log
+- `docs/phase-eh-assumptions.md` — ~20 judgment calls across 9 streams
+- `docs/daily_ritual.md` — morning MenthorQ paste ritual
+
+### Bot state unchanged
+Sim bot still running from Phase C flip (PID 46996, 24/7). **Agent layer not yet activated on live sim** — requires API keys in `.env` and a bot restart.
+
+
+---
+
 ### 2026-04-21 15:40 Central Daylight Time — Phase C sprint: Lab → Sim live flip
 
 **Scope:** Transform lab_bot (paper-only) into sim_bot (live NT8 sim trading

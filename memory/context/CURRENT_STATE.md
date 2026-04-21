@@ -1,6 +1,6 @@
 # Phoenix Bot — Current State
 
-_Last updated: 2026-04-21 15:40 Central Daylight Time_
+_Last updated: 2026-04-21 evening Central Daylight Time (post Phases E–H merge)_
 _Next Claude session: read this FIRST for situational awareness_
 
 ## Bot operational state (as of Tuesday afternoon, 2026-04-21)
@@ -67,6 +67,14 @@ Full suite: **566 passing** / 6 B15-backlog pre-existing failures (unchanged).
 - HVL: 25,275 (monthly) / 26,700 (0DTE)
 - 1D range: 26,421.44 – 27,076.06
 - Regime classification: **NEGATIVE_NORMAL** (price below 0DTE HVL by ~50+ ticks)
+
+## Phases E–H sprint (2026-04-21 evening) — merged to main
+
+- **700 tests passing / 0 failing** (was 566 + 6 failing at sprint start)
+- **Main commit:** `bd04875` (merge: `bdff605`)
+- **AI agent stack built but NOT yet activated on the live bot** — agent hooks wired into `bots/base_bot.py` and `bots/sim_bot.py`, but require `.env` API keys + bot restart.
+- Phase E (gamma rewire), Phase F (B15 backlog cleared), Phase G (B26/B37/B38), Phase H (5 agents + infra) — all shipped.
+- See `docs/phase-eh-deployment.md` for runbook.
 
 ## Immediate to-dos
 
