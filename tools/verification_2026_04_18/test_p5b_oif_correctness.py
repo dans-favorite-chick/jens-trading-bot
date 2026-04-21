@@ -27,7 +27,7 @@ class TestB3StopMarket(unittest.TestCase):
 
     def test_build_stop_line_long_side_uses_stopmarket(self):
         from bridge.oif_writer import _build_stop_line
-        line = _build_stop_line("SELL", 1, 22000.0)
+        line = _build_stop_line("SELL", 1, 22000.0, account="Sim101")
         self.assertIn("STOPMARKET", line)
         # Must NOT be a bare STOP token
         parts = line.split(";")
@@ -36,7 +36,7 @@ class TestB3StopMarket(unittest.TestCase):
 
     def test_build_stop_line_short_side_uses_stopmarket(self):
         from bridge.oif_writer import _build_stop_line
-        line = _build_stop_line("BUY", 1, 22050.0)
+        line = _build_stop_line("BUY", 1, 22050.0, account="Sim101")
         self.assertIn("STOPMARKET", line)
         self.assertIn("22050.00", line)
 
@@ -44,7 +44,8 @@ class TestB3StopMarket(unittest.TestCase):
         """entry_type='STOPMARKET' (ORB breakout entry) emits STOPMARKET, not STOP."""
         from bridge.oif_writer import _build_entry_line
         line = _build_entry_line("BUY", 1, "STOPMARKET",
-                                 limit_price=0.0, stop_price=22030.25)
+                                 limit_price=0.0, stop_price=22030.25,
+                                 account="Sim101")
         parts = line.split(";")
         self.assertIn("STOPMARKET", parts)
         self.assertNotIn("STOP", [p for p in parts if p == "STOP"])
@@ -53,7 +54,8 @@ class TestB3StopMarket(unittest.TestCase):
         """LIMIT entry must never contain STOP or STOPMARKET token."""
         from bridge.oif_writer import _build_entry_line
         line = _build_entry_line("BUY", 1, "LIMIT",
-                                 limit_price=22000.0, stop_price=0.0)
+                                 limit_price=22000.0, stop_price=0.0,
+                                 account="Sim101")
         parts = line.split(";")
         self.assertIn("LIMIT", parts)
         self.assertNotIn("STOPMARKET", parts)
@@ -62,7 +64,8 @@ class TestB3StopMarket(unittest.TestCase):
     def test_build_entry_line_market_path_no_stop_leakage(self):
         from bridge.oif_writer import _build_entry_line
         line = _build_entry_line("BUY", 1, "MARKET",
-                                 limit_price=0.0, stop_price=0.0)
+                                 limit_price=0.0, stop_price=0.0,
+                                 account="Sim101")
         parts = line.split(";")
         self.assertIn("MARKET", parts)
         self.assertNotIn("STOPMARKET", parts)
@@ -78,7 +81,7 @@ class TestB3StopMarket(unittest.TestCase):
             try:
                 paths = oif.write_oif(
                     "PLACE_STOP_SELL", qty=1, stop_price=21950.0,
-                    trade_id="b3_sell",
+                    trade_id="b3_sell", account="Sim101",
                 )
                 self.assertEqual(len(paths), 1)
                 content = open(paths[0]).read()
@@ -98,7 +101,7 @@ class TestB3StopMarket(unittest.TestCase):
             try:
                 paths = oif.write_oif(
                     "PLACE_STOP_BUY", qty=1, stop_price=22050.0,
-                    trade_id="b3_buy",
+                    trade_id="b3_buy", account="Sim101",
                 )
                 self.assertEqual(len(paths), 1)
                 content = open(paths[0]).read()
@@ -251,7 +254,7 @@ class TestRegressionNoOldFormats(unittest.TestCase):
             try:
                 paths = oif.write_oif(
                     "PLACE_STOP_SELL", qty=1, stop_price=21950.0,
-                    trade_id="regression",
+                    trade_id="regression", account="Sim101",
                 )
                 content = open(paths[0]).read().rstrip("\n")
                 fields = content.split(";")

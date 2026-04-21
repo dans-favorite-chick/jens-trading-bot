@@ -42,16 +42,22 @@ from config.settings import (
     MENTHORQ_HVL_BUFFER_TICKS as HVL_TRANSITION_BUFFER_TICKS,
     MENTHORQ_WALL_BUFFER_TICKS as WALL_PROXIMITY_BUFFER_TICKS,
     MENTHORQ_NO_TRADE_INTO_WALL_TICKS as NO_TRADE_INTO_WALL_BUFFER_TICKS,
+    MENTHORQ_NET_GEX_STRONG_THRESHOLD as NET_GEX_STRONG_THRESHOLD,
+    MENTHORQ_NET_GEX_NORMAL_THRESHOLD as NET_GEX_NORMAL_THRESHOLD,
 )
 
 
 # ─── Data model ──────────────────────────────────────────────────────
 
 class GammaRegime(Enum):
-    POSITIVE_GAMMA = "POSITIVE_GAMMA"
-    NEGATIVE_GAMMA = "NEGATIVE_GAMMA"
-    TRANSITION_ZONE = "TRANSITION_ZONE"
-    UNKNOWN = "UNKNOWN"
+    # B27: 6-value enum driven by Net GEX magnitude (MenthorQ authoritative
+    # signal), falling back to HVL proxy when Net GEX not in the paste.
+    POSITIVE_STRONG = "positive_strong"
+    POSITIVE_NORMAL = "positive_normal"
+    NEUTRAL = "neutral"
+    NEGATIVE_NORMAL = "negative_normal"
+    NEGATIVE_STRONG = "negative_strong"
+    UNKNOWN = "unknown"
 
 
 @dataclass(frozen=True)
@@ -70,10 +76,17 @@ class GammaLevels:
     gex_levels: Tuple[float, ...]
     blind_spots: Tuple[float, ...]
     loaded_at: datetime
+    # B27: GEX magnitude + IV context. Optional — pre-B27 pastes and
+    # pastes without these keys still parse cleanly with None.
+    net_gex: Optional[float] = None
+    total_gex: Optional[float] = None
+    iv_30d: Optional[float] = None
 
     @property
     def is_complete(self) -> bool:
-        """All Tier 1 fields populated."""
+        """All Tier 1 wall-level fields populated. Net GEX / Total GEX / IV
+        are regime-classification enrichment and NOT required for
+        is_complete — walls remain the primary trading-decision data."""
         return all(v is not None for v in (
             self.hvl,
             self.hvl_0dte,
@@ -83,6 +96,12 @@ class GammaLevels:
             self.put_support_0dte,
             self.gamma_wall_0dte,
         ))
+
+    @property
+    def has_net_gex_classification(self) -> bool:
+        """True when regime can be classified from Net GEX magnitude
+        (authoritative MenthorQ signal) rather than the HVL proxy."""
+        return self.net_gex is not None
 
 
 # ─── Alias map (module-level constant, inspectable by tests) ────────
@@ -105,7 +124,21 @@ ALIAS_MAP: Dict[str, str] = {
     "putsupport 0dte": "put_support_0dte",
     "hvl 0dte": "hvl_0dte",
     "gamma wall 0dte": "gamma_wall_0dte",
+    # B27: GEX magnitudes and IV.
+    "net gex": "net_gex",
+    "netgex": "net_gex",
+    "total gex": "total_gex",
+    "totalgex": "total_gex",
+    "iv": "iv_30d",
+    "iv 30d": "iv_30d",
+    "iv30d": "iv_30d",
 }
+
+# Keys whose values accept K/M/B suffix expansion — magnitude-style fields
+# (GEX absolute values). IV stays plain-numeric.
+_MAGNITUDE_KEYS = frozenset({"net_gex", "total_gex"})
+
+_SUFFIX_MULTIPLIERS = {"K": 1_000.0, "M": 1_000_000.0, "B": 1_000_000_000.0}
 
 _GEX_RE = re.compile(r"^gex\s*(\d{1,2})$")
 _BL_RE = re.compile(r"^bl\s*(\d{1,2})$")
@@ -115,6 +148,23 @@ _SYMBOL_RE = re.compile(r"^\$([A-Z0-9]+)\s*:\s*(.*)$", re.DOTALL)
 def _normalize_key(raw: str) -> str:
     """Lowercase, collapse internal whitespace, strip ends."""
     return re.sub(r"\s+", " ", raw.strip().lower())
+
+
+def _parse_numeric_value(raw: str, allow_suffix: bool = False) -> float:
+    """
+    Parse a comma-separated value token into a float.
+
+    If allow_suffix is True, accepts K / M / B suffix multipliers (case-
+    insensitive), e.g. "3.92M" → 3_920_000. Leading +/- is preserved.
+    Raises ValueError on unparseable input.
+    """
+    s = raw.strip()
+    if not s:
+        raise ValueError(f"empty value token")
+    if allow_suffix and s[-1].upper() in _SUFFIX_MULTIPLIERS:
+        mult = _SUFFIX_MULTIPLIERS[s[-1].upper()]
+        return float(s[:-1]) * mult
+    return float(s)
 
 
 def _parse_pairs(text: str) -> Tuple[str, list[Tuple[str, str]]]:
@@ -174,20 +224,29 @@ def parse_gamma_paste(text: str) -> GammaLevels:
         "put_support_0dte": None,
         "hvl_0dte": None,
         "gamma_wall_0dte": None,
+        # B27
+        "net_gex": None,
+        "total_gex": None,
+        "iv_30d": None,
     }
     gex_by_idx: Dict[int, float] = {}
 
     for raw_key, raw_val in pairs:
         norm = _normalize_key(raw_key)
+
+        attr = ALIAS_MAP.get(norm)
         try:
-            value = float(raw_val)
+            value = _parse_numeric_value(
+                raw_val,
+                allow_suffix=(attr in _MAGNITUDE_KEYS),
+            )
         except ValueError:
             raise ValueError(
                 f"non-numeric value for key {raw_key!r}: {raw_val!r}"
             )
 
-        if norm in ALIAS_MAP:
-            fields[ALIAS_MAP[norm]] = value
+        if attr is not None:
+            fields[attr] = value
             continue
 
         m = _GEX_RE.match(norm)
@@ -220,6 +279,9 @@ def parse_gamma_paste(text: str) -> GammaLevels:
         gex_levels=gex_levels,
         blind_spots=(),
         loaded_at=datetime.now(timezone.utc),
+        net_gex=fields["net_gex"],
+        total_gex=fields["total_gex"],
+        iv_30d=fields["iv_30d"],
     )
 
 
@@ -329,6 +391,9 @@ def load_gamma_for_date(
         gex_levels=base.gex_levels,
         blind_spots=blind_spots,
         loaded_at=base.loaded_at,
+        net_gex=base.net_gex,
+        total_gex=base.total_gex,
+        iv_30d=base.iv_30d,
     )
     _CACHE[cache_key] = result
     return result
@@ -413,23 +478,49 @@ def classify_regime(
     price: float, levels: Optional[GammaLevels]
 ) -> GammaRegime:
     """
-    price >= hvl + buffer → POSITIVE_GAMMA (mean-revert bias)
-    price <= hvl - buffer → NEGATIVE_GAMMA (momentum bias)
-    else                  → TRANSITION_ZONE
-    No levels / no HVL    → UNKNOWN
+    B27: Net GEX magnitude is the primary (authoritative MenthorQ) signal.
+    HVL position is the fallback when Net GEX is absent from the paste.
+
+    Net GEX primary path:
+      net_gex >  +STRONG    → POSITIVE_STRONG
+      net_gex >  +NORMAL    → POSITIVE_NORMAL
+      |net_gex| <= NORMAL   → NEUTRAL
+      net_gex >= -STRONG    → NEGATIVE_NORMAL
+      net_gex <  -STRONG    → NEGATIVE_STRONG
+
+    HVL fallback path (when levels.net_gex is None):
+      price >= hvl + buffer → POSITIVE_NORMAL
+      price <= hvl - buffer → NEGATIVE_NORMAL
+      else                  → NEUTRAL
+      no hvl                → UNKNOWN
     """
     if levels is None:
         return GammaRegime.UNKNOWN
+
+    if levels.net_gex is not None:
+        ng = levels.net_gex
+        if ng > NET_GEX_STRONG_THRESHOLD:
+            return GammaRegime.POSITIVE_STRONG
+        if ng > NET_GEX_NORMAL_THRESHOLD:
+            return GammaRegime.POSITIVE_NORMAL
+        if ng >= -NET_GEX_NORMAL_THRESHOLD:
+            return GammaRegime.NEUTRAL
+        if ng >= -NET_GEX_STRONG_THRESHOLD:
+            return GammaRegime.NEGATIVE_NORMAL
+        return GammaRegime.NEGATIVE_STRONG
+
+    # Fallback — best-effort classification from HVL proxy.
+    logger.debug("classifier using HVL proxy (no Net GEX in paste)")
     hvl = _effective_hvl(levels)
     if hvl is None:
         return GammaRegime.UNKNOWN
 
     buffer_pts = HVL_TRANSITION_BUFFER_TICKS * TICK_SIZE
     if price >= hvl + buffer_pts:
-        return GammaRegime.POSITIVE_GAMMA
+        return GammaRegime.POSITIVE_NORMAL
     if price <= hvl - buffer_pts:
-        return GammaRegime.NEGATIVE_GAMMA
-    return GammaRegime.TRANSITION_ZONE
+        return GammaRegime.NEGATIVE_NORMAL
+    return GammaRegime.NEUTRAL
 
 
 def distance_to_nearest_wall(
@@ -665,11 +756,16 @@ def is_at_hvl_gravity(
 
 
 def regime_multipliers(regime: GammaRegime) -> Dict[str, float]:
-    """Size / stop-width / target-RR multipliers per regime."""
-    if regime is GammaRegime.POSITIVE_GAMMA:
-        return {"size": 1.0, "stop": 0.8, "target_rr": 0.7}
-    if regime is GammaRegime.NEGATIVE_GAMMA:
-        return {"size": 1.0, "stop": 1.2, "target_rr": 1.3}
-    if regime is GammaRegime.TRANSITION_ZONE:
-        return {"size": 0.5, "stop": 1.0, "target_rr": 1.0}
-    return {"size": 1.0, "stop": 1.0, "target_rr": 1.0}
+    """
+    Size / stop-width / target-RR multipliers per regime.
+    Tighter stops + smaller targets in positive-gamma (mean-revert);
+    wider in negative (momentum). Reduced size in NEUTRAL (uncertainty).
+    """
+    return {
+        GammaRegime.POSITIVE_STRONG: {"size": 1.0, "stop": 0.7, "target_rr": 0.6},
+        GammaRegime.POSITIVE_NORMAL: {"size": 1.0, "stop": 0.8, "target_rr": 0.7},
+        GammaRegime.NEUTRAL:         {"size": 0.7, "stop": 1.0, "target_rr": 1.0},
+        GammaRegime.NEGATIVE_NORMAL: {"size": 1.0, "stop": 1.2, "target_rr": 1.3},
+        GammaRegime.NEGATIVE_STRONG: {"size": 1.0, "stop": 1.5, "target_rr": 1.6},
+        GammaRegime.UNKNOWN:         {"size": 1.0, "stop": 1.0, "target_rr": 1.0},
+    }[regime]

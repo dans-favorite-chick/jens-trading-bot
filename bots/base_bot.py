@@ -208,7 +208,7 @@ class BaseBot:
 
     def __init__(self):
         _validate_nt8_paths()
-        self.aggregator = TickAggregator()
+        self.aggregator = TickAggregator(bot_name=self.bot_name)
         # Restore aggregator state from disk (survive restarts — no warmup needed)
         self._aggregator_state_path = os.path.join(
             os.path.dirname(__file__), "..", "data", f"aggregator_state_{self.bot_name}.json"
@@ -401,6 +401,7 @@ class BaseBot:
         from strategies.orb import OpeningRangeBreakout
         from strategies.noise_area import NoiseAreaMomentum
         from strategies.vwap_band_pullback import VwapBandPullback
+        from strategies.opening_session import OpeningSessionStrategy
 
         strategy_classes = {
             "bias_momentum": BiasMomentumFollow,
@@ -413,6 +414,7 @@ class BaseBot:
             "dom_pullback": DOMPullback,
             "orb": OpeningRangeBreakout,
             "noise_area": NoiseAreaMomentum,
+            "opening_session": OpeningSessionStrategy,
         }
 
         is_prod = (self.bot_name == "prod")
@@ -470,6 +472,23 @@ class BaseBot:
         logger.info(f"  Live trading: {LIVE_TRADING}")
         logger.info(f"{'=' * 50}")
 
+        # Phase 4C: visual confirmation of per-strategy account routing at
+        # startup so Jennifer can eyeball-match against the NT8 config.
+        try:
+            from config.account_routing import validate_account_map
+            accounts = validate_account_map()
+            logger.info(
+                f"[ACCOUNT_ROUTING] {len(accounts)} account routes configured: "
+                f"{len([a for a in accounts if a != 'Sim101'])} dedicated + 1 default"
+            )
+            logger.info(f"[ACCOUNT_ROUTING] accounts: {', '.join(accounts)}")
+        except Exception as e:
+            logger.warning(f"[ACCOUNT_ROUTING] validate_account_map failed: {e!r}")
+
+        # Phase 4C: one-shot [SESSION+GAMMA] regime log fires from inside
+        # the tick loop once last_price > 0 and gamma_levels is loaded.
+        self._startup_regime_logged = False
+
         # Start dashboard state pusher in background
         asyncio.ensure_future(self._dashboard_loop())
 
@@ -484,6 +503,9 @@ class BaseBot:
 
         # B14 Phase 4: MenthorQ gamma reload watcher (60s poll)
         asyncio.ensure_future(self._gamma_reload_watcher())
+
+        # Phase 4B: session-levels prior-day refresh at 00:01 CT daily
+        asyncio.ensure_future(self._session_levels_refresh_task())
 
         while True:
             try:
@@ -620,6 +642,41 @@ class BaseBot:
         market["gamma_in_pin_zone"] = is_at_hvl_gravity(price, levels)
         return market
 
+    async def _session_levels_refresh_task(self):
+        """
+        Phase 4B: recompute prior-day OHLC + volume profile + pivots at
+        00:01 CT each day so a long-running bot picks up the newly
+        written JSONL history without a restart. Errors are logged and
+        the loop retries in 1 hour so one bad day doesn't wedge the task.
+        """
+        from datetime import datetime as _dt, timedelta as _td
+        while True:
+            try:
+                now = _dt.now()
+                next_refresh = now.replace(hour=0, minute=1, second=0, microsecond=0)
+                if next_refresh <= now:
+                    next_refresh += _td(days=1)
+                sleep_secs = (next_refresh - now).total_seconds()
+                logger.info(
+                    f"[SESSION_LEVELS] next refresh in {sleep_secs / 3600:.1f}h"
+                )
+                await asyncio.sleep(sleep_secs)
+                sl = getattr(self.aggregator, "session_levels", None)
+                if sl is not None:
+                    sl.load_prior_day()
+                    logger.info(
+                        f"[SESSION_LEVELS] refreshed prior-day "
+                        f"H={sl.prior_day_high} L={sl.prior_day_low} "
+                        f"POC={sl.prior_day_poc} PP={sl.pivot_pp}"
+                    )
+                else:
+                    logger.warning(
+                        "[SESSION_LEVELS] refresh skipped — aggregator has no session_levels"
+                    )
+            except Exception as e:
+                logger.error(f"[SESSION_LEVELS] refresh task error: {e!r}")
+                await asyncio.sleep(3600)  # retry in 1h rather than tight-loop
+
     async def _heartbeat_loop(self):
         """Send periodic heartbeat to bridge so it can detect hung bots."""
         while True:
@@ -730,6 +787,27 @@ class BaseBot:
                         f"(keeping WS alive): {type(_agg_err).__name__}: {_agg_err}"
                     )
                     continue
+
+                # Phase 4C: one-shot startup regime log. Fires after the first
+                # tick populates last_price and gamma_levels is loaded. Deferred
+                # from 4B because at TickAggregator init time last_price=0 and
+                # gamma_levels isn't on the aggregator.
+                if (not getattr(self, "_startup_regime_logged", True)
+                        and self.gamma_levels is not None
+                        and self.aggregator.last_price > 0):
+                    try:
+                        from core.menthorq_gamma import classify_regime
+                        regime = classify_regime(
+                            self.aggregator.last_price, self.gamma_levels
+                        )
+                        logger.info(
+                            f"[SESSION+GAMMA] Regime at startup: {regime.name} "
+                            f"(price={self.aggregator.last_price}, "
+                            f"net_gex={self.gamma_levels.net_gex})"
+                        )
+                    except Exception as e:
+                        logger.warning(f"[SESSION+GAMMA] startup log failed: {e!r}")
+                    self._startup_regime_logged = True
 
                 # NEW (shadow): feed footprint builders on every tick (fast path, no branching)
                 try:
@@ -2308,6 +2386,12 @@ class BaseBot:
         else:  # MARKET
             limit_price = 0.0
 
+        # Phase 4C: resolve NT8 account for this signal so the OIF writer
+        # routes fills to the per-strategy sim account instead of Sim101.
+        from config.account_routing import get_account_for_signal
+        _sub_strategy = (getattr(signal, "metadata", {}) or {}).get("sub_strategy")
+        _account = get_account_for_signal(signal.strategy, _sub_strategy)
+
         try:
             await ws.send(json.dumps({
                 "type": "trade",
@@ -2319,6 +2403,8 @@ class BaseBot:
                 "reason": signal.reason,
                 "order_type": signal_entry_type,
                 "limit_price": limit_price,
+                "account": _account,
+                "sub_strategy": _sub_strategy,
             }))
         except Exception as e:
             logger.error(f"[{tid}] Failed to send trade command: {e}")
@@ -2372,6 +2458,8 @@ class BaseBot:
             metadata=dict(getattr(signal, "metadata", {}) or {}),
             scale_out_rr=getattr(signal, "scale_out_rr", None),
             trail_config=getattr(signal, "trail_config", None),
+            account=_account,
+            sub_strategy=_sub_strategy,
         )
 
         # Reset stall detector for fresh rider tracking on this trade
@@ -2503,6 +2591,7 @@ class BaseBot:
                 direction=pos.direction,
                 n_contracts=n_exit,
                 trade_id=f"{tid}_scale1",
+                account=pos.account,
             )
         except Exception as e:
             logger.error(f"[SCALE_OUT:{tid}] Partial exit OIF failed: {e}")
@@ -2528,6 +2617,7 @@ class BaseBot:
                 stop_price=be_price,
                 n_contracts=pos.contracts,  # After scale-out, remaining count
                 trade_id=f"{tid}_be",
+                account=pos.account,
             )
         except Exception as e:
             logger.warning(f"[SCALE_OUT:{tid}] BE stop OIF failed (non-blocking): {e}")
@@ -2609,7 +2699,7 @@ class BaseBot:
             logger.error(f"[EXIT:{tid}] WS send failed: {e} — writing OIF fallback")
             try:
                 from bridge.oif_writer import write_oif
-                write_oif("EXIT", pos.contracts, trade_id=tid)
+                write_oif("EXIT", pos.contracts, trade_id=tid, account=pos.account)
                 exit_sent = True
             except Exception as e2:
                 logger.error(f"[EXIT:{tid}] OIF fallback ALSO failed: {e2} — MANUAL EXIT NEEDED")

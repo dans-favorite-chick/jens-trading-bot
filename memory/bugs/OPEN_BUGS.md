@@ -134,19 +134,23 @@ silently load with a corrupted level.
 
 ## B27 — GammaLevels schema ext: Net GEX + Total GEX magnitudes
 **Discovered**: 2026-04-21 during gamma ingest blocker review
-**Severity**: Low-Medium
-**Root cause**: GammaLevels dataclass stores individual strike
-levels but not the absolute Net GEX and Total GEX magnitudes that
-MenthorQ reports (e.g. Net GEX +3.92M, Total GEX 9.33M for
-2026-04-21). Current regime classification is *relative* —
-price vs HVL — with no use of GEX magnitude to distinguish
-POSITIVE_STRONG vs merely POSITIVE.
-**Impact**: Strategies cannot differentiate a high-conviction
-positive-gamma day (>3M net GEX) from a barely-positive day.
-No absolute regime strength information available to sizing or
-strategy selection.
-**Fix owner**: TBD. Requires (a) schema extension to parse
-`Net GEX` / `Total GEX` keys from paste (b) optional threshold
-constants for POSITIVE_STRONG/NEGATIVE_STRONG bands (c) updates
-to regime-dependent strategy gates to use the strength signal.
-**Status**: OPEN
+**Severity**: Low-Medium → PRIORITY: HIGH after 2026-04-21 regime
+disagreement between HVL proxy and MenthorQ's Net GEX authoritative.
+**Root cause**: GammaLevels dataclass stored individual strike
+levels but not the absolute Net GEX magnitude that MenthorQ reports.
+Regime classification was relative (price vs HVL), which disagreed
+with MenthorQ's ground-truth Net GEX sign.
+**Resolution**: 2026-04-21 on feat/b27-net-gex-regime. Schema
+extended with `net_gex` / `total_gex` / `iv_30d`. Classifier
+rewritten with Net GEX as primary signal and HVL as fallback.
+6-value enum `GammaRegime` (POSITIVE_STRONG/NORMAL, NEUTRAL,
+NEGATIVE_NORMAL/STRONG, UNKNOWN) replaces legacy 4-value. Parser
+accepts K/M/B suffixes. Migration touched 2 call sites inside
+`core/menthorq_gamma.py` (classify_regime + regime_multipliers);
+`bots/base_bot.py` needed no change because it only used
+`GammaRegime.UNKNOWN`, which is preserved. Thresholds
+(`MENTHORQ_NET_GEX_STRONG_THRESHOLD=3_000_000`,
+`MENTHORQ_NET_GEX_NORMAL_THRESHOLD=500_000`) live in
+`config/settings.py`. Paste format documented in
+`data/menthorq/gamma/README.md`.
+**Status**: FIXED

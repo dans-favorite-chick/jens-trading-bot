@@ -54,7 +54,7 @@ class TestLegacyPathAtomic(unittest.TestCase):
     def test_exit_commits_as_txt_no_tmp_left(self):
         with _OIFIsolator() as tmp:
             from bridge.oif_writer import write_oif
-            paths = write_oif("EXIT", trade_id="exit1")
+            paths = write_oif("EXIT", trade_id="exit1", account="Sim101")
             txt, tmp_files, _ = _dir_state(tmp)
             self.assertEqual(len(paths), 1)
             self.assertEqual(len(txt), 1)
@@ -64,7 +64,7 @@ class TestLegacyPathAtomic(unittest.TestCase):
     def test_partial_exit_long_atomic(self):
         with _OIFIsolator() as tmp:
             from bridge.oif_writer import write_oif
-            paths = write_oif("PARTIAL_EXIT_LONG", qty=1, trade_id="pex")
+            paths = write_oif("PARTIAL_EXIT_LONG", qty=1, trade_id="pex", account="Sim101")
             txt, tmp_files, contents = _dir_state(tmp)
             self.assertEqual(len(txt), 1)
             self.assertEqual(len(tmp_files), 0)
@@ -73,7 +73,7 @@ class TestLegacyPathAtomic(unittest.TestCase):
     def test_partial_exit_short_atomic(self):
         with _OIFIsolator() as tmp:
             from bridge.oif_writer import write_oif
-            paths = write_oif("PARTIAL_EXIT_SHORT", qty=1, trade_id="pes")
+            paths = write_oif("PARTIAL_EXIT_SHORT", qty=1, trade_id="pes", account="Sim101")
             txt, tmp_files, contents = _dir_state(tmp)
             self.assertEqual(len(txt), 1)
             self.assertEqual(len(tmp_files), 0)
@@ -83,7 +83,7 @@ class TestLegacyPathAtomic(unittest.TestCase):
         with _OIFIsolator() as tmp:
             from bridge.oif_writer import write_oif
             paths = write_oif("PLACE_STOP_SELL", qty=1, stop_price=21950.0,
-                              trade_id="pss")
+                              trade_id="pss", account="Sim101")
             txt, tmp_files, contents = _dir_state(tmp)
             self.assertEqual(len(txt), 1)
             self.assertEqual(len(tmp_files), 0)
@@ -106,7 +106,7 @@ class TestFileContentWellFormed(unittest.TestCase):
     def test_exit_content_is_complete_line(self):
         with _OIFIsolator() as tmp:
             from bridge.oif_writer import write_oif
-            paths = write_oif("EXIT", trade_id="c1")
+            paths = write_oif("EXIT", trade_id="c1", account="Sim101")
             content = open(paths[0]).read()
             # Must start with the command verb and end with a newline
             self.assertTrue(content.startswith("CLOSEPOSITION"))
@@ -157,7 +157,7 @@ class TestMultiCommandBatch(unittest.TestCase):
             from bridge.oif_writer import write_oif
             # Normal single-command action — all 1 should land
             paths = write_oif("PLACE_STOP_BUY", qty=1, stop_price=22050.0,
-                              trade_id="batch")
+                              trade_id="batch", account="Sim101")
             self.assertEqual(len(paths), 1)
             txt, tmp_files, _ = _dir_state(tmp)
             self.assertEqual(len(tmp_files), 0)

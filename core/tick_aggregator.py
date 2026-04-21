@@ -152,7 +152,7 @@ class TickAggregator:
       Tick-based: 512t (configurable) — entry timing precision
     """
 
-    def __init__(self):
+    def __init__(self, bot_name: str = "bot"):
         import sys, os as _os
         sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), ".."))
         try:
@@ -163,6 +163,7 @@ class TickAggregator:
             _tick_size   = 512
             _tick_enabled = True
 
+        self.bot_name = bot_name
         self._tick_bar_size    = _tick_size
         self._tick_bar_enabled = _tick_enabled
         self._tick_bar_label   = f"{_tick_size}t"
@@ -298,6 +299,26 @@ class TickAggregator:
 
         # Callbacks for new bar events
         self._on_bar_callbacks: list = []
+
+        # ── Phase 4B: Session levels aggregator ─────────────────────
+        # Feeds prior-day OHLC + volume profile + pivots + live opening
+        # levels into snapshot() for the opening_session strategy family.
+        # Failures never crash bot startup — falls back to None.
+        self.session_levels = None
+        try:
+            from core.session_levels_aggregator import SessionLevelsAggregator
+            self.session_levels = SessionLevelsAggregator(bot_name=bot_name)
+            self.session_levels.load_prior_day()
+            _log.info(
+                f"[SESSION_LEVELS] init bot={bot_name} "
+                f"high={self.session_levels.prior_day_high} "
+                f"low={self.session_levels.prior_day_low} "
+                f"poc={self.session_levels.prior_day_poc} "
+                f"pp={self.session_levels.pivot_pp}"
+            )
+        except Exception as e:
+            _log.warning(f"[SESSION_LEVELS] init failed ({e!r}); disabled")
+            self.session_levels = None
 
     def on_bar(self, callback):
         """Register a callback: callback(timeframe: str, bar: Bar)"""
@@ -567,6 +588,21 @@ class TickAggregator:
 
             self._update_tf_votes()
 
+        # ── Phase 4B: Update session levels BEFORE callbacks fire ──
+        # So any downstream strategy callback sees fresh PMH/PML/RTH
+        # opening levels / opening_type in the next snapshot() read.
+        if self.session_levels is not None and tf in ("1m", "5m"):
+            try:
+                from datetime import datetime as _dt
+                bar_now = _dt.fromtimestamp(bar.end_time) if bar.end_time else _dt.now()
+                self.session_levels.update(
+                    now_ct=bar_now,
+                    bar_1m=bar if tf == "1m" else None,
+                    bar_5m=bar if tf == "5m" else None,
+                )
+            except Exception as e:
+                _log.warning(f"[SESSION_LEVELS] update on {tf} bar failed: {e!r}")
+
         # ── Fire callbacks ──────────────────────────────────────────
         for cb in self._on_bar_callbacks:
             try:
@@ -624,7 +660,7 @@ class TickAggregator:
 
     def snapshot(self) -> dict:
         """Return current state as a dict (for dashboard and strategy evaluation)."""
-        return {
+        base = {
             "price": self.last_price,
             "bid": self.last_bid,
             "ask": self.last_ask,
@@ -687,6 +723,15 @@ class TickAggregator:
             "dom_signal": self.dom_analyzer.get_dom_signal(),
             "regime":        None,   # set by session_manager, placeholder here
         }
+
+        # ── Phase 4B: enrich with session levels (prior day + live opening)
+        if self.session_levels is not None:
+            try:
+                base.update(self.session_levels.get_levels_dict())
+            except Exception as e:
+                _log.warning(f"[SESSION_LEVELS] get_levels_dict failed: {e!r}")
+
+        return base
 
     # ─── State Persistence (survive restarts) ──────────────────────
     def save_state(self, path: str) -> None:

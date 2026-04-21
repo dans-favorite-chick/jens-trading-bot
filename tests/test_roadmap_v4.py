@@ -101,7 +101,7 @@ class TestOIFWriter(unittest.TestCase):
         paths = write_bracket_order(
             direction="LONG", qty=1, entry_type="LIMIT",
             entry_price=22000.0, stop_price=21950.0, target_price=22100.0,
-            trade_id="testA",
+            trade_id="testA", account="Sim101",
         )
         self.assertEqual(len(paths), 3)
         # All three .txt files present, no .tmp leftovers
@@ -115,7 +115,7 @@ class TestOIFWriter(unittest.TestCase):
         write_bracket_order(
             direction="LONG", qty=1, entry_type="LIMIT",
             entry_price=22000.0, stop_price=21950.0, target_price=22100.0,
-            trade_id="stopcheck",
+            trade_id="stopcheck", account="Sim101",
         )
         # Read the stop file
         stop_files = [f for f in os.listdir(self.tmpdir) if "_stop.txt" in f]
@@ -134,7 +134,7 @@ class TestOIFWriter(unittest.TestCase):
         write_bracket_order(
             direction="SHORT", qty=1, entry_type="LIMIT",
             entry_price=22000.0, stop_price=22050.0, target_price=21900.0,
-            trade_id="shortcheck",
+            trade_id="shortcheck", account="Sim101",
         )
         entry_f = [f for f in os.listdir(self.tmpdir) if "_entry.txt" in f][0]
         stop_f = [f for f in os.listdir(self.tmpdir) if "_stop.txt" in f][0]
@@ -153,7 +153,7 @@ class TestOIFWriter(unittest.TestCase):
         paths = write_bracket_order(
             direction="LONG", qty=1, entry_type="LIMIT",
             entry_price=22000.0, stop_price=21950.0, target_price=None,
-            trade_id="mgd",
+            trade_id="mgd", account="Sim101",
         )
         self.assertEqual(len(paths), 2)  # entry + stop only
 

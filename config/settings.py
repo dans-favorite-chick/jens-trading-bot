@@ -179,6 +179,13 @@ MENTHORQ_WALL_BUFFER_TICKS = 8          # Countertrend proximity buffer
 MENTHORQ_NO_TRADE_INTO_WALL_TICKS = 12  # Entry-into-wall rejection radius
 MENTHORQ_ENABLE_STOP_OVERRIDE = False   # Strategies opt in to gamma stop
 
+# B27 Net GEX regime classification thresholds (absolute Net GEX magnitude).
+# |net_gex| > STRONG  → POSITIVE_STRONG / NEGATIVE_STRONG
+# |net_gex| > NORMAL  → POSITIVE_NORMAL / NEGATIVE_NORMAL
+# |net_gex| <= NORMAL → NEUTRAL
+MENTHORQ_NET_GEX_STRONG_THRESHOLD = 3_000_000
+MENTHORQ_NET_GEX_NORMAL_THRESHOLD = 500_000
+
 # ─── Logging ────────────────────────────────────────────────────────
 LOG_DIR = "logs"
 BRIDGE_LOG = "logs/bridge.log"
