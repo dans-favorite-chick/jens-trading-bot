@@ -31,10 +31,11 @@ Integration points:
 
 import json
 import logging
+import math
 import os
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger("MenthorQ")
 
@@ -61,6 +62,47 @@ BRIDGE_FILE = r"C:\temp\menthorq_levels.json"   # Written by MQBridge.cs
 # Menthor Q REST API key (for future direct API integration)
 # Set in .env as MENTHORQ_API_KEY
 MENTHORQ_API_KEY = os.environ.get("MENTHORQ_API_KEY", "")
+
+
+# G-B26: robust scalar coercion for MenthorQ JSON values.
+# Real-world regressions we guard against (from paste/typo-prone sources):
+#   - missing key          → dict.get returns None → 0.0
+#   - empty string          ""            → 0.0
+#   - whitespace-only       "  "          → 0.0
+#   - NaN / +Inf / -Inf     float("nan")  → 0.0
+#   - negative zero         -0.0          → 0.0  (avoid "price -0.0" noise)
+#   - None                  None          → 0.0
+#   - numeric string        "25210.5"     → 25210.5
+#   - wrapped in list       [25210.5]     → 0.0 (rejected; bad schema)
+def _coerce_float(value: Any, default: float = 0.0) -> float:
+    """Coerce an arbitrary JSON value to a finite float.
+
+    Returns `default` for None, empty/whitespace strings, non-finite floats
+    (NaN / +-Inf), and un-parseable values. Normalizes -0.0 to 0.0.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        # bool is an int subclass — don't let True silently become 1.0
+        return default
+    if isinstance(value, (int, float)):
+        f = float(value)
+    elif isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return default
+        try:
+            f = float(s)
+        except ValueError:
+            return default
+    else:
+        return default
+    if not math.isfinite(f):
+        return default
+    # Normalize -0.0 → 0.0 so "price=-0.00" never shows up in logs / prompts.
+    if f == 0.0:
+        return 0.0
+    return f
 
 
 @dataclass
@@ -149,9 +191,13 @@ def load_bridge_levels() -> dict:
             logger.error(
                 f"[MenthorQ] Bridge file is {age_min:.0f} min old "
                 f"(MQBridge.cs NOT RUNNING). MenthorQ gamma levels are "
-                f"STALE and strategies that gate on them (spring_setup, "
-                f"structural_bias, gamma_flip) are operating without live "
-                f"MQ context. ACTION: open NT8 Control Center → Indicators, "
+                f"STALE and the consumers that actually read them — "
+                f"core.structural_bias.score_menthorq_gamma (15-pt composite "
+                f"weight) and core.continuation_reversal (gamma_regime "
+                f"context adjustment) — are operating without live MQ "
+                f"context. (spring_setup and gamma_flip_detector have zero "
+                f"menthorq refs — unaffected.) "
+                f"ACTION: open NT8 Control Center → Indicators, "
                 f"verify MQBridge is loaded on at least one chart. If loaded, "
                 f"right-click the chart → Reload NinjaScript Output."
             )
@@ -167,7 +213,8 @@ def load_bridge_levels() -> dict:
             raw = json.load(f)
 
         def _f(key: str) -> float:
-            return float(raw.get(key, 0.0) or 0.0)
+            # G-B26: delegate to _coerce_float for NaN/empty-string/None safety.
+            return _coerce_float(raw.get(key))
 
         levels = {
             # Core gamma levels
@@ -194,7 +241,7 @@ def load_bridge_levels() -> dict:
             "gex_level_10":         _f("gex_10"),
             # Metadata
             "_bridge_ts":           raw.get("ts", ""),
-            "_bridge_ratio":        float(raw.get("qqq_to_nq_ratio", 0.0) or 0.0),
+            "_bridge_ratio":        _coerce_float(raw.get("qqq_to_nq_ratio")),
             "_bridge_source":       raw.get("source", "unknown"),
             "_level_type":          raw.get("level_type", ""),
         }
@@ -303,6 +350,19 @@ def load() -> MenthorQSnapshot:
                 f"[MenthorQ] Daily JSON is from {file_date!r}, today={today!r}. "
                 f"Update gex/regime fields in {path} if GEX regime changed."
             )
+        # S1 / phase-eh: mtime-based CRITICAL check — if Jennifer skipped the
+        # morning ritual, the regime JSON won't have been touched in > 24h.
+        # Non-blocking: we still continue with whatever's in the file.
+        try:
+            age_hours = (datetime.now().timestamp() - os.path.getmtime(path)) / 3600.0
+            if age_hours > 24.0:
+                logger.critical(
+                    f"[MenthorQ] menthorq_daily.json is {age_hours:.1f}h old — "
+                    f"Jennifer's morning ritual was SKIPPED. Regime fields "
+                    f"will be stale. Update {path} now. (Non-blocking.)"
+                )
+        except OSError:
+            pass
     except FileNotFoundError:
         logger.warning(f"[MenthorQ] No daily JSON at {path}")
     except Exception as e:
@@ -317,10 +377,10 @@ def load() -> MenthorQSnapshot:
 
     # ── Merge: bridge prices win over manual prices ───────────────────
     def _bv(key: str, fallback_key: str = None, fallback_dict: dict = None) -> float:
-        """Bridge value with optional manual JSON fallback."""
-        v = bridge.get(key, 0.0) or 0.0
+        """Bridge value with optional manual JSON fallback. G-B26 hardened."""
+        v = _coerce_float(bridge.get(key))
         if v <= 0 and fallback_key and fallback_dict:
-            v = float(fallback_dict.get(fallback_key, 0.0) or 0.0)
+            v = _coerce_float(fallback_dict.get(fallback_key))
         return v
 
     hvl_price = _bv("hvl", "price", hvl)
@@ -358,7 +418,7 @@ def load() -> MenthorQSnapshot:
     snap = MenthorQSnapshot(
         date=today,
         gex_regime=gex_regime,
-        net_gex_bn=float(gex.get("net_gex_bn", 0.0) or 0.0),
+        net_gex_bn=_coerce_float(gex.get("net_gex_bn")),
         dex=dex.get("value", "UNKNOWN").upper(),
         # Prices from bridge (auto) with manual JSON fallback
         hvl=hvl_price,
@@ -370,16 +430,16 @@ def load() -> MenthorQSnapshot:
         gamma_wall_0dte=gw_0dte,
         day_min=day_min,
         day_max=day_max,
-        gex_level_1 =bridge.get("gex_level_1",  0.0) or 0.0,
-        gex_level_2 =bridge.get("gex_level_2",  0.0) or 0.0,
-        gex_level_3 =bridge.get("gex_level_3",  0.0) or 0.0,
-        gex_level_4 =bridge.get("gex_level_4",  0.0) or 0.0,
-        gex_level_5 =bridge.get("gex_level_5",  0.0) or 0.0,
-        gex_level_6 =bridge.get("gex_level_6",  0.0) or 0.0,
-        gex_level_7 =bridge.get("gex_level_7",  0.0) or 0.0,
-        gex_level_8 =bridge.get("gex_level_8",  0.0) or 0.0,
-        gex_level_9 =bridge.get("gex_level_9",  0.0) or 0.0,
-        gex_level_10=bridge.get("gex_level_10", 0.0) or 0.0,
+        gex_level_1 =_coerce_float(bridge.get("gex_level_1")),
+        gex_level_2 =_coerce_float(bridge.get("gex_level_2")),
+        gex_level_3 =_coerce_float(bridge.get("gex_level_3")),
+        gex_level_4 =_coerce_float(bridge.get("gex_level_4")),
+        gex_level_5 =_coerce_float(bridge.get("gex_level_5")),
+        gex_level_6 =_coerce_float(bridge.get("gex_level_6")),
+        gex_level_7 =_coerce_float(bridge.get("gex_level_7")),
+        gex_level_8 =_coerce_float(bridge.get("gex_level_8")),
+        gex_level_9 =_coerce_float(bridge.get("gex_level_9")),
+        gex_level_10=_coerce_float(bridge.get("gex_level_10")),
         # Flows from manual JSON (optional enrichment)
         vanna=flows.get("vanna", "NEUTRAL").upper(),
         charm=flows.get("charm", "NEUTRAL").upper(),
@@ -387,7 +447,7 @@ def load() -> MenthorQSnapshot:
         direction_bias=regime.get("direction_bias", "NEUTRAL").upper(),
         allow_longs=bool(regime.get("allow_longs", True)),
         allow_shorts=bool(regime.get("allow_shorts", True)),
-        stop_multiplier=float(regime.get("stop_multiplier", 1.0) or 1.0),
+        stop_multiplier=_coerce_float(regime.get("stop_multiplier"), default=1.0) or 1.0,
         strategy_type=regime.get("strategy_type", "BALANCED").upper(),
         notes=regime.get("notes", ""),
         is_stale=stale and not bridge_active,
