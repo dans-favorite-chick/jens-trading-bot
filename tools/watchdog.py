@@ -20,8 +20,8 @@ Actions:
 Usage:
     python tools/watchdog.py                    # Run watchdog
     python tools/watchdog.py --no-restart       # Monitor only, no auto-restart
-    python tools/watchdog.py --bots prod        # Only watch prod bot
-    python tools/watchdog.py --bots prod,lab    # Watch both (default)
+    python tools/watchdog.py --bots prod            # Only watch prod bot
+    python tools/watchdog.py --bots prod,lab,sim    # Watch all three (default)
 """
 
 import argparse
@@ -577,8 +577,8 @@ def main():
     parser = argparse.ArgumentParser(description="Phoenix Bot Watchdog")
     parser.add_argument("--no-restart", action="store_true",
                         help="Monitor only — don't auto-restart bots")
-    parser.add_argument("--bots", type=str, default="prod,lab",
-                        help="Comma-separated bot names to watch (default: prod,lab)")
+    parser.add_argument("--bots", type=str, default="prod,lab,sim",
+                        help="Comma-separated bot names to watch (default: prod,lab,sim)")
     parser.add_argument("--analyze", action="store_true",
                         help="Analyze disconnect forensics log and exit")
     parser.add_argument("--api-port", type=int, default=5001,

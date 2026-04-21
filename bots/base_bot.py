@@ -1007,14 +1007,21 @@ class BaseBot:
                             if _s.name == _strat_name:
                                 _max_hold = _s.config.get("max_hold_min")
                                 break
-                    exit_reason = self.positions.check_exits(price, max_hold_min=_max_hold)
-                    if exit_reason:
-                        await self._exit_trade(ws, price, exit_reason)
+                    # Phase C (2026-04-21): iterate all open positions so
+                    # stops/targets fire correctly in multi-position mode.
+                    # In single-position mode this yields 0 or 1 trigger and
+                    # behaves identically to pre-Phase-C.
+                    exit_triggers = self.positions.check_exits_all(price, max_hold_min=_max_hold)
+                    for _tid, _exit_reason in exit_triggers:
+                        await self._exit_trade(ws, price, _exit_reason, trade_id=_tid)
 
                 # Execute pending signals from strategy evaluation
                 # HARD TIMEOUT: entire signal→trade path must complete in 15s
                 # or we abandon it. This prevents the tick loop from ever freezing.
-                if hasattr(self, '_pending_signal') and self._pending_signal and self.positions.is_flat:
+                # Phase C: per-strategy flat check unlocks concurrent entries
+                # for different strategies (each on its own NT8 sub-account).
+                if hasattr(self, '_pending_signal') and self._pending_signal and \
+                        self.positions.is_flat_for(self._pending_signal.strategy):
                     signal = self._pending_signal
                     self._pending_signal = None
 
@@ -2667,12 +2674,24 @@ class BaseBot:
         except Exception as e:
             logger.debug(f"[_on_trade_closed] record_trade_outcome error (non-blocking): {e}")
 
-    async def _exit_trade(self, ws, price: float, reason: str):
-        """Execute exit: send to NT8 FIRST, then close Python state."""
+    async def _exit_trade(self, ws, price: float, reason: str,
+                          trade_id: str | None = None):
+        """Execute exit: send to NT8 FIRST, then close Python state.
+
+        Phase C: trade_id optional. When supplied, exits that specific
+        position (used by the multi-position tick-exit iteration at the
+        top of _connect_and_listen). When None, falls back to the sole
+        active position (legacy single-position behavior).
+        """
         if self.positions.is_flat:
             return
 
-        pos = self.positions.position
+        if trade_id is not None:
+            pos = self.positions.get_position(trade_id)
+        else:
+            pos = self.positions.position
+        if pos is None:
+            return
         tid = pos.trade_id
         self.status = "EXIT_PENDING"
         logger.info(f"[EXIT_PENDING:{tid}] Sending exit for {pos.direction} @ {price:.2f}, reason={reason}")
@@ -2713,7 +2732,10 @@ class BaseBot:
         self._rider_active = False
         pos.rider_mode = False if self.positions.position else False
 
-        trade = self.positions.close_position(price, reason)
+        # Phase C: pass trade_id explicitly so multi-position close operates
+        # on the right slot (no-op for single-position since _resolve_trade_id
+        # will pick the sole active).
+        trade = self.positions.close_position(price, reason, trade_id=tid)
         if trade:
             self.risk.record_trade(trade["pnl_dollars"])
             self.trade_memory.record(trade)
