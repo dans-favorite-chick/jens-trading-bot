@@ -212,6 +212,7 @@ class SimBot(BaseBot):
 
     async def _daily_flatten_loop(self):
         """Poll every 30s; flatten at 16:00 CT if not yet flattened today."""
+        self._debrief_fired_for: Optional["date"] = None  # type: ignore[name-defined]
         while True:
             try:
                 # Hook the ws sender lazily — _ws is set by the base's
@@ -220,9 +221,34 @@ class SimBot(BaseBot):
                 n = await self._flattener.check_and_flatten()
                 if n:
                     logger.info(f"[DAILY_FLATTEN] closed {n} position(s) at 16:00 CT")
+
+                # [AI-DEBRIEF-HOOK] S7 4C: fire post-flatten debrief once per
+                # day after the 16:00 CT flatten, pre-17:00 globex reopen.
+                await self._maybe_run_debrief()
             except Exception as e:
                 logger.warning(f"[DAILY_FLATTEN] poll error: {e}")
             await asyncio.sleep(30)
+
+    async def _maybe_run_debrief(self):
+        """[AI-DEBRIEF-HOOK] Run the S7 session debriefer once per day,
+        post-flatten. Safe-by-default — never raises into the poll loop."""
+        try:
+            from datetime import datetime as _dt, date as _date
+            from zoneinfo import ZoneInfo as _ZI
+            now_ct = _dt.now(_ZI("America/Chicago"))
+            today_ct = now_ct.date()
+            # Only after 16:00 CT, and only once per day.
+            if now_ct.hour < 16:
+                return
+            if getattr(self, "_debrief_fired_for", None) == today_ct:
+                return
+            from agents.session_debriefer import run_session_debrief
+            path = await run_session_debrief(target_date=today_ct, bot_name="sim")
+            self._debrief_fired_for = today_ct
+            if path:
+                logger.info(f"[AI-DEBRIEF-HOOK] debrief written: {path}")
+        except Exception as e:
+            logger.warning(f"[AI-DEBRIEF-HOOK] debrief skipped: {e}")
 
     def _get_ws_send_fn(self):
         """Build a trade-send closure bound to the current ws, or None.

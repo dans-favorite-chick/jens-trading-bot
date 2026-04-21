@@ -272,48 +272,73 @@ def score_liquidity_sweep(sweep_state: dict) -> tuple[int, str]:
     return 0, f"{len(watches)} pivot breaks being monitored"
 
 
-def score_menthorq_gamma(mq_context: dict, price: float) -> tuple[int, str]:
-    """Gamma regime + wall proximity."""
-    if not mq_context:
+def score_menthorq_gamma(market_snapshot: dict, price: float) -> tuple[int, str]:
+    """Gamma regime + wall proximity.
+
+    B33 rewire (Phase E-strategic): reads ``market_snapshot["gamma_regime"]``
+    directly (Path B — populated by base_bot via fresh gamma/*_levels.txt
+    parse + B27 classify_regime). Path A (the stale
+    ``data/menthorq/menthorq_daily.json`` read via ``market_snapshot["menthorq"]``)
+    has been retired.
+
+    Accepts either:
+      - the full ``market_snapshot`` dict (preferred; looks up ``gamma_regime``
+        plus optional ``gamma_nearest_wall``), or
+      - a legacy sub-dict with ``gamma_regime`` key (backwards compat for
+        tests calling this directly).
+    """
+    if not market_snapshot:
         return 0, "no MQ data"
-    regime = mq_context.get("gex_regime", "UNKNOWN")
-    cr = mq_context.get("call_resistance_all", 0)
-    ps = mq_context.get("put_support_all", 0)
-    hvl = mq_context.get("hvl", 0)
-    allow_longs = mq_context.get("allow_longs", True)
-    allow_shorts = mq_context.get("allow_shorts", True)
+
+    regime = market_snapshot.get("gamma_regime")
+    if regime is None:
+        return 0, "no gamma_regime in snapshot"
+
+    # Normalize: may be GammaRegime enum or a string
+    regime_name = getattr(regime, "name", None) or str(regime).upper().replace("GAMMAREGIME.", "")
 
     points = 0
     reasons = []
 
-    # Above HVL = positive gamma zone → bullish bias
-    if hvl > 0:
-        if price > hvl:
-            points += 5
-            reasons.append(f"above HVL {hvl:.0f}")
-        else:
-            points -= 5
-            reasons.append(f"below HVL {hvl:.0f}")
-
-    # Near CR = bearish (resistance)
-    if cr > 0:
-        dist_ticks = abs(price - cr) / 0.25
-        if dist_ticks < 20:
-            points -= 5
-            reasons.append(f"near CR {cr:.0f} ({dist_ticks:.0f}t)")
-
-    # Near PS = bullish (support)
-    if ps > 0:
-        dist_ticks = abs(price - ps) / 0.25
-        if dist_ticks < 20:
-            points += 5
-            reasons.append(f"near PS {ps:.0f} ({dist_ticks:.0f}t)")
-
-    # Regime-specific bias
-    if regime == "POSITIVE":
+    # ── Regime-driven directional bias ────────────────────────────────
+    # B27 6-value enum: POSITIVE_STRONG / POSITIVE_NORMAL / NEUTRAL /
+    # NEGATIVE_NORMAL / NEGATIVE_STRONG / UNKNOWN.
+    # Positive gamma = above HVL = mean-reversion zone (bullish tilt baseline).
+    # Negative gamma = below HVL = momentum down (bearish tilt).
+    if regime_name == "POSITIVE_STRONG":
+        points += 10
+        reasons.append("POS_STRONG GEX (mean-rev, bullish floor)")
+    elif regime_name == "POSITIVE_NORMAL":
+        points += 5
         reasons.append("POS GEX (mean-rev)")
-    elif regime == "NEGATIVE":
+    elif regime_name == "NEGATIVE_NORMAL":
+        points -= 5
         reasons.append("NEG GEX (trend-amp)")
+    elif regime_name == "NEGATIVE_STRONG":
+        points -= 10
+        reasons.append("NEG_STRONG GEX (trend-amp, bearish drift)")
+    elif regime_name == "NEUTRAL":
+        reasons.append("NEUTRAL GEX")
+    elif regime_name == "UNKNOWN":
+        return 0, "gamma regime UNKNOWN"
+
+    # ── Wall proximity (optional, from gamma_nearest_wall enrichment) ─
+    nearest = market_snapshot.get("gamma_nearest_wall")
+    if isinstance(nearest, (tuple, list)) and len(nearest) == 2:
+        wall_name, wall_dist = nearest
+        # wall_dist is in points; ticks = dist / 0.25
+        try:
+            dist_pts = float(wall_dist)
+        except (TypeError, ValueError):
+            dist_pts = 9999.0
+        if dist_pts < 5.0 and isinstance(wall_name, str):
+            wn = wall_name.lower()
+            if "resist" in wn or wn.startswith("call"):
+                points -= 5
+                reasons.append(f"near {wall_name} ({dist_pts:.1f}pt)")
+            elif "support" in wn or wn.startswith("put"):
+                points += 5
+                reasons.append(f"near {wall_name} ({dist_pts:.1f}pt)")
 
     points = max(-WEIGHTS["menthorq_gamma"], min(WEIGHTS["menthorq_gamma"], points))
     return points, "; ".join(reasons) if reasons else "neutral MQ context"
@@ -415,7 +440,7 @@ def compute_structural_bias(market_snapshot: dict) -> StructuralBias:
         ("liquidity_sweep", WEIGHTS["liquidity_sweep"],
          lambda: score_liquidity_sweep(market_snapshot.get("sweep_state", {}))),
         ("menthorq_gamma", WEIGHTS["menthorq_gamma"],
-         lambda: score_menthorq_gamma(market_snapshot.get("menthorq", {}), price)),
+         lambda: score_menthorq_gamma(market_snapshot, price)),
         ("gamma_flip", WEIGHTS["gamma_flip"],
          lambda: score_gamma_flip(market_snapshot.get("gamma_flip_state", {}))),
         ("vix_regime", WEIGHTS["vix_regime"],

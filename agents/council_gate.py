@@ -584,3 +584,342 @@ async def _test():
 
 if __name__ == "__main__":
     asyncio.run(_test())
+
+
+# ═════════════════════════════════════════════════════════════════════
+# S5 — 4A Council Gate (spec-compliant, built on agents.base_agent)
+# ═════════════════════════════════════════════════════════════════════
+#
+# Spec:
+#   - 7 voting personas (trend-follower, mean-reverter, vol-watcher,
+#     gamma-reader, intermarket-analyst, session-historian, contrarian)
+#   - Voters use Gemini Flash @ temp 0.3 (JSON-mode) via AIClient
+#   - Orchestrator uses Gemini Pro → {"verdict","score","summary"}
+#   - Runs at 8:30 AM CT session open + on regime shifts
+#   - Writes logs/council/YYYY-MM-DD.json
+#   - get_current_bias() returns last vote dict (verdict + timestamp)
+#   - All AI calls wrapped in safe_call → NEUTRAL default on timeout/error
+#   - Tie-break 3-3-1 → NEUTRAL
+#
+# Coexists with the legacy run_council/council_to_dict API above, which
+# S6/S7 bots still consume. The new CouncilGate class is the S5 surface.
+
+from pathlib import Path as _Path
+from datetime import datetime as _dt, timezone as _tz
+
+try:
+    from agents.base_agent import AIClient as _AIClient, BaseAgent as _BaseAgent
+    from agents import config as _agent_cfg
+    _HAS_BASE_AGENT = True
+except Exception:  # pragma: no cover - defensive
+    _AIClient = None  # type: ignore
+    _BaseAgent = object  # type: ignore
+    _agent_cfg = None  # type: ignore
+    _HAS_BASE_AGENT = False
+
+
+# ─── Spec personas ──────────────────────────────────────────────────
+
+COUNCIL_PERSONAS: list[dict] = [
+    {
+        "name": "trend-follower",
+        "lens": "Weight EMA crossovers, higher-highs/higher-lows, and multi-timeframe trend alignment. Bullish if uptrend intact; bearish if downtrend.",
+    },
+    {
+        "name": "mean-reverter",
+        "lens": "Look for overextension vs VWAP / Keltner / RSI extremes. Bullish when oversold and snap-back probable; bearish when overbought.",
+    },
+    {
+        "name": "vol-watcher",
+        "lens": "Read ATR regime and VIX. Expanding vol + directional break = follow; compressed vol = fade; spiking VIX from low = risk-off bearish.",
+    },
+    {
+        "name": "gamma-reader",
+        "lens": "Interpret Menthor Q GEX / HVL / dealer flow. Positive GEX above HVL = stable bullish; negative GEX below HVL = amplified moves (direction = sign of DEX).",
+    },
+    {
+        "name": "intermarket-analyst",
+        "lens": "Cross-asset: DXY, 10Y yields, ES vs NQ relative strength, crypto risk-on/off. Rising yields + strong DXY = bearish equities; NQ outperforming ES = bullish tech.",
+    },
+    {
+        "name": "session-historian",
+        "lens": "Compare today's open to analogous setups from the recent trade log. If the pattern historically resolves up, vote BULLISH, etc.",
+    },
+    {
+        "name": "contrarian",
+        "lens": "Deliberately challenge the obvious read. If sentiment/positioning is one-sided, fade it. Hunt for exhaustion and traps.",
+    },
+]
+
+_VOTER_PROMPT_PATH = _Path(__file__).parent / "prompts" / "council_voter.md"
+_ORCH_PROMPT_PATH  = _Path(__file__).parent / "prompts" / "council_orchestrator.md"
+
+
+def _load_prompt(p: _Path, fallback: str) -> str:
+    try:
+        return p.read_text(encoding="utf-8")
+    except Exception:
+        return fallback
+
+
+_VOTER_PROMPT_FALLBACK = (
+    "You are the {persona_name} on Phoenix Bot's council.\n"
+    "Lens: {persona_lens}\n\nMarket:\n{market_json}\n\n"
+    "Respond ONLY with JSON: "
+    '{{"vote": "BULLISH"|"BEARISH"|"NEUTRAL", "rationale": "<=1 sentence"}}'
+)
+_ORCH_PROMPT_FALLBACK = (
+    "You are the Chief Strategist. Synthesize these 7 votes. Need >=4/7 "
+    "for directional verdict; ties or 3-3-1 = NEUTRAL.\n\nVotes:\n{votes_json}\n\n"
+    'Respond ONLY with JSON: {{"verdict": "BULLISH"|"BEARISH"|"NEUTRAL", '
+    '"score": "N/7", "summary": "<1 sentence>"}}'
+)
+
+
+# ─── Logs path ──────────────────────────────────────────────────────
+
+_PROJECT_ROOT = _Path(__file__).resolve().parent.parent
+COUNCIL_LOG_DIR = _Path(os.environ.get("COUNCIL_LOG_DIR", _PROJECT_ROOT / "logs" / "council")) if False else _PROJECT_ROOT / "logs" / "council"
+
+import os as _os  # noqa: E402 — kept local to avoid top-of-file shuffle
+COUNCIL_LOG_DIR = _Path(_os.environ.get("COUNCIL_LOG_DIR", str(_PROJECT_ROOT / "logs" / "council")))
+
+
+def _council_log_path(date_str: Optional[str] = None) -> _Path:
+    if date_str is None:
+        date_str = _dt.now(_tz.utc).strftime("%Y-%m-%d")
+    return COUNCIL_LOG_DIR / f"{date_str}.json"
+
+
+# ─── Module-level current-bias state ────────────────────────────────
+
+_CURRENT_BIAS: dict = {
+    "verdict": "NEUTRAL",
+    "score": "0/7",
+    "summary": "No council vote yet.",
+    "timestamp": None,
+}
+
+
+def get_current_bias() -> dict:
+    """Return the last council verdict. Bots consult this as optional filter."""
+    return dict(_CURRENT_BIAS)
+
+
+def _set_current_bias(verdict: str, score: str, summary: str) -> None:
+    global _CURRENT_BIAS
+    _CURRENT_BIAS = {
+        "verdict": verdict,
+        "score": score,
+        "summary": summary,
+        "timestamp": _dt.now(_tz.utc).isoformat(),
+    }
+
+
+# ─── Tally + tie-break ──────────────────────────────────────────────
+
+def _tally_s5(votes: list[dict]) -> tuple[int, int, int]:
+    b = sum(1 for v in votes if v.get("vote") == "BULLISH")
+    s = sum(1 for v in votes if v.get("vote") == "BEARISH")
+    n = sum(1 for v in votes if v.get("vote") == "NEUTRAL")
+    return b, s, n
+
+
+def _deterministic_verdict(votes: list[dict]) -> tuple[str, str]:
+    """Local tie-break: >=4/7 wins; otherwise NEUTRAL (incl. 3-3-1)."""
+    b, s, n = _tally_s5(votes)
+    if b >= 4 and b > s:
+        return "BULLISH", f"{b}/7"
+    if s >= 4 and s > b:
+        return "BEARISH", f"{s}/7"
+    majority = max(b, s, n)
+    return "NEUTRAL", f"{majority}/7"
+
+
+# ─── CouncilGate agent ──────────────────────────────────────────────
+
+class CouncilGate(_BaseAgent):  # type: ignore[misc]
+    """S5 — 7-voter Gemini Flash council + Gemini Pro orchestrator.
+
+    Usage:
+        gate = CouncilGate()
+        result = await gate.run({"market": {...}, "trigger": "session_open"})
+        bias = get_current_bias()
+    """
+
+    name = "council-gate"
+
+    VOTER_TEMPERATURE = 0.3
+    VOTER_TIMEOUT_S = 5.0
+    ORCH_TIMEOUT_S = 8.0
+
+    def __init__(self, client=None) -> None:
+        if not _HAS_BASE_AGENT:
+            raise RuntimeError("agents.base_agent not available")
+        super().__init__(client=client)
+        self.personas = COUNCIL_PERSONAS
+        self._voter_prompt = _load_prompt(_VOTER_PROMPT_PATH, _VOTER_PROMPT_FALLBACK)
+        self._orch_prompt = _load_prompt(_ORCH_PROMPT_PATH, _ORCH_PROMPT_FALLBACK)
+
+    # ---- Voter -----------------------------------------------------
+
+    async def _vote_one(self, persona: dict, market: dict) -> dict:
+        default_vote = {
+            "voter": persona["name"],
+            "vote": "NEUTRAL",
+            "rationale": "default (timeout or error)",
+        }
+
+        prompt = self._voter_prompt.format(
+            persona_name=persona["name"],
+            persona_lens=persona["lens"],
+            market_json=json.dumps(market, default=str)[:2000],
+        )
+
+        async def _call():
+            return await self.client.ask_gemini(
+                prompt,
+                system=f"You are the {persona['name']} voter. Reply with JSON only.",
+                model=_agent_cfg.MODEL_GEMINI_FLASH,
+                default=None,
+                timeout_s=self.VOTER_TIMEOUT_S,
+                temperature=self.VOTER_TEMPERATURE,
+                max_tokens=200,
+            )
+
+        text = await self.safe_call(_call, default=None, what=f"voter:{persona['name']}")
+        if text is None:
+            return default_vote
+
+        parsed = _AIClient.parse_json(text, default=None)
+        if not isinstance(parsed, dict):
+            return default_vote
+
+        vote = str(parsed.get("vote", "NEUTRAL")).upper()
+        if vote not in ("BULLISH", "BEARISH", "NEUTRAL"):
+            vote = "NEUTRAL"
+        return {
+            "voter": persona["name"],
+            "vote": vote,
+            "rationale": str(parsed.get("rationale", ""))[:240],
+        }
+
+    # ---- Orchestrator ---------------------------------------------
+
+    async def _orchestrate(self, votes: list[dict]) -> dict:
+        # Always compute the deterministic verdict as the default/fallback.
+        det_verdict, det_score = _deterministic_verdict(votes)
+        default_result = {
+            "verdict": det_verdict,
+            "score": det_score,
+            "summary": f"Council deterministic tally: {det_verdict} ({det_score}).",
+        }
+
+        prompt = self._orch_prompt.format(votes_json=json.dumps(votes, indent=2))
+
+        async def _call():
+            return await self.client.ask_gemini(
+                prompt,
+                system="You are the Chief Strategist. Reply with JSON only.",
+                model=_agent_cfg.MODEL_GEMINI_PRO,
+                default=None,
+                timeout_s=self.ORCH_TIMEOUT_S,
+                temperature=0.2,
+                max_tokens=300,
+            )
+
+        text = await self.safe_call(_call, default=None, what="orchestrator")
+        if text is None:
+            return default_result
+
+        parsed = _AIClient.parse_json(text, default=None)
+        if not isinstance(parsed, dict):
+            return default_result
+
+        verdict = str(parsed.get("verdict", det_verdict)).upper()
+        if verdict not in ("BULLISH", "BEARISH", "NEUTRAL"):
+            verdict = det_verdict
+        score = str(parsed.get("score", det_score))
+        summary = str(parsed.get("summary", default_result["summary"]))[:400]
+
+        # Trust-but-verify: if orchestrator contradicts deterministic tie
+        # outcome (3-3-1 or no 4/7 majority), force NEUTRAL per spec.
+        b, s, n = _tally_s5(votes)
+        if verdict == "BULLISH" and not (b >= 4 and b > s):
+            verdict, score = det_verdict, det_score
+        elif verdict == "BEARISH" and not (s >= 4 and s > b):
+            verdict, score = det_verdict, det_score
+
+        return {"verdict": verdict, "score": score, "summary": summary}
+
+    # ---- Log writer -----------------------------------------------
+
+    def _write_log(self, payload: dict) -> _Path:
+        COUNCIL_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        p = _council_log_path()
+        # Append today's entry to a JSON list for multiple intraday runs.
+        existing: list = []
+        if p.exists():
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                if isinstance(data, list):
+                    existing = data
+                elif isinstance(data, dict):
+                    existing = [data]
+            except Exception:
+                existing = []
+        existing.append(payload)
+        p.write_text(json.dumps(existing, indent=2, default=str), encoding="utf-8")
+        return p
+
+    # ---- Public entry ---------------------------------------------
+
+    async def run(self, ctx: Any) -> dict:  # type: ignore[override]
+        """Run the council.
+
+        ``ctx`` should be ``{"market": {...}, "trigger": "session_open"|"regime_shift"}``.
+        Returns a dict with verdict/score/summary/votes/timestamp/log_path.
+        Never raises.
+        """
+        market = (ctx or {}).get("market", {}) if isinstance(ctx, dict) else {}
+        trigger = (ctx or {}).get("trigger", "session_open") if isinstance(ctx, dict) else "session_open"
+
+        votes = await asyncio.gather(
+            *[self._vote_one(p, market) for p in self.personas],
+            return_exceptions=False,
+        )
+        votes = list(votes)
+
+        orch = await self._orchestrate(votes)
+
+        payload = {
+            "trigger": trigger,
+            "timestamp": _dt.now(_tz.utc).isoformat(),
+            "verdict": orch["verdict"],
+            "score": orch["score"],
+            "summary": orch["summary"],
+            "votes": votes,
+        }
+
+        try:
+            log_path = self._write_log(payload)
+            payload["log_path"] = str(log_path)
+        except Exception as e:
+            self.log.warning("[%s] log write failed: %s", self.name, e)
+            payload["log_path"] = None
+
+        _set_current_bias(orch["verdict"], orch["score"], orch["summary"])
+        return payload
+
+
+__all__ = [
+    # Legacy S5 surface (consumed by bots/base_bot.py)
+    "run_council",
+    "council_to_dict",
+    "CouncilResult",
+    "Vote",
+    # S5 spec surface
+    "CouncilGate",
+    "COUNCIL_PERSONAS",
+    "get_current_bias",
+]

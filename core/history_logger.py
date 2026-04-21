@@ -97,11 +97,19 @@ class HistoryLogger:
 
     def log_eval(self, eval_record: dict, market: dict):
         """Log a full strategy evaluation — signals, skips, blocks, and why."""
+        # S1 / phase-eh: surface gamma_regime as a first-class snapshot field.
+        # It may live on either eval_record (preferred) or market, and may be
+        # an enum with a `.value` string — normalize both.
+        _gr = eval_record.get("gamma_regime", market.get("gamma_regime"))
+        _gr_str = _gr.value if hasattr(_gr, "value") else (
+            str(_gr) if _gr is not None else None
+        )
         self._write({
             "event":        "eval",
             "ts":           datetime.now().isoformat(),
             "bot":          self.bot_name,
             "regime":       eval_record.get("regime"),
+            "gamma_regime": _gr_str,
             "risk_blocked": eval_record.get("risk_blocked"),
             "strategies":   eval_record.get("strategies", []),
             "best_signal":  eval_record.get("best_signal"),
@@ -128,7 +136,7 @@ class HistoryLogger:
             "cr_verdict":       market.get("cr_verdict"),
             "cr_confidence":    market.get("cr_confidence"),
             "above_hvl":        market.get("above_hvl"),
-            "gamma_regime":     market.get("gamma_regime"),
+            # gamma_regime is now first-class above (line ~112); do not re-key it here.
         })
 
     def log_entry(self, signal, price: float, contracts: int,

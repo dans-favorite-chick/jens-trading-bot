@@ -44,6 +44,15 @@ STRATEGY_DEFAULTS = {
     },
 }
 
+# ─── AI Pre-Trade Filter Mode (S6 / Phase H-4B) ─────────────────────
+# Per-strategy ``ai_filter_mode`` values:
+#   "advisory" — AI verdict is logged only; trade always proceeds (default).
+#   "blocking" — if verdict is SIT_OUT, the bot skips the trade.
+# Default is "advisory" across the board — we collect data before ever
+# actually blocking a trade on an AI signal.
+DEFAULT_AI_FILTER_MODE = "advisory"
+
+
 # ─── Individual Strategy Configs ────────────────────────────────────
 # Each strategy reads its own section. Dashboard toggles `enabled`.
 
@@ -291,3 +300,10 @@ STRATEGIES = {
         "max_hold_min": 60,
     },
 }
+
+# Backfill default ai_filter_mode="advisory" on every strategy that
+# hasn't set one explicitly. Keeps the S6 surface one line per strategy
+# without editing each block.
+for _name, _cfg in STRATEGIES.items():
+    _cfg.setdefault("ai_filter_mode", DEFAULT_AI_FILTER_MODE)
+del _name, _cfg
