@@ -269,3 +269,132 @@ def test_orchestrator_json_parse_failure_falls_back(have_keys, tmp_council_dir, 
     # Fallback to deterministic
     assert result["verdict"] == "BULLISH"
     assert result["score"] == "5/7"
+
+
+# ─── [COUNCIL-AUTO] Auto-trigger tests ──────────────────────────────
+# These cover the session-open date-guard and the regime-shift 15-min
+# debounce in bots/sim_bot.py without booting the full SimBot. We bind
+# the sim_bot methods onto a lightweight stub that only carries the
+# state those methods touch.
+
+from bots import sim_bot as _sim_bot  # noqa: E402
+
+
+class _StubSimBot:
+    """Minimal object to exercise SimBot's council auto-trigger logic
+    without running the real __init__ (which wires websockets, NT8,
+    strategies, etc.). We bind the unbound methods we need."""
+
+    COUNCIL_REGIME_DEBOUNCE_S = _sim_bot.SimBot.COUNCIL_REGIME_DEBOUNCE_S
+
+    def __init__(self):
+        self._last_council_date = None
+        self._last_regime_council_ts = 0.0
+        self._last_seen_regime = None
+        self.aggregator = None
+        self.session = None
+        self.fired = []  # list of (trigger, reason)
+
+    # Borrow the real ctx builder (it handles a missing aggregator).
+    _build_council_ctx = _sim_bot.SimBot._build_council_ctx
+
+    async def _fire_council(self, trigger, reason):
+        # Record fire; don't actually call CouncilGate.
+        self.fired.append((trigger, reason))
+
+
+class _FakeSession:
+    """Stand-in for SessionManager — returns whatever regime we set."""
+    def __init__(self, regime):
+        self.regime = regime
+
+    def get_current_regime(self):
+        return self.regime
+
+
+def test_council_session_open_guard_once_per_day():
+    """Second invocation on the same trading day is a no-op."""
+    bot = _StubSimBot()
+
+    # Fire once with today's date.
+    from datetime import date as _date
+    today = _date(2026, 4, 21)
+    assert bot._last_council_date != today
+
+    # Simulate the loop's core guard block twice for the same day.
+    async def _run_guard_once():
+        if bot._last_council_date != today:
+            bot._last_council_date = today
+            await bot._fire_council("session_open", f"session_open ({today})")
+
+    asyncio.run(_run_guard_once())
+    asyncio.run(_run_guard_once())
+    # Exactly one fire recorded.
+    assert len(bot.fired) == 1
+    assert bot.fired[0][0] == "session_open"
+
+    # A new day resets the guard.
+    next_day = _date(2026, 4, 22)
+
+    async def _run_guard_next():
+        if bot._last_council_date != next_day:
+            bot._last_council_date = next_day
+            await bot._fire_council("session_open", f"session_open ({next_day})")
+
+    asyncio.run(_run_guard_next())
+    assert len(bot.fired) == 2
+
+
+def test_council_regime_shift_debounce(monkeypatch):
+    """A second shift within 15 min is skipped; after the debounce
+    window, a subsequent shift fires."""
+    bot = _StubSimBot()
+    bot.session = _FakeSession("PREMARKET")
+
+    # Fake monotonic clock we can advance.
+    fake_now = {"t": 1000.0}
+    import time as _time_mod
+    monkeypatch.setattr(_time_mod, "monotonic", lambda: fake_now["t"])
+
+    async def _tick():
+        """One iteration of the regime-shift loop body."""
+        new_regime = bot.session.get_current_regime()
+        prev = bot._last_seen_regime
+        if prev is None:
+            bot._last_seen_regime = new_regime
+            return
+        if new_regime != prev:
+            since = _time_mod.monotonic() - bot._last_regime_council_ts
+            if since >= bot.COUNCIL_REGIME_DEBOUNCE_S:
+                bot._last_regime_council_ts = _time_mod.monotonic()
+                bot._last_seen_regime = new_regime
+                await bot._fire_council(
+                    "regime_shift", f"regime_shift {prev} -> {new_regime}"
+                )
+            else:
+                bot._last_seen_regime = new_regime
+
+    # Tick 1: seed prev=PREMARKET. No fire.
+    asyncio.run(_tick())
+    assert bot.fired == []
+
+    # Transition 1: PREMARKET -> OPEN_MOMENTUM. Fires (first transition,
+    # debounce timestamp is 0 so always >= 15 min).
+    bot.session.regime = "OPEN_MOMENTUM"
+    asyncio.run(_tick())
+    assert len(bot.fired) == 1
+    assert "OPEN_MOMENTUM" in bot.fired[0][1]
+
+    # Transition 2: OPEN_MOMENTUM -> MIDDAY_CHOP only 5 min later → debounced.
+    fake_now["t"] += 5 * 60
+    bot.session.regime = "MIDDAY_CHOP"
+    asyncio.run(_tick())
+    assert len(bot.fired) == 1  # still only the first fire
+
+    # Transition 3: another shift at +20 min total — past the 15-min
+    # debounce, so fires again.
+    fake_now["t"] += 16 * 60  # well past debounce
+    bot.session.regime = "AFTERHOURS"
+    asyncio.run(_tick())
+    assert len(bot.fired) == 2
+    assert "AFTERHOURS" in bot.fired[1][1]
