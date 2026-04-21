@@ -15,6 +15,10 @@ get_account_for_signal(strategy_name, sub_strategy=None):
   3. Otherwise (unknown strategy) → fall back to _default
 
 Accounts listed here MUST match what Jennifer has configured in NT8.
+Names are BYTE-EXACT NT8 display-name literals (including spaces and
+mixed case). A single-character mismatch silently routes to Sim101
+fallback with a [ROUTING] WARN — so grep the logs if anything looks off.
+
 validate_account_map() returns the unique set for a visual cross-check
 at bot startup.
 """
@@ -34,30 +38,33 @@ _DEFAULT_ACCOUNT = "Sim101"
 
 
 STRATEGY_ACCOUNT_MAP: Dict[str, Union[str, Dict[str, str]]] = {
-    # opening_session sub-strategies — each routes to a dedicated account.
-    # open_drive and open_test_drive share an account because they trade
-    # the same 8:30-9:00 CT window and rarely fire on the same day.
+    # opening_session sub-strategies — each routes to its own dedicated
+    # NT8 account for clean per-sub-strategy P&L isolation.
     "opening_session": {
         "open_drive":          "SimOpenDrive",
-        "open_test_drive":     "SimOpenDrive",
-        "open_auction_in":     "SimOpenAuctionInRange",
-        "open_auction_out":    "SimOpenAuctionOutOfRange",
-        "premarket_breakout":  "SimPremarketBreakout",
+        "open_test_drive":     "SimOpen Test Drive",
+        "open_auction_in":     "SimOpen Auction In Range",
+        "open_auction_out":    "SimOpen Auction Out of Range",
+        "premarket_breakout":  "SimPremarket Breakout",
         "orb":                 "SimORB",
     },
 
-    # Top-level strategies — one account each.
-    "bias_momentum":        "SimBiasMomentum",
-    "spring_setup":         "SimSpringSetup",
-    "vwap_pullback":        "SimVWappPullback",   # NT8 config uses this literal
-    "vwap_band_pullback":   "SimVWappPullback",   # shares with vwap_pullback
-    "dom_pullback":         "SimDomPullBack",
-    "ib_breakout":          "SimIBBreakout",
-    "compression_breakout": "SimCompressionBreakout",
-    "noise_area":           "SimNoiseArea",
+    # Top-level strategies — one account each. Names are BYTE-EXACT NT8
+    # display names (including spaces and mixed case). Do not "tidy" —
+    # a single character mismatch silently routes to Sim101 fallback.
+    "bias_momentum":             "SimBias Momentum",
+    "spring_setup":              "SimSpring Setup",
+    "vwap_pullback":             "SimVWapp Pullback",
+    "vwap_band_pullback":        "SimVwap Band Pullback",
+    "dom_pullback":              "SimDom Pull Back",
+    "ib_breakout":               "SimIB Breakout",
+    "compression_breakout_15m":  "SimCompression Breakout",
+    "compression_breakout_30m":  "SimCompression Break out 30 MIN",
+    "noise_area":                "SimNoise Area",
+    "orb":                       "SimStand alone ORB",
 
-    # Fallback.
-    "_default":             _DEFAULT_ACCOUNT,
+    # Fallback — lands here on any unmapped strategy or sub_strategy.
+    "_default":                  _DEFAULT_ACCOUNT,
 }
 
 
