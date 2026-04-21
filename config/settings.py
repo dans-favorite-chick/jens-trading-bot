@@ -186,6 +186,27 @@ MENTHORQ_ENABLE_STOP_OVERRIDE = False   # Strategies opt in to gamma stop
 MENTHORQ_NET_GEX_STRONG_THRESHOLD = 3_000_000
 MENTHORQ_NET_GEX_NORMAL_THRESHOLD = 500_000
 
+# ─── Phase C: Per-Strategy Sim Bot (2026-04-21) ──────────────────────
+# Each strategy runs on its own dedicated NT8 Sim account (see
+# config/account_routing.py for the 16-account map). These constants
+# apply PER STRATEGY, not per bot. Purpose: gather 50+ trades/strategy
+# at WR≥50% PF≥1.3 before any prod graduation.
+PER_STRATEGY_ACCOUNT_SIZE = 2000.00     # starting balance
+PER_STRATEGY_DAILY_LOSS_CAP = 200.00    # daily stop; resets at daily rollover
+PER_STRATEGY_FLOOR = 1500.00            # halt + alert, MANUAL re-enable only
+
+# Halt state persists to this file so a bot restart doesn't resurrect a
+# halted strategy. Cleared via tools/reenable_strategy.py.
+STRATEGY_HALT_STATE_FILE = os.path.join(
+    os.path.dirname(__file__), "..", "logs", "strategy_halts.json"
+)
+
+# Daily flatten — CME globex pause is 4:00–5:00 PM CT. All positions
+# across all strategies flatten at this time. Overnight holds are
+# allowed during the globex session (5 PM – 4 PM next day).
+DAILY_FLATTEN_HOUR_CT = 16
+DAILY_FLATTEN_MINUTE_CT = 0
+
 # ─── Logging ────────────────────────────────────────────────────────
 LOG_DIR = "logs"
 BRIDGE_LOG = "logs/bridge.log"
