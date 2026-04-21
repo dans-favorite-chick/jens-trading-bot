@@ -470,3 +470,291 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# S7 — 4C Session Debriefer (BaseAgent + Claude Sonnet)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Post-flatten (16:00 CT, pre-17:00 globex reopen) review. Reads today's
+# logs/history/YYYY-MM-DD_sim.jsonl + logs/trade_memory.json, calls
+# Claude via AIClient, writes logs/ai_debrief/YYYY-MM-DD.md with the
+# five canonical sections (Summary / Wins / Losses / Patterns /
+# Questions for Tomorrow). Optional Telegram dispatch default-on.
+# ═══════════════════════════════════════════════════════════════════════
+
+from pathlib import Path as _Path
+from agents.base_agent import AIClient, BaseAgent
+from agents import config as _agent_config
+
+_PROMPTS_DIR = _Path(__file__).resolve().parent / "prompts"
+_DEBRIEF_PROMPT_PATH = _PROMPTS_DIR / "debrief.md"
+_DEBRIEF_MD_DIR = _Path(__file__).resolve().parent.parent / "logs" / "ai_debrief"
+_HISTORY_DIR = _Path(__file__).resolve().parent.parent / "logs" / "history"
+_TRADE_MEMORY_PATH = _Path(__file__).resolve().parent.parent / "logs" / "trade_memory.json"
+
+_REQUIRED_SECTIONS = (
+    "## Summary",
+    "## Wins",
+    "## Losses",
+    "## Patterns",
+    "## Questions for Tomorrow",
+)
+
+
+def _load_jsonl(path: _Path) -> list[dict]:
+    if not path.exists():
+        return []
+    out: list[dict] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(json.loads(line))
+        except Exception:
+            continue
+    return out
+
+
+def _load_trade_memory(path: _Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _build_payload(events: list[dict], trade_memory: dict, target_date: date) -> dict:
+    """Structured input payload for the Claude prompt."""
+    summary = summarize_session(events)
+    # Per-strategy P&L + confluence worked/failed tallies
+    per_strategy: dict[str, dict] = {}
+    confluences_worked: dict[str, int] = {}
+    confluences_failed: dict[str, int] = {}
+    for t in summary["trades"]:
+        if t["type"] != "exit":
+            continue
+        strat = t.get("strategy") or "unknown"
+        ps = per_strategy.setdefault(strat, {"n": 0, "pnl": 0.0, "wins": 0})
+        ps["n"] += 1
+        pnl = float(t.get("pnl_dollars") or 0)
+        ps["pnl"] += pnl
+        if pnl > 0:
+            ps["wins"] += 1
+            for c in t.get("confluences") or []:
+                confluences_worked[c] = confluences_worked.get(c, 0) + 1
+        else:
+            for c in t.get("confluences") or []:
+                confluences_failed[c] = confluences_failed.get(c, 0) + 1
+
+    return {
+        "date": target_date.isoformat(),
+        "stats": {
+            "total_events": summary["total_events"],
+            "evals": summary["evals"],
+            "signals_generated": summary["signals_generated"],
+            "signals_skipped": summary["signals_skipped"],
+            "signals_blocked": summary["signals_blocked"],
+        },
+        "session_summary": summary["session_summary"],
+        "regime_distribution": summary["regimes_seen"],
+        "regime_transitions": summary["regime_transitions"],
+        "trades": summary["trades"],
+        "per_strategy_pnl": per_strategy,
+        "confluences_worked": confluences_worked,
+        "confluences_failed": confluences_failed,
+        "trade_memory_tail": (trade_memory.get("trades", [])[-20:]
+                              if isinstance(trade_memory, dict) else []),
+    }
+
+
+def _fallback_markdown(payload: dict, reason: str) -> str:
+    """Deterministic fallback when Claude is unavailable. Includes all
+    five required sections so downstream consumers never crash."""
+    ss = payload.get("session_summary") or {}
+    lines = [
+        f"# Phoenix Session Debrief — {payload['date']}",
+        "",
+        f"_AI unavailable ({reason}); deterministic fallback emitted._",
+        "",
+        "## Summary",
+        f"- Trades: {ss.get('trade_count', 0)}  |  P&L: ${ss.get('pnl_today', 0):.2f}  "
+        f"|  Win rate: {ss.get('win_rate', 0):.0f}%",
+        f"- Signals generated/skipped/blocked: "
+        f"{payload['stats']['signals_generated']}/"
+        f"{payload['stats']['signals_skipped']}/"
+        f"{payload['stats']['signals_blocked']}",
+        f"- Regimes seen: {', '.join(payload['regime_distribution']) or 'none'}",
+        "",
+        "## Wins",
+    ]
+    wins = [t for t in payload["trades"]
+            if t["type"] == "exit" and float(t.get("pnl_dollars") or 0) > 0]
+    if wins:
+        for t in wins:
+            lines.append(f"- {t.get('ts','')[:16]} {t.get('strategy','?')} "
+                         f"+${float(t.get('pnl_dollars',0)):.2f}")
+    else:
+        lines.append("- No winning exits recorded.")
+    lines.append("")
+    lines.append("## Losses")
+    losses = [t for t in payload["trades"]
+              if t["type"] == "exit" and float(t.get("pnl_dollars") or 0) <= 0]
+    if losses:
+        for t in losses:
+            lines.append(f"- {t.get('ts','')[:16]} {t.get('strategy','?')} "
+                         f"${float(t.get('pnl_dollars',0)):.2f} "
+                         f"({t.get('exit_reason','')})")
+    else:
+        lines.append("- No losing exits recorded.")
+    lines.append("")
+    lines.append("## Patterns")
+    for strat, ps in (payload.get("per_strategy_pnl") or {}).items():
+        lines.append(f"- {strat}: {ps['n']} trades, "
+                     f"{ps['wins']} wins, ${ps['pnl']:.2f} net")
+    if not payload.get("per_strategy_pnl"):
+        lines.append("- No per-strategy activity to report.")
+    lines.append("")
+    lines.append("## Questions for Tomorrow")
+    lines.append("- Was today's regime distribution typical? Should filters tighten?")
+    lines.append("- Any strategies silent all day that should have fired?")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _ensure_all_sections(md: str, payload: dict, reason: str) -> str:
+    """Guarantee all five required sections exist in output."""
+    if all(s in md for s in _REQUIRED_SECTIONS):
+        return md
+    # Missing sections — fall back to deterministic template but keep
+    # the AI text at the top for context.
+    fb = _fallback_markdown(payload, f"incomplete-sections:{reason}")
+    return md.rstrip() + "\n\n---\n\n" + fb
+
+
+class SessionDebriefer(BaseAgent):
+    """S7 — 4C post-flatten session review. Claude-powered, safe-by-default."""
+
+    name = "session_debriefer"
+
+    def __init__(
+        self,
+        client: Optional[AIClient] = None,
+        *,
+        history_dir: _Path = _HISTORY_DIR,
+        debrief_dir: _Path = _DEBRIEF_MD_DIR,
+        trade_memory_path: _Path = _TRADE_MEMORY_PATH,
+        prompt_path: _Path = _DEBRIEF_PROMPT_PATH,
+    ) -> None:
+        super().__init__(client=client)
+        self.history_dir = _Path(history_dir)
+        self.debrief_dir = _Path(debrief_dir)
+        self.trade_memory_path = _Path(trade_memory_path)
+        self.prompt_path = _Path(prompt_path)
+
+    def _history_file(self, target_date: date, bot_name: str) -> _Path:
+        return self.history_dir / f"{target_date}_{bot_name}.jsonl"
+
+    async def run(
+        self,
+        ctx: Any = None,
+        *,
+        target_date: Optional[date] = None,
+        bot_name: str = "sim",
+        dispatch_telegram: bool = True,
+    ) -> Optional[str]:
+        """Generate today's debrief. Returns the output file path or None."""
+        if target_date is None:
+            target_date = date.today()
+
+        hist_path = self._history_file(target_date, bot_name)
+        events = _load_jsonl(hist_path)
+        if not events:
+            self.log.warning("no history at %s — skipping debrief", hist_path)
+            return None
+
+        trade_memory = _load_trade_memory(self.trade_memory_path)
+        payload = _build_payload(events, trade_memory, target_date)
+
+        try:
+            system_prompt = self.prompt_path.read_text(encoding="utf-8")
+        except Exception as e:
+            system_prompt = "You are Phoenix Bot's session coach."
+            self.log.warning("prompt file read failed (%s)", e)
+
+        user_prompt = (
+            f"# Session Data — {target_date.isoformat()}\n\n"
+            f"```json\n{json.dumps(payload, indent=2, default=str)}\n```\n\n"
+            f"Produce the five-section Markdown debrief now."
+        )
+
+        async def _call() -> Optional[str]:
+            return await self.client.ask_claude(
+                user_prompt,
+                system=system_prompt,
+                model=_agent_config.MODEL_CLAUDE_SONNET,
+                default=None,
+                max_tokens=3000,
+                temperature=0.4,
+            )
+
+        ai_text = await self.safe_call(_call, default=None, what="claude_debrief")
+
+        if ai_text:
+            md = _ensure_all_sections(ai_text, payload, reason="ok")
+            reason = "success"
+        else:
+            md = _fallback_markdown(payload, reason="claude-returned-none")
+            reason = "fallback"
+
+        self.debrief_dir.mkdir(parents=True, exist_ok=True)
+        out_path = self.debrief_dir / f"{target_date}.md"
+        header = (
+            f"<!-- Phoenix Bot Session Debrief | {target_date} | "
+            f"bot={bot_name} | source={reason} | "
+            f"generated={datetime.now().isoformat(timespec='seconds')} -->\n\n"
+        )
+        out_path.write_text(header + md, encoding="utf-8")
+        self.log.info("debrief written to %s (%d chars, %s)",
+                      out_path, len(md), reason)
+
+        if dispatch_telegram:
+            self._maybe_send_telegram(md, target_date)
+
+        return str(out_path)
+
+    @staticmethod
+    def _maybe_send_telegram(md: str, target_date: date) -> None:
+        """Fire-and-forget Telegram dispatch. Silent if unavailable."""
+        if not os.environ.get("TELEGRAM_BOT_TOKEN"):
+            return
+        try:
+            from core import telegram_notifier  # type: ignore
+        except Exception:
+            return
+        try:
+            # Trim to Telegram 4096-char limit with safety margin.
+            body = md if len(md) < 3800 else md[:3800] + "\n\n…(truncated)"
+            text = f"Phoenix Debrief {target_date}\n\n{body}"
+            send = getattr(telegram_notifier, "send_sync", None)
+            if callable(send):
+                send(text, parse_mode="")
+        except Exception:
+            pass
+
+
+async def run_session_debrief(
+    target_date: Optional[date] = None,
+    bot_name: str = "sim",
+    client: Optional[AIClient] = None,
+    dispatch_telegram: bool = True,
+) -> Optional[str]:
+    """Convenience entry point for the scheduled-task hook."""
+    agent = SessionDebriefer(client=client)
+    return await agent.run(
+        target_date=target_date,
+        bot_name=bot_name,
+        dispatch_telegram=dispatch_telegram,
+    )

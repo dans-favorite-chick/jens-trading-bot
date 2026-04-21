@@ -115,3 +115,22 @@ assumed, why, and where to revisit if the assumption turns out wrong.
 - **test_prod_window_at_close** — stale; primary prod window is now 08:30–11:00 CST (was 08:30–10:00). Rewrote to assert closed at 12:00 (primary/secondary gap) and 11:00 (exclusive at primary close).
 - **test_bias_momentum_uses_regime_overrides / test_non_golden_regime_has_tighter_gates** — stale; `_REGIME_OVERRIDES` schema changed. No `min_tf_votes` key anymore (direction gate is hardcoded in `evaluate()`); golden regimes now gate at `min_momentum=80`, off-hours at 60. Tests rewritten to assert contract (keys present per regime) and the invariant (off-hours < live) rather than specific numeric thresholds, so future recalibrations don't re-break them.
 - **G-B37 4C integration test** — added `tests/test_4c_integration.py` (12 tests, ~170 lines). Uses real `STRATEGY_ACCOUNT_MAP`; monkeypatches only `oif_writer.OIF_INCOMING` to a tmp dir. Covers guard rejection, nested+flat routing through `write_bracket_order`, byte-exact survival of account strings (incl. spaces/mixed case) in the semicolon OIF format, and the Sim101 default-fallback path.
+
+## S5 — 4A Council Gate (2026-04-21)
+
+- **Coexistence:** `agents/council_gate.py` already contained a legacy `run_council`/`council_to_dict`/`CouncilResult` surface consumed by `bots/base_bot.py` (S6/S7 territory, forbidden to touch). Rather than replace, the S5 spec surface was **appended** to the same file: new `CouncilGate(BaseAgent)` class, `COUNCIL_PERSONAS`, `get_current_bias()`. Both APIs export from the module.
+- **Personas (7):** trend-follower, mean-reverter, vol-watcher, gamma-reader, intermarket-analyst, session-historian, contrarian. Each has a one-paragraph `lens` field driving its vote.
+- **Models:** voters → `agent_config.MODEL_GEMINI_FLASH` @ temp 0.3, 5s timeout, 200 max_tokens. Orchestrator → `agent_config.MODEL_GEMINI_PRO` @ temp 0.2, 8s timeout, 300 max_tokens. All routed through `AIClient.ask_gemini` with `default=None`.
+- **Tie-break:** deterministic `_deterministic_verdict()` is the source of truth. Verdict = BULLISH if BULL >= 4 and > BEAR (same for bearish); otherwise NEUTRAL. 3-3-1 → NEUTRAL (score = max tally / 7). Orchestrator output is trust-but-verified against this tally — if it disagrees with a majority check, we override to deterministic.
+- **Timeout/error fallback:** voters use `BaseAgent.safe_call` + `AIClient.parse_json` — any failure yields `{"vote":"NEUTRAL","rationale":"default (timeout or error)"}`. Orchestrator failure falls back to the deterministic verdict with a synthesized summary.
+- **Logging:** `logs/council/YYYY-MM-DD.json` — a JSON **array** so multiple intraday runs (session open + regime shifts) append to the same day-file. Overridable via `COUNCIL_LOG_DIR` env var.
+- **`get_current_bias()`:** module-level `_CURRENT_BIAS` dict updated after each run; returns copy with `verdict/score/summary/timestamp` (UTC ISO). Bots consult as optional filter — never a hard gate.
+- **Prompts:** `agents/prompts/council_voter.md` (parameterized `{persona_name}`, `{persona_lens}`, `{market_json}`) and `agents/prompts/council_orchestrator.md` (`{votes_json}`). Missing-file fallback strings baked into module so tests never touch disk for prompts.
+
+## S7 — 4C Session Debriefer (2026-04-21)
+- **Bot name assumption**: scheduled hook reads `{date}_sim.jsonl` — spec said `sim.jsonl`, confirmed `DailyFlattener` is only wired into `sim_bot.py` so "sim" matches the file produced.
+- **Dispatch trigger**: piggybacked on the existing 30s `_daily_flatten_loop` poll rather than adding a separate scheduler — same cadence, fires once per day after 16:00 CT via a `_debrief_fired_for` date guard.
+- **Telegram**: default-on when `TELEGRAM_BOT_TOKEN` env is set AND `core.telegram_notifier` importable; uses existing `send_sync`. No new module built.
+- **Fallback discipline**: Claude failure (exception, None, or missing sections) → deterministic 5-section markdown still written. Header tagged `source=fallback` so downstream tooling can detect degraded output.
+- **Preserved legacy path**: existing Gemini-based `run_debrief()` function kept intact for back-compat; new `SessionDebriefer` class added alongside.
+- **Hook marker**: used `# [AI-DEBRIEF-HOOK]` in `bots/sim_bot.py::_daily_flatten_loop`. No `# [AI-PRETRADE-HOOK]` marker observed; safe for S6 co-edit.
