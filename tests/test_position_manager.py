@@ -125,9 +125,11 @@ class TestClosePosition:
 
         assert trade is not None
         expected_ticks = (18502.0 - 18500.0) / TICK_SIZE  # 8.0
-        expected_pnl = expected_ticks * DOLLAR_PER_TICK * 1  # 8.0 * 0.50 = $4.00
+        expected_gross = expected_ticks * DOLLAR_PER_TICK * 1  # 8.0 * 0.50 = $4.00
         assert trade["pnl_ticks"] == expected_ticks
-        assert trade["pnl_dollars"] == expected_pnl
+        assert trade["gross_pnl"] == expected_gross
+        # pnl_dollars is NET of commission (B13): gross - round-trip commission
+        assert trade["pnl_dollars"] == round(expected_gross - trade["commission"], 2)
         assert trade["result"] == "WIN"
 
     def test_close_short_pnl_correct(self, pm):
@@ -138,9 +140,11 @@ class TestClosePosition:
 
         assert trade is not None
         expected_ticks = (18500.0 - 18498.0) / TICK_SIZE  # 8.0
-        expected_pnl = expected_ticks * DOLLAR_PER_TICK * 1  # $4.00
+        expected_gross = expected_ticks * DOLLAR_PER_TICK * 1  # $4.00
         assert trade["pnl_ticks"] == expected_ticks
-        assert trade["pnl_dollars"] == expected_pnl
+        assert trade["gross_pnl"] == expected_gross
+        # pnl_dollars is NET of commission (B13)
+        assert trade["pnl_dollars"] == round(expected_gross - trade["commission"], 2)
         assert trade["result"] == "WIN"
 
     def test_close_position_returns_none_when_flat(self, pm):
