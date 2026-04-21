@@ -206,9 +206,27 @@ class SimBot(BaseBot):
 
         n_halted = sum(1 for k in self.risk_registry.known_keys()
                        if self.risk_registry.is_halted(*_split_key(k)))
-        logger.info(f"[SIM] {len(self.strategies)} strategies loaded — LIVE execution")
+
+        # Count actual NT8 account destinations (not strategy files):
+        # opening_session dispatches to 6 subs; compression_breakout has
+        # 15m + 30m timeframes; everything else is 1:1.
+        try:
+            from config.account_routing import STRATEGY_ACCOUNT_MAP
+            n_destinations = 0
+            for k, v in STRATEGY_ACCOUNT_MAP.items():
+                if k == "_default":
+                    continue
+                if isinstance(v, dict):
+                    n_destinations += len(v)
+                else:
+                    n_destinations += 1
+        except Exception:
+            n_destinations = len(self.strategies)
+
+        logger.info(f"[SIM] {len(self.strategies)} strategies → "
+                    f"{n_destinations} account destinations loaded — LIVE execution")
         logger.info(f"[SIM] Per-strategy: $2000 start / $200 daily cap / $1500 floor")
-        logger.info(f"[SIM] Registry: {len(self.risk_registry.known_keys())} keys "
+        logger.info(f"[SIM] Registry: {len(self.risk_registry.known_keys())} keys tracked "
                     f"({n_halted} halted from prior session)")
         logger.info(f"[SIM] Daily flatten: 16:00 CT (CME globex pause)")
 
