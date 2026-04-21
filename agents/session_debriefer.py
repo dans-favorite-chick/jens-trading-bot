@@ -691,6 +691,10 @@ class SessionDebriefer(BaseAgent):
         )
 
         async def _call() -> Optional[str]:
+            # B43: Claude Sonnet 4.5 on a 3000+ token debrief prompt needs
+            # 30-60s to respond. Default 10s × 3 retries was timing out at
+            # 33s on every session debrief -> fallback template. Bump to
+            # 90s single-attempt (safe_call handles outer retry).
             return await self.client.ask_claude(
                 user_prompt,
                 system=system_prompt,
@@ -698,6 +702,7 @@ class SessionDebriefer(BaseAgent):
                 default=None,
                 max_tokens=3000,
                 temperature=0.4,
+                timeout_s=90.0,
             )
 
         ai_text = await self.safe_call(_call, default=None, what="claude_debrief")

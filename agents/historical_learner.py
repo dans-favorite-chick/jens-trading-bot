@@ -432,10 +432,13 @@ class HistoricalLearnerAgent(BaseAgent):
 
         raw_text: Optional[str] = None
         if agent_config.have_claude():
+            # B43: weekly aggregate prompts are large — 10s default times
+            # out on Sonnet 4.5. Give it 120s single-attempt.
             raw_text = await self.safe_call(
                 lambda: self.client.ask_claude(
                     prompt, system=system, default=None,
                     max_tokens=2048, temperature=0.2,
+                    timeout_s=120.0,
                 ),
                 default=None,
                 what="ask_claude",
