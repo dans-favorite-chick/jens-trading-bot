@@ -266,6 +266,56 @@ def test_call_writes_jsonl_log(tmp_log_dir, have_keys, reset_singleton):
     assert entry["model"]  # non-empty model id
 
 
+def test_council_bias_unknown_when_missing(tmp_log_dir, have_keys, reset_singleton,
+                                             monkeypatch):
+    """get_current_bias returns empty/no-timestamp → context verdict=UNKNOWN, no crash."""
+    import agents.council_gate as cg_mod
+    monkeypatch.setattr(cg_mod, "get_current_bias",
+                        lambda: {"verdict": "NEUTRAL", "score": "0/7",
+                                 "summary": "No council vote yet.",
+                                 "timestamp": None})
+
+    ctx = pretrade_filter._build_council_bias_context()
+    assert ctx["verdict"] == "UNKNOWN"
+    assert "age_minutes" in ctx
+
+    # Also runs end-to-end without crashing when council returns None entirely.
+    def _boom():
+        return None
+    monkeypatch.setattr(cg_mod, "get_current_bias", _boom)
+    ctx2 = pretrade_filter._build_council_bias_context()
+    assert ctx2["verdict"] == "UNKNOWN"
+
+    agent = PretradeFilter(client=FakeAIClient(behavior="clear"))
+    v = asyncio.run(agent.check(SIGNAL, MARKET, RECENT))
+    assert v.verdict == "CLEAR"
+
+
+def test_council_bullish_vs_short_signal_yields_caution(
+    tmp_log_dir, have_keys, reset_singleton, monkeypatch,
+):
+    """Council BULLISH 7/7 + SHORT signal → mocked Gemini returns CAUTION → pretrade CAUTION."""
+    from datetime import datetime, timezone
+    import agents.council_gate as cg_mod
+    monkeypatch.setattr(
+        cg_mod, "get_current_bias",
+        lambda: {
+            "verdict": "BULLISH",
+            "score": "7/7",
+            "summary": "Strong bullish consensus.",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+    short_signal = dict(SIGNAL)
+    short_signal["direction"] = "SHORT"
+
+    agent = PretradeFilter(client=FakeAIClient(behavior="caution"))
+    v = asyncio.run(agent.check(short_signal, MARKET, RECENT))
+    assert v.verdict == "CAUTION"
+    assert v.source == "ai"
+
+
 def test_module_level_check_delegates(tmp_log_dir, have_keys, reset_singleton,
                                        monkeypatch):
     """Back-compat: pretrade_filter.check(...) uses the shared singleton."""
