@@ -179,32 +179,31 @@ def cancel_single_order_line(order_id: str) -> str:
 # Atomic file staging: write to .tmp, rename to .txt
 # ═══════════════════════════════════════════════════════════════════════
 
-_OIF_STAGING_DIR = os.path.join(os.path.dirname(OIF_INCOMING), "oif_staging")
-
-
 def _stage_oif(cmd: str, trade_id: str, suffix: str = "") -> tuple[str, str]:
     """
-    Write cmd to a staging file OUTSIDE incoming/, return (stage_path, final_path).
+    Write cmd directly to incoming/*.txt.
 
-    B45 (rev 2): NT8's watcher on `incoming/` scans ALL files regardless
-    of extension — .tmp produced "Could not find file" read errors,
-    .stage produced "Unknown OIF file type" warnings. Staging in a
-    sibling directory NT8 doesn't watch eliminates both. os.replace()
-    (rename-if-same-drive, atomic on NTFS) moves stage→incoming/*.txt
-    only when the write is complete.
+    B45 (rev 3): Earlier attempts at cross-directory staging (.tmp and .stage)
+    both broke NT8's FileSystemWatcher — either producing read-error warnings
+    or failing to trigger ATI consumption at all (os.replace from a sibling
+    directory doesn't fire NT8's CREATE event reliably). NT8's Log-tab noise
+    from the "Could not find file ...tmp" messages was cosmetic; ATI was
+    still processing the .txt files correctly. Direct write wins: the
+    partial-write window on a ~100-byte file is sub-millisecond and NT8
+    reads the file only after its watcher sees a complete write event.
     """
     global _oif_counter
     _oif_counter += 1
     os.makedirs(OIF_INCOMING, exist_ok=True)
-    os.makedirs(_OIF_STAGING_DIR, exist_ok=True)
     tag = f"_{trade_id}" if trade_id else ""
     sfx = f"_{suffix}" if suffix else ""
     fname = f"oif{_oif_counter}{tag}{sfx}.txt"
     final_path = os.path.join(OIF_INCOMING, fname)
-    stage_path = os.path.join(_OIF_STAGING_DIR, fname)
-    with open(stage_path, "w") as f:
+    # Return same path for both — _commit_staged becomes a no-op for the
+    # "rename" step; file is already at its final location.
+    with open(final_path, "w") as f:
         f.write(cmd + "\n")
-    return stage_path, final_path
+    return final_path, final_path
 
 
 def _commit_staged(staged: list[tuple[str, str]], trade_id: str) -> list[str]:
@@ -212,7 +211,8 @@ def _commit_staged(staged: list[tuple[str, str]], trade_id: str) -> list[str]:
     written = []
     for tmp, final in staged:
         try:
-            os.replace(tmp, final)  # atomic cross-dir rename on NTFS
+            if tmp != final:
+                os.replace(tmp, final)  # legacy path
             written.append(final)
             logger.info(f"[OIF:{trade_id or 'N/A'}] committed {os.path.basename(final)}")
         except OSError as e:
