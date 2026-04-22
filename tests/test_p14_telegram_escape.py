@@ -53,10 +53,12 @@ class TestEscHelper(unittest.TestCase):
         self.assertEqual(_esc(3.14), "3.14")
 
 
+@unittest.skip("B54: notify_entry is a no-op (Jennifer wants exit-only P&L alerts). "
+               "Escape logic still tested via notify_exit + notify_alert.")
 class TestNotifyEntryEscapes(unittest.TestCase):
     def test_entry_escapes_strategy_name_with_ampersand(self):
         from core.telegram_notifier import notify_entry
-        with patch("core.telegram_notifier.send", new_callable=AsyncMock) as mock_send:
+        with patch("core.telegram_notifier.send_sync") as mock_send:
             _run(notify_entry(
                 trade_id="abc123", direction="LONG",
                 strategy="A & B",  # the risky character
@@ -70,7 +72,7 @@ class TestNotifyEntryEscapes(unittest.TestCase):
 
     def test_entry_escapes_regime_with_angle_brackets(self):
         from core.telegram_notifier import notify_entry
-        with patch("core.telegram_notifier.send", new_callable=AsyncMock) as mock_send:
+        with patch("core.telegram_notifier.send_sync") as mock_send:
             _run(notify_entry(
                 trade_id="t", direction="LONG", strategy="s",
                 price=0, stop=0, target=0, contracts=1,
@@ -82,7 +84,7 @@ class TestNotifyEntryEscapes(unittest.TestCase):
 
     def test_entry_escapes_trade_id(self):
         from core.telegram_notifier import notify_entry
-        with patch("core.telegram_notifier.send", new_callable=AsyncMock) as mock_send:
+        with patch("core.telegram_notifier.send_sync") as mock_send:
             _run(notify_entry(
                 trade_id="tid<script>alert(1)</script>",
                 direction="LONG", strategy="s", price=0, stop=0, target=0,
@@ -96,7 +98,7 @@ class TestNotifyEntryEscapes(unittest.TestCase):
 class TestNotifyExitEscapes(unittest.TestCase):
     def test_exit_escapes_exit_reason(self):
         from core.telegram_notifier import notify_exit
-        with patch("core.telegram_notifier.send", new_callable=AsyncMock) as mock_send:
+        with patch("core.telegram_notifier.send_sync") as mock_send:
             _run(notify_exit(
                 trade_id="t", direction="LONG", strategy="s",
                 entry_price=22000, exit_price=22050,
@@ -117,7 +119,7 @@ class TestNotifyDailySummaryEscapes(unittest.TestCase):
     def test_daily_status_recovery_mode_escapes_warning_emoji(self):
         """Status string passes through _esc — existing unicode passes fine."""
         from core.telegram_notifier import notify_daily_summary
-        with patch("core.telegram_notifier.send", new_callable=AsyncMock) as mock_send:
+        with patch("core.telegram_notifier.send_sync") as mock_send:
             _run(notify_daily_summary(
                 daily_pnl=-30.0, trades=5, wins=2, losses=3,
                 win_rate=40.0, recovery_mode=True,
@@ -132,7 +134,7 @@ class TestNotifyDailySummaryEscapes(unittest.TestCase):
 class TestNotifyAlertEscapes(unittest.TestCase):
     def test_alert_escapes_message_with_html_injection(self):
         from core.telegram_notifier import notify_alert
-        with patch("core.telegram_notifier.send", new_callable=AsyncMock) as mock_send:
+        with patch("core.telegram_notifier.send_sync") as mock_send:
             _run(notify_alert(
                 alert_type="Test",
                 message="A & B <>",
@@ -142,7 +144,7 @@ class TestNotifyAlertEscapes(unittest.TestCase):
 
     def test_alert_escapes_alert_type(self):
         from core.telegram_notifier import notify_alert
-        with patch("core.telegram_notifier.send", new_callable=AsyncMock) as mock_send:
+        with patch("core.telegram_notifier.send_sync") as mock_send:
             _run(notify_alert(
                 alert_type="<danger>",
                 message="",
@@ -156,7 +158,7 @@ class TestNotifyCouncilEscapes(unittest.TestCase):
         """Regression: ensure council (which already had a manual escape)
         still escapes under the _esc() rewrite."""
         from core.telegram_notifier import notify_council
-        with patch("core.telegram_notifier.send", new_callable=AsyncMock) as mock_send:
+        with patch("core.telegram_notifier.send_sync") as mock_send:
             _run(notify_council(
                 bias="BULLISH",
                 vote_count="5/7",
@@ -172,17 +174,19 @@ class TestStructuralMarkupPreserved(unittest.TestCase):
     escaped — only CALLER-supplied strings are. If this test fails, the
     formatter's own markup has been accidentally escaped."""
 
-    def test_entry_preserves_b_and_code_tags(self):
-        from core.telegram_notifier import notify_entry
+    def test_exit_preserves_b_and_code_tags(self):
+        """B54: notify_entry is no-op; use notify_exit for this assertion."""
+        from core.telegram_notifier import notify_exit
         with patch("core.telegram_notifier.send", new_callable=AsyncMock) as mock_send:
-            _run(notify_entry(
+            _run(notify_exit(
                 trade_id="t", direction="LONG", strategy="s",
-                price=1, stop=1, target=1, contracts=1,
-                risk_dollars=1, tier="A", regime="R",
+                entry_price=100.0, exit_price=101.0,
+                pnl_dollars=50.0, pnl_ticks=10.0,
+                result="WIN", exit_reason="target",
+                hold_time_s=60.0,
             ))
         msg = mock_send.call_args[0][0]
         self.assertIn("<b>", msg)
-        self.assertIn("<code>", msg)
         self.assertNotIn("&lt;b&gt;", msg)
 
 

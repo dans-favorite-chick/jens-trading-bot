@@ -41,15 +41,18 @@ class TelegramRoutingTests(unittest.TestCase):
         ]
 
     def _call_entry(self, strategy: str):
-        from core.telegram_notifier import notify_entry
+        """B54: notify_entry is a no-op. Route tests now use notify_exit
+        (real trade-close path) which IS the user-visible send for each
+        strategy."""
+        from core.telegram_notifier import notify_exit
         with patch("core.telegram_notifier.send", new_callable=AsyncMock) as mock_send:
-            _run(notify_entry(
+            _run(notify_exit(
                 trade_id="t1", direction="LONG", strategy=strategy,
-                price=22000.0, stop=21950.0, target=22100.0,
-                contracts=1, risk_dollars=10.0, tier="A",
-                regime="OPEN_MOMENTUM",
+                entry_price=22000.0, exit_price=22050.0,
+                pnl_dollars=50.0, pnl_ticks=20.0,
+                result="WIN", exit_reason="target",
+                hold_time_s=120.0,
             ))
-        # send() called with (text, chat_id=...)
         args, kwargs = mock_send.call_args
         text = args[0]
         chat_id = kwargs.get("chat_id")
@@ -141,8 +144,9 @@ class TelegramRoutingTests(unittest.TestCase):
             p.start()
         try:
             from core.telegram_notifier import notify_alert
-            with patch("core.telegram_notifier.send",
-                       new_callable=AsyncMock) as mock_send:
+            # B54: notify_alert now calls send_sync directly via executor
+            # (for dedup support) instead of the old `send` async wrapper.
+            with patch("core.telegram_notifier.send_sync") as mock_send:
                 _run(notify_alert("KILL_SWITCH", "halted",
                                   strategy="spring_setup"))
             args, kwargs = mock_send.call_args
@@ -159,8 +163,9 @@ class TelegramRoutingTests(unittest.TestCase):
             p.start()
         try:
             from core.telegram_notifier import notify_alert
-            with patch("core.telegram_notifier.send",
-                       new_callable=AsyncMock) as mock_send:
+            # B54: notify_alert now calls send_sync directly via executor
+            # (for dedup support) instead of the old `send` async wrapper.
+            with patch("core.telegram_notifier.send_sync") as mock_send:
                 _run(notify_alert("RECOVERY", "entering recovery"))
             args, kwargs = mock_send.call_args
             self.assertEqual(kwargs.get("chat_id"), self.DEFAULT_CHAT)

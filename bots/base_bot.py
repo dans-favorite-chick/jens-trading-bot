@@ -2515,7 +2515,8 @@ class BaseBot:
                         send_sync(
                             f"⚠️ [PHANTOM_GUARD] {signal.strategy} → {_account} "
                             f"NT8 REJECTED order ({len(stuck)} OIF stuck). "
-                            f"Check NT8 Log tab."
+                            f"Check NT8 Log tab.",
+                            dedup_key=f"phantom_guard:{signal.strategy}:{_account}",
                         )
                     except Exception:
                         pass
@@ -2573,7 +2574,8 @@ class BaseBot:
                             f"NT8 reports {pos_check['status']} after entry. "
                             f"Expected {signal.direction}/{contracts}, got "
                             f"{pos_check.get('observed_direction')}"
-                            f"/{pos_check.get('observed_qty')}. Entry aborted."
+                            f"/{pos_check.get('observed_qty')}. Entry aborted.",
+                            dedup_key=f"nt8_verify:{signal.strategy}:{_account}:{pos_check['status']}",
                         )
                     except Exception:
                         pass

@@ -358,7 +358,8 @@ def _verify_consumed(paths: list[str], trade_id: str, timeout_s: float = 1.0) ->
             send_sync(
                 f"⚠️ [OIF_STUCK] {trade_id}: {len(stuck)} file(s) not "
                 f"consumed by NT8 — probable ATI rejection. "
-                f"Check NT8 Log tab. Files: {names}"
+                f"Check NT8 Log tab. Files: {names}",
+                dedup_key="oif_stuck",
             )
         except Exception:
             pass

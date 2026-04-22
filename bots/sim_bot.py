@@ -244,6 +244,7 @@ class SimBot(BaseBot):
     async def _daily_flatten_loop(self):
         """Poll every 30s; flatten at 16:00 CT if not yet flattened today."""
         self._debrief_fired_for: Optional["date"] = None  # type: ignore[name-defined]
+        self._recap_fired_for: Optional["date"] = None  # type: ignore[name-defined]
         while True:
             try:
                 # Hook the ws sender lazily — _ws is set by the base's
@@ -256,9 +257,57 @@ class SimBot(BaseBot):
                 # [AI-DEBRIEF-HOOK] S7 4C: fire post-flatten debrief once per
                 # day after the 16:00 CT flatten, pre-17:00 globex reopen.
                 await self._maybe_run_debrief()
+
+                # B54 daily recap: fire a concise Telegram summary once
+                # per day at 17:00 CT (post-debrief, pre-globex-reopen).
+                await self._maybe_send_daily_recap()
             except Exception as e:
                 logger.warning(f"[DAILY_FLATTEN] poll error: {e}")
             await asyncio.sleep(30)
+
+    async def _maybe_send_daily_recap(self):
+        """B54 daily 17:00 CT recap — one consolidated Telegram with the
+        day's trades, P&L, win rate. Fires once per day, non-blocking."""
+        try:
+            from datetime import datetime as _dt
+            from zoneinfo import ZoneInfo as _ZI
+            now_ct = _dt.now(_ZI("America/Chicago"))
+            today_ct = now_ct.date()
+            if now_ct.hour < 17:
+                return
+            if getattr(self, "_recap_fired_for", None) == today_ct:
+                return
+
+            # Pull today's trades from trade_memory.
+            trades = []
+            try:
+                from core.trade_memory import TradeMemory  # type: ignore
+                if hasattr(self, "trade_memory") and self.trade_memory:
+                    all_trades = list(getattr(self.trade_memory, "trades", []))
+                    for t in all_trades:
+                        ts = t.get("exit_time") or t.get("ts") or ""
+                        if str(ts).startswith(str(today_ct)):
+                            trades.append(t)
+            except Exception:
+                pass
+
+            wins = sum(1 for t in trades if t.get("pnl_dollars", 0) > 0)
+            losses = sum(1 for t in trades if t.get("pnl_dollars", 0) < 0)
+            pnl = sum(float(t.get("pnl_dollars", 0) or 0) for t in trades)
+            n = len(trades)
+            wr = (wins / n * 100) if n else 0.0
+
+            from core import telegram_notifier as tg
+            await tg.notify_daily_summary(
+                daily_pnl=pnl, trades=n, wins=wins, losses=losses,
+                win_rate=wr,
+                recovery_mode=bool(getattr(self.risk.state, "recovery_mode", False)),
+            )
+            self._recap_fired_for = today_ct
+            logger.info(f"[DAILY_RECAP] sent: pnl=${pnl:.2f} "
+                         f"{n}t {wins}W/{losses}L wr={wr:.0f}%")
+        except Exception as e:
+            logger.warning(f"[DAILY_RECAP] skipped: {e}")
 
     async def _maybe_run_debrief(self):
         """[AI-DEBRIEF-HOOK] Run the S7 session debriefer once per day,
