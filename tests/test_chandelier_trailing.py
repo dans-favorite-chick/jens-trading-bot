@@ -48,13 +48,6 @@ class TestChandelierStateRatchets:
         assert s.should_exit(106.0)
 
 
-@pytest.mark.xfail(
-    reason="WS-C audit finding: chandelier trail updates pos.stop_price in "
-    "Python only; no write_modify_stop OIF is emitted to NT8. The trail "
-    "is decorative at the NT8 layer. Fix: wire bridge/oif_writer."
-    "write_modify_stop into base_bot's chandelier update block.",
-    strict=True,
-)
 class TestChandelierWritesOIF:
     """Behavior test — asserts the missing OIF wiring.
 

@@ -374,6 +374,23 @@ def write_bracket_order(
     # still there 1s later, NT8 rejected it (bad TIF, bad account, etc.)
     # or the ATI server isn't running. Either way — red flag.
     _verify_consumed(written, trade_id, timeout_s=1.0)
+
+    # B76: capture NT8 order_ids (best-effort) for later cancel+replace.
+    try:
+        if len(written) == len(commit_order):
+            _ids = {}
+            _soid = scan_outgoing_for_order_id(account, stop_price, timeout_s=0.5)
+            if _soid:
+                _ids["stop"] = _soid
+            if target_price is not None:
+                _toid = scan_outgoing_for_order_id(account, target_price, timeout_s=0.5)
+                if _toid:
+                    _ids["target"] = _toid
+            if _ids:
+                _recent_order_ids[trade_id] = _ids
+    except Exception as _e:
+        logger.debug(f"[OIF:{trade_id}] B76 order_id capture skipped: {_e}")
+
     return written
 
 
@@ -460,6 +477,92 @@ def verify_nt8_position(account: str, expected_direction: str, expected_qty: int
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# B76: stop-modify via cancel + replace
+# ═══════════════════════════════════════════════════════════════════════
+
+# Module-level recent-order-id dict. Keys: trade_id. Values: dict with
+# "stop" and/or "target" NT8 order_id strings. Populated by
+# write_bracket_order / write_protection_oco on successful commit;
+# consumed by base_bot to stash on Position.
+_recent_order_ids: dict = {}
+
+
+def scan_outgoing_for_order_id(account, expected_price, tolerance=0.01, timeout_s=2.5):
+    """Poll outgoing/ for new order-status files matching a price.
+    Returns NT8 order_id string if found, else None.
+
+    NT8 writes outgoing/{account}_{order_id}.txt with content like
+    'WORKING;0;26826.25'. Match on account prefix + price within tolerance.
+    """
+    outgoing_dir = os.path.join(os.path.dirname(OIF_INCOMING), "outgoing")
+    import glob as _g
+    pattern = os.path.join(outgoing_dir, f"{account}_*.txt")
+    t0 = time.time()
+    while time.time() - t0 < timeout_s:
+        for fp in _g.glob(pattern):
+            try:
+                with open(fp) as _fh:
+                    content = _fh.read().strip()
+                parts = content.split(";")
+                if len(parts) >= 3:
+                    file_price = float(parts[2])
+                    if abs(file_price - expected_price) <= tolerance:
+                        fname = os.path.basename(fp)
+                        oid = fname.replace(f"{account}_", "").replace(".txt", "")
+                        return oid
+            except Exception:
+                pass
+        time.sleep(0.15)
+    return None
+
+
+def write_modify_stop(direction, new_stop_price, n_contracts, trade_id, account, old_stop_order_id):
+    """B76: cancel the existing STOPMARKET stop (by NT8 order_id) and
+    immediately submit a replacement at new_stop_price. Brief unprotected
+    window between cancel confirm and new-stop accepted is accepted.
+
+    Returns list of OIF file paths written (2 on success) or [] on
+    early-guard rejection.
+    """
+    _reject_live_account(account, f"write_modify_stop[{trade_id}]")
+    if direction is None or direction.upper() not in ("LONG", "SHORT"):
+        logger.error(f"[STOP_MODIFY:{trade_id}] invalid direction: {direction}")
+        return []
+    if n_contracts < 1:
+        logger.error(f"[STOP_MODIFY:{trade_id}] invalid qty: {n_contracts}")
+        return []
+    if not old_stop_order_id or not str(old_stop_order_id).strip():
+        logger.error(f"[STOP_MODIFY:{trade_id}] missing old_stop_order_id — can't cancel")
+        return []
+
+    exit_side = "SELL" if direction.upper() == "LONG" else "BUY"
+    cancel_line = cancel_single_order_line(old_stop_order_id)
+    new_stop_line = _build_stop_line(
+        side=exit_side, qty=n_contracts, stop_price=new_stop_price, account=account,
+    )
+
+    staged = []
+    try:
+        staged.append(_stage_oif(cancel_line, trade_id, suffix="stop_cancel"))
+        staged.append(_stage_oif(new_stop_line, trade_id, suffix="stop_replace"))
+    except OSError as e:
+        logger.error(f"[STOP_MODIFY:{trade_id}] stage failed: {e}")
+        return []
+
+    written = _commit_staged(staged, trade_id)
+    if len(written) == len(staged):
+        logger.info(
+            f"[STOP_MODIFY:{trade_id}] cancelled {str(old_stop_order_id)[:12]} "
+            f"+ submitted new STOPMARKET @ {new_stop_price:.2f}"
+        )
+    else:
+        logger.error(
+            f"[STOP_MODIFY:{trade_id}] partial commit: {len(written)}/{len(staged)}"
+        )
+    return written
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Legacy API (retained for existing callers — now uses STOPMARKET)
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -525,6 +628,19 @@ def write_protection_oco(direction: str, qty: int, stop_price: float,
     # B55/B63 bulletproof: verify NT8 consumed both files within 1.5s.
     stuck = _verify_consumed(written, trade_id, timeout_s=1.5)
     if not stuck:
+        # B76: capture NT8 order_ids for later cancel+replace stop-modify.
+        try:
+            _ids = {}
+            _soid = scan_outgoing_for_order_id(account, stop_price, timeout_s=0.5)
+            if _soid:
+                _ids["stop"] = _soid
+            _toid = scan_outgoing_for_order_id(account, target_price, timeout_s=0.5)
+            if _toid:
+                _ids["target"] = _toid
+            if _ids:
+                _recent_order_ids[trade_id] = _ids
+        except Exception as _e:
+            logger.debug(f"[PROTECT:{trade_id}] B76 order_id capture skipped: {_e}")
         return written  # Both legs consumed — happy path.
 
     # If BOTH legs stuck → full failure; nothing is Working in NT8. Clean

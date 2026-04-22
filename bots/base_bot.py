@@ -161,18 +161,59 @@ def _should_scale_out(pos, price: float, scale_rr: float) -> bool:
         return price <= pos.entry_price - stop_dist * scale_rr
 
 
+def _move_nt8_stop(pos, old_stop_price: float, new_stop_price: float) -> None:
+    """B76: cancel + replace the NT8 STOPMARKET so a Python-side stop move
+    actually takes effect at the broker. Safe no-op if pos.stop_order_id
+    wasn't captured."""
+    if not getattr(pos, "stop_order_id", ""):
+        logger.warning(
+            f"[STOP_MOVE_NO_ID:{pos.trade_id}] pos.stop_order_id not captured — "
+            f"Python stop moved to {new_stop_price:.2f}, NT8 stop unchanged"
+        )
+        return
+    try:
+        from bridge.oif_writer import write_modify_stop, scan_outgoing_for_order_id
+        paths = write_modify_stop(
+            direction=pos.direction,
+            new_stop_price=new_stop_price,
+            n_contracts=pos.contracts,
+            trade_id=pos.trade_id,
+            account=pos.account,
+            old_stop_order_id=pos.stop_order_id,
+        )
+        if paths:
+            new_oid = scan_outgoing_for_order_id(pos.account, new_stop_price)
+            if new_oid:
+                pos.stop_order_id = new_oid
+            logger.info(
+                f"[STOP_MOVED:{pos.trade_id}] {old_stop_price:.2f} -> {new_stop_price:.2f}"
+            )
+        else:
+            logger.error(f"[STOP_MOVE_FAILED:{pos.trade_id}] write_modify_stop returned []")
+    except Exception as e:
+        logger.error(f"[STOP_MOVE_EXCEPTION:{pos.trade_id}] {e}")
+
+
 def _trail_stop(pos, price: float):
     """
     Trail stop to midpoint between entry and current price.
     Only moves in favorable direction — never worsens risk.
+
+    B76: after mutating pos.stop_price, emit write_modify_stop OIF to
+    actually move the NT8 stop via cancel+replace.
     """
     mid = (pos.entry_price + price) / 2
+    new_stop = None
     if pos.direction == "LONG" and mid > pos.stop_price:
-        pos.stop_price = round(mid, 2)
-        logger.info(f"[TRAIL:{pos.trade_id}] Stop trailed to {pos.stop_price:.2f} (mid)")
+        new_stop = round(mid, 2)
     elif pos.direction == "SHORT" and mid < pos.stop_price:
-        pos.stop_price = round(mid, 2)
-        logger.info(f"[TRAIL:{pos.trade_id}] Stop trailed to {pos.stop_price:.2f} (mid)")
+        new_stop = round(mid, 2)
+    if new_stop is None:
+        return
+    old_stop = pos.stop_price
+    pos.stop_price = new_stop
+    logger.info(f"[TRAIL:{pos.trade_id}] Stop trailed to {pos.stop_price:.2f} (mid)")
+    _move_nt8_stop(pos, old_stop, new_stop)
 
 
 # ── B62: Universal stop/target sanity gate (Exit Sprint S1) ──────────────
@@ -969,12 +1010,15 @@ class BaseBot:
                                         be_stop = (round(pos.entry_price + TICK_SIZE * 2, 2)
                                                    if pos.direction == "LONG"
                                                    else round(pos.entry_price - TICK_SIZE * 2, 2))
+                                        _old_stop_px = pos.stop_price
                                         pos.stop_price = be_stop
                                         pos.be_stop_active = True
                                         logger.info(f"[RIDER:{pos.trade_id}] BE STOP "
                                                     f"({self._day_type}, {be_mult:.0%}R) — "
                                                     f"stop moved to {be_stop:.2f} "
                                                     f"(price={price:.2f}, +{(price-pos.entry_price)/TICK_SIZE:.0f}t)")
+                                        # B76: actually move NT8 stop via cancel+replace
+                                        _move_nt8_stop(pos, _old_stop_px, be_stop)
 
                             # Stall detector drives exit — check every tick (already rate-limited inside)
                             stall = self._stall_detector.check(snapshot, pos.direction)
@@ -2771,6 +2815,15 @@ class BaseBot:
                             f"[PROTECT:{tid}] OCO attached on attempt #{attempt} "
                             f"stop={stop_price:.2f} target={target_price:.2f}"
                         )
+                        # B76: propagate captured order_ids from the protect
+                        # trade_id key to the canonical tid for later pickup.
+                        try:
+                            from bridge.oif_writer import _recent_order_ids
+                            _pk = f"{tid}_protect{attempt}"
+                            if _pk in _recent_order_ids:
+                                _recent_order_ids[tid] = _recent_order_ids[_pk]
+                        except Exception:
+                            pass
                         protection_ok = True
                         break
                     logger.warning(
@@ -2835,6 +2888,37 @@ class BaseBot:
             account=_account,
             sub_strategy=_sub_strategy,
         )
+
+        # B76: stash NT8-assigned order_ids on the freshly-opened Position
+        # so subsequent stop-moves (trail / BE / chandelier) can cancel +
+        # replace by id. Best-effort: if capture missed (NT8 outgoing/ not
+        # yet populated), base_bot logs [STOP_MOVE_NO_ID] at move time.
+        try:
+            from bridge.oif_writer import _recent_order_ids, scan_outgoing_for_order_id
+            _ids = _recent_order_ids.pop(tid, None)
+            if _ids is None:
+                _ids = {}
+                if stop_price:
+                    _so = scan_outgoing_for_order_id(_account, stop_price, timeout_s=0.5)
+                    if _so:
+                        _ids["stop"] = _so
+                if target_price:
+                    _to = scan_outgoing_for_order_id(_account, target_price, timeout_s=0.5)
+                    if _to:
+                        _ids["target"] = _to
+            _new_pos = self.positions.get_position(tid)
+            if _new_pos is not None and _ids:
+                _new_pos.stop_order_id = _ids.get("stop", "") or ""
+                _new_pos.target_order_id = _ids.get("target", "") or ""
+                logger.info(
+                    f"[OID_CAPTURE:{tid}] stop_oid={(_new_pos.stop_order_id or 'MISS')[:12]} "
+                    f"target_oid={(_new_pos.target_order_id or 'MISS')[:12]}"
+                )
+            else:
+                logger.warning(f"[OID_CAPTURE:{tid}] no order_ids captured — "
+                               f"stop-moves will fall back to Python-only")
+        except Exception as _e:
+            logger.warning(f"[OID_CAPTURE:{tid}] failed: {_e}")
 
         # ── B70: directional conflict observability (non-blocking) ──────
         # Detect cross-strategy LONG-vs-SHORT, log to jsonl, dedup-alert.

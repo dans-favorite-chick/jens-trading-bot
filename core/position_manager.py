@@ -75,6 +75,16 @@ class Position:
     # reconcile time + DailyFlattener. Operator closes them manually.
     reconciled: bool = False
 
+    # ── B76 stop-modify via cancel+replace (2026-04-21) ─────────────────
+    # NT8-assigned order_ids captured by
+    # bridge.oif_writer.scan_outgoing_for_order_id after bracket/protect
+    # commit. Populated on the Position so subsequent stop-moves
+    # (trail / BE / chandelier) can pass the id into write_modify_stop.
+    # Empty string = not captured; callers log [STOP_MOVE_NO_ID] and
+    # fall back to Python-only stop mutation.
+    stop_order_id: str = ""
+    target_order_id: str = ""
+
 
 class PositionManager:
     """Multi-position manager keyed by trade_id.

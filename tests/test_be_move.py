@@ -43,14 +43,6 @@ class TestMoveStopToBeStatePure:
         assert pos.stop_price == 99.0  # unchanged
 
 
-@pytest.mark.xfail(
-    reason="WS-C audit finding: rider BE-trigger (base_bot.py:925-943) and "
-    "_trail_stop (base_bot.py:164) mutate pos.stop_price only; they do NOT "
-    "emit an OIF to modify the NT8 bracket stop. NT8 keeps the original "
-    "bracket stop for the life of the trade. Fix: call "
-    "bridge.oif_writer.write_modify_stop after every BE/trail move.",
-    strict=True,
-)
 class TestBEMoveWritesOIF:
 
     def test_write_modify_stop_signature(self):
