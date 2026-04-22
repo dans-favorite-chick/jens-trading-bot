@@ -55,6 +55,10 @@ except ImportError:
 # ---------------------------------------------------------------------------
 _finnhub_client: finnhub.Client | None = None
 _alpaca_api = None
+# B32: one-shot latch — once Alpaca returns 401 (or any auth failure), skip
+# it for the remainder of the process lifetime. Avoids repeated 401 noise
+# in DEBUG logs. Reset requires a bot restart.
+_alpaca_disabled: bool = False
 
 
 def _get_finnhub() -> finnhub.Client | None:
@@ -144,35 +148,21 @@ def _classify_headline(headline: str) -> int:
 # ---------------------------------------------------------------------------
 async def get_vix() -> dict:
     """
-    Fetch VIX with 3-tier fallback:
-      1. Alpaca real-time quote for UVXY (VIX proxy)
-      2. yfinance ^VIX (15-min delay)
+    Fetch VIX with tiered fallback (B32 reordered 2026-04-21):
+      1. yfinance ^VIX (15-min delay, reliable, no auth)
+      2. Alpaca UVXY proxy (real-time, but requires paid data subscription —
+         free keys 401. Skipped after first auth failure via _alpaca_disabled.)
       3. Cached value or 0
     Cache: 60 seconds.
     """
+    global _alpaca_disabled
+
     cached = _cache.get("vix", 60)
     if cached is not None:
         cached["age_s"] = round(time.time() - _cache._store["vix"][0], 1)
         return cached
 
-    # Tier 1: Alpaca
-    try:
-        api = _get_alpaca()
-        if api:
-            quote = await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(None, lambda: api.get_latest_quote("UVXY")),
-                timeout=5.0,
-            )
-            vix_proxy = float(quote.ap) if hasattr(quote, "ap") and quote.ap else 0
-            if vix_proxy > 0:
-                result = {"vix_proxy": round(vix_proxy, 2), "source": "alpaca_UVXY", "age_s": 0}
-                _cache.put("vix", result)
-                logger.info(f"VIX proxy (UVXY) from Alpaca: {vix_proxy}")
-                return result
-    except Exception as e:
-        logger.debug(f"Alpaca VIX fallback: {e}")
-
-    # Tier 2: yfinance
+    # Tier 1: yfinance (PRIMARY — B32)
     try:
         def _yf_vix():
             ticker = yf.Ticker("^VIX")
@@ -191,7 +181,39 @@ async def get_vix() -> dict:
             logger.info(f"VIX from yfinance: {vix_val}")
             return result
     except Exception as e:
-        logger.debug(f"yfinance VIX fallback: {e}")
+        logger.debug(f"yfinance VIX primary failed: {e}")
+
+    # Tier 2: Alpaca UVXY proxy (fallback — only if not latched off)
+    if not _alpaca_disabled:
+        try:
+            api = _get_alpaca()
+            if api:
+                quote = await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(
+                        None, lambda: api.get_latest_quote("UVXY")
+                    ),
+                    timeout=5.0,
+                )
+                vix_proxy = float(quote.ap) if hasattr(quote, "ap") and quote.ap else 0
+                if vix_proxy > 0:
+                    result = {
+                        "vix_proxy": round(vix_proxy, 2),
+                        "source": "alpaca_UVXY",
+                        "age_s": 0,
+                    }
+                    _cache.put("vix", result)
+                    logger.info(f"VIX proxy (UVXY) from Alpaca: {vix_proxy}")
+                    return result
+        except Exception as e:
+            msg = str(e)
+            if "401" in msg or "unauthorized" in msg.lower() or "forbidden" in msg.lower():
+                _alpaca_disabled = True
+                logger.warning(
+                    "Alpaca VIX fallback auth failed (401/403) — disabling "
+                    "Alpaca until next bot restart. yfinance remains primary."
+                )
+            else:
+                logger.debug(f"Alpaca VIX fallback failed: {e}")
 
     # Tier 3: cached or zero
     stale = _cache.get("vix", 3600)  # accept up to 1 hour stale
