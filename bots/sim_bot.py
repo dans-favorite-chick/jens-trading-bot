@@ -37,6 +37,85 @@ from config.settings import TICK_SIZE
 from core.strategy_risk_registry import StrategyRiskRegistry
 from bots.daily_flatten import DailyFlattener
 
+
+def _build_conflict_recap_section(today_ct, trades: list[dict]) -> str | None:
+    """B71: build the directional-conflicts section for the 17:00 CT
+    Telegram recap. Returns None if there is no conflict activity.
+
+    Reads logs/conflicts/YYYY-MM-DD.jsonl and attributes per-event P&L
+    from the supplied `trades` list by matching (trade_id -> pnl_dollars).
+    Conflict cost = sum of P&L contributed by both halves of each pair.
+    """
+    import json as _json
+    import os as _os
+    conflicts_path = _os.path.join(
+        _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+        "logs", "conflicts", f"{today_ct}.jsonl",
+    )
+    if not _os.path.exists(conflicts_path):
+        return (
+            "\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "🔀 DIRECTIONAL CONFLICTS\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "No directional conflicts today."
+        )
+    events = []
+    try:
+        with open(conflicts_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    events.append(_json.loads(line))
+                except Exception:
+                    pass
+    except Exception:
+        return None
+    opened = [e for e in events if e.get("event") == "conflict_opened"]
+    if not opened:
+        return (
+            "\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "🔀 DIRECTIONAL CONFLICTS\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "No directional conflicts today."
+        )
+    # Build pnl map from today's trades.
+    pnl_by_tid = {}
+    for t in trades:
+        tid = t.get("trade_id")
+        if tid:
+            pnl_by_tid[tid] = float(t.get("pnl_dollars") or 0)
+    total_overlap_s = 0.0
+    lines = []
+    involved_tids = set()
+    for ev in opened:
+        for c in ev.get("conflicts", []):
+            total_overlap_s = max(total_overlap_s,
+                                  float(c.get("overlap_seconds") or 0))
+            involved_tids.add(c.get("trade_id_a"))
+            involved_tids.add(c.get("trade_id_b"))
+            pa = pnl_by_tid.get(c.get("trade_id_a"))
+            pb = pnl_by_tid.get(c.get("trade_id_b"))
+            pa_s = f"${pa:+.2f}" if pa is not None else "open"
+            pb_s = f"${pb:+.2f}" if pb is not None else "open"
+            lines.append(
+                f"• {c.get('strategy_a')} {c.get('dir_a')} ({pa_s}) "
+                f"vs {c.get('strategy_b')} {c.get('dir_b')} ({pb_s})"
+            )
+    conflict_cost = sum(pnl_by_tid.get(t, 0.0) for t in involved_tids)
+    total_overlap_min = total_overlap_s / 60.0
+    header = (
+        "\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "🔀 DIRECTIONAL CONFLICTS\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{len(opened)} conflict events today (peak overlap: {total_overlap_min:.1f} min)\n"
+    )
+    body = "\n".join(lines[:10])
+    tail = f"\n\nCumulative conflict cost today: ${conflict_cost:+.2f}"
+    return header + body + tail
+
+
 logging.basicConfig(
     # Sim runs at DEBUG to surface Fix 5 [EVAL] BLOCKED/SKIP/NO_SIGNAL
     # reject-reason logs for strategy observability. Prod stays at INFO
@@ -303,6 +382,16 @@ class SimBot(BaseBot):
                 win_rate=wr,
                 recovery_mode=bool(getattr(self.risk.state, "recovery_mode", False)),
             )
+
+            # B71: directional-conflicts section of the 17:00 CT briefing.
+            try:
+                section = _build_conflict_recap_section(today_ct, trades)
+                if section:
+                    from core.telegram_notifier import send_sync as _tg_send
+                    _tg_send(section, dedup_key=f"conflict_recap:{today_ct}")
+            except Exception as _e:
+                logger.warning(f"[DAILY_RECAP] conflict section skipped: {_e}")
+
             self._recap_fired_for = today_ct
             logger.info(f"[DAILY_RECAP] sent: pnl=${pnl:.2f} "
                          f"{n}t {wins}W/{losses}L wr={wr:.0f}%")
