@@ -10,9 +10,23 @@ When the fix lands, remove the xfail markers.
 """
 from __future__ import annotations
 
+import shutil
+import tempfile
+
 import pytest
 
 from core.chandelier_exit import ChandelierTrailState
+
+
+@pytest.fixture
+def oif_isolated(monkeypatch):
+    """B81: isolate OIF_INCOMING to tempdir so tests NEVER write real
+    OIF files into NT8's live incoming folder."""
+    tmp = tempfile.mkdtemp()
+    import bridge.oif_writer as oif
+    monkeypatch.setattr(oif, "OIF_INCOMING", tmp)
+    yield tmp
+    shutil.rmtree(tmp, ignore_errors=True)
 
 
 class TestChandelierStateRatchets:
@@ -59,7 +73,7 @@ class TestChandelierWritesOIF:
     def test_write_modify_stop_exists_in_oif_writer(self):
         from bridge.oif_writer import write_modify_stop  # noqa: F401 — import asserts existence
 
-    def test_chandelier_trail_emits_modify_stop_oif(self):
+    def test_chandelier_trail_emits_modify_stop_oif(self, oif_isolated):
         """After each ratchet, a cancel+place_stop OIF pair should be queued."""
         from bridge.oif_writer import write_modify_stop
         # Expected signature (per audit doc): direction, new_stop_price,

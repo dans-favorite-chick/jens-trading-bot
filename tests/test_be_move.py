@@ -10,7 +10,23 @@ Tests marked xfail(strict=True) until the wiring lands.
 """
 from __future__ import annotations
 
+import shutil
+import tempfile
+
 import pytest
+
+
+@pytest.fixture
+def oif_isolated(monkeypatch):
+    """B81: isolate OIF_INCOMING to a tempdir so tests NEVER write real
+    OIF files into NT8's live incoming folder. The prior test literal
+    (100.0, then 21000.0) was actually reaching NT8 and placing a real
+    stop order at that price because this isolation was missing."""
+    tmp = tempfile.mkdtemp()
+    import bridge.oif_writer as oif
+    monkeypatch.setattr(oif, "OIF_INCOMING", tmp)
+    yield tmp
+    shutil.rmtree(tmp, ignore_errors=True)
 
 
 class TestMoveStopToBeStatePure:
@@ -48,7 +64,7 @@ class TestBEMoveWritesOIF:
     def test_write_modify_stop_signature(self):
         from bridge.oif_writer import write_modify_stop  # noqa: F401
 
-    def test_rider_be_trigger_emits_modify_stop_oif(self):
+    def test_rider_be_trigger_emits_modify_stop_oif(self, oif_isolated):
         """When BE trigger fires, base_bot should write a stop-modify OIF."""
         # Placeholder: the full integration test requires a running base_bot
         # harness. Once write_modify_stop exists, add it here and assert the
@@ -57,7 +73,7 @@ class TestBEMoveWritesOIF:
         from bridge.oif_writer import write_modify_stop
         paths = write_modify_stop(
             direction="LONG",
-            new_stop_price=21000.0,  # B80: realistic MNQ price (guard rejects <10000)
+            new_stop_price=21000.0,  # B81: isolated via oif_isolated fixture — never reaches NT8
             n_contracts=1,
             trade_id="rider_be_test",
             account="Sim101",
