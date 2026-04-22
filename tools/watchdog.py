@@ -577,9 +577,14 @@ def main():
     parser = argparse.ArgumentParser(description="Phoenix Bot Watchdog")
     parser.add_argument("--no-restart", action="store_true",
                         help="Monitor only — don't auto-restart bots")
-    parser.add_argument("--bots", type=str, default="prod,sim",
-                        help="Comma-separated bot names to watch (default: prod,sim). "
-                             "Pass 'prod,lab,sim' to co-monitor lab during transition.")
+    parser.add_argument("--bots", type=str, default="sim",
+                        help="Comma-separated bot names to watch (default: sim). "
+                             "B56 2026-04-22: prod_bot dropped from default — "
+                             "sim_bot handles all 16-account routing. Two bots "
+                             "trading the same accounts caused double-submit + "
+                             "NT8 'Exceeds max pos qty' rejects. Pass 'prod,sim' "
+                             "to re-enable prod_bot only if running on a separate "
+                             "account set.")
     parser.add_argument("--analyze", action="store_true",
                         help="Analyze disconnect forensics log and exit")
     parser.add_argument("--api-port", type=int, default=5001,

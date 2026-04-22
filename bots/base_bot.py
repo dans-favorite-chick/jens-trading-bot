@@ -2425,7 +2425,7 @@ class BaseBot:
         # state was lost on restart but NT8 still holds the real fill),
         # abort the new entry — otherwise NT8 rejects with "Exceeds
         # account's maximum position quantity" and leaves orphan OCO legs.
-        if getattr(self, "bot_name", "prod") == "sim":
+        if (_account and _account != "Sim101"):
             try:
                 from bridge.oif_writer import verify_nt8_position
                 pre = verify_nt8_position(
@@ -2496,7 +2496,7 @@ class BaseBot:
             #       loud alert + cleanup stop/target orphans
             #   (b) NT8 ACCEPTED but waiting for limit/stop trigger (OIF
             #       consumed, no fill yet) → NOT a phantom, skip quietly
-            if getattr(self, "bot_name", "prod") == "sim":
+            if (_account and _account != "Sim101"):
                 import glob as _glob
                 try:
                     from config.settings import NT8_DATA_ROOT
@@ -2554,7 +2554,7 @@ class BaseBot:
         # B47: For sim_bot, verify the fill actually happened by reading
         # NT8's outgoing/ position file for this account. If NT8 reports
         # FLAT or wrong direction/qty, we have a phantom — reject the entry.
-        if getattr(self, "bot_name", "prod") == "sim":
+        if (_account and _account != "Sim101"):
             try:
                 from bridge.oif_writer import verify_nt8_position
                 pos_check = verify_nt8_position(
