@@ -33,3 +33,28 @@
 - No strategy files under `strategies/` needed edits — all produce
   correct geometry; the defect was in base_bot's target-resolution
   path for managed-exit signals.
+
+## S3 — opening strategies silence (2026-04-22)
+
+- Jennifer's pre-briefing had two factual errors: (a) sim_bot first-start
+  today was 09:07:52 CDT, not 10:23 (10:23 was a later restart after a
+  MenthorQ reload cycle); (b) `data/menthorq_daily.json` was ~2 h old at
+  bot start, not 108 h. The silence root cause is still upstream of these.
+- Primary root cause: producer/consumer field-name mismatch between
+  `strategies/opening_session.py` (reads `rth_5min_close_last`,
+  `rth_1min_*`, `avg_1min_volume`) and
+  `core/session_levels_aggregator.get_levels_dict()` (emits
+  `rth_5min_close` only; no 1m bar fields). Every ORB eval at 09:07+
+  hit `SKIP orb missing_fields`; premarket_breakout (08:30-08:45) was
+  missed entirely because the bot wasn't running that window.
+- Shipped B66 (observability only) rather than B65/B67/B68 from the
+  brief. Evidence showed none of those hypotheses were causal today,
+  so shipping them would be speculative gold-plating. Structural fix
+  for field coverage (R1 in the investigation doc) is deferred with
+  a spec — it needs a new 1m rolling bar aggregator + avg-1m-volume
+  EMA, non-trivial and deserves its own slot.
+- `is_in_window()` remains tz-naive. Acceptable today because upstream
+  `tick_aggregator._bar_now = datetime.fromtimestamp(bar.end_time)`
+  is naive-local on the CT Windows host. If the host TZ ever moves,
+  this breaks silently; a future hardening ticket (B68-equivalent) is
+  still worth filing, just not under "explains today's silence".

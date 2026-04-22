@@ -85,6 +85,11 @@ class OpeningSessionStrategy(BaseStrategy):
         # the orb_first_break_direction snapshot field — no internal state).
         self._daily_trades_today: int = 0
         self._trade_date: Optional[str] = None
+        # B66: remember the most recent per-sub reason for observability.
+        # This lets the dispatcher surface a non-empty reason when every
+        # windowed sub-evaluator returned None, so history.jsonl eval
+        # events don't show a silent "NO_SIGNAL" with empty reason.
+        self._last_skip_reason: Optional[str] = None
 
     # ── Daily reset ────────────────────────────────────────────────
     def _maybe_reset_daily(self, now_ct: datetime) -> None:
@@ -96,10 +101,20 @@ class OpeningSessionStrategy(BaseStrategy):
     # ── Logging helper ─────────────────────────────────────────────
     def _log_eval(self, msg: str) -> None:
         logger.debug(f"[EVAL] {self.name}: {msg}")
+        # B66: cache last non-trivial reason for dispatcher-level surface.
+        self._last_skip_reason = msg
+
+    @property
+    def last_skip_reason(self) -> Optional[str]:
+        """B66: external observability — last sub-evaluator skip/block msg."""
+        return self._last_skip_reason
 
     # ── Dispatcher ─────────────────────────────────────────────────
     def evaluate(self, market: dict, bars_5m: list = None, bars_1m: list = None,
                  session_info: dict = None) -> Signal | None:
+        # B66: clear per-eval reason cache so stale messages don't leak.
+        self._last_skip_reason = None
+
         now_ct = market.get("now_ct")
         if not isinstance(now_ct, datetime):
             self._log_eval("SKIP missing_now_ct")
