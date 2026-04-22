@@ -175,6 +175,41 @@ def _trail_stop(pos, price: float):
         logger.info(f"[TRAIL:{pos.trade_id}] Stop trailed to {pos.stop_price:.2f} (mid)")
 
 
+# ── B62: Universal stop/target sanity gate (Exit Sprint S1) ──────────────
+def _sanity_check_entry(signal, entry_price, stop_price, target_price):
+    """Fail-closed geometry + distance check before OCO submission.
+
+    Returns (ok: bool, reason: str|None). On failure, caller logs
+    [STOP_SANITY_FAIL] CRITICAL and aborts the trade.
+
+    Rules:
+      - LONG: stop < entry < target (target may be None for managed exits)
+      - SHORT: target < entry < stop (target may be None for managed exits)
+      - Stop distance: 5-200 MNQ ticks (0.25 tick size).
+    """
+    tick_size = 0.25  # MNQ
+    if entry_price is None or stop_price is None:
+        return False, f"missing price: entry={entry_price} stop={stop_price}"
+    if signal.direction == "LONG":
+        if not (stop_price < entry_price):
+            return False, (f"LONG order geometry wrong: stop={stop_price} "
+                           f"entry={entry_price} target={target_price}")
+        if target_price is not None and not (entry_price < target_price):
+            return False, (f"LONG order geometry wrong: stop={stop_price} "
+                           f"entry={entry_price} target={target_price}")
+    else:  # SHORT
+        if not (stop_price > entry_price):
+            return False, (f"SHORT order geometry wrong: stop={stop_price} "
+                           f"entry={entry_price} target={target_price}")
+        if target_price is not None and not (target_price < entry_price):
+            return False, (f"SHORT order geometry wrong: stop={stop_price} "
+                           f"entry={entry_price} target={target_price}")
+    stop_ticks = abs(entry_price - stop_price) / tick_size
+    if stop_ticks < 5 or stop_ticks > 200:
+        return False, f"stop distance {stop_ticks:.0f}t outside 5-200 range"
+    return True, None
+
+
 # ── Dashboard push JSON default (BUG-TL1) ────────────────────────────────
 def _json_default_safe(obj):
     """
@@ -2367,8 +2402,27 @@ class BaseBot:
         else:
             stop_price = price + (stop_ticks * tick_value)
 
+        # B61: managed-exit signals (noise_area, ORB chandelier) set
+        # target_price=None intentionally. If target_rr is also 0, we must NOT
+        # synthesize a formula target (that would land at entry). The OCO TP
+        # leg will be skipped below (see line 2644 guard).
+        _managed_exit_target = (
+            getattr(signal, "target_price", None) is None
+            and getattr(signal, "target_rr", 0) == 0
+        )
         if getattr(signal, "target_price", None) is not None:
             target_price = signal.target_price
+        elif _managed_exit_target:
+            # Safety-net OCO target far beyond realistic fills (300t = 75pts).
+            # The real exit comes from signal.exit_trigger; this is just so
+            # the OCO bracket still attaches the STOP leg correctly. Prior
+            # behavior synthesized target=entry (via target_rr=0 formula),
+            # making the TP leg fill immediately — B61 fix.
+            _safety_ticks = 300
+            if signal.direction == "LONG":
+                target_price = price + (_safety_ticks * tick_value)
+            else:
+                target_price = price - (_safety_ticks * tick_value)
         elif signal.direction == "LONG":
             target_price = price + (stop_ticks * tick_value * signal.target_rr)
         else:
@@ -2385,9 +2439,26 @@ class BaseBot:
             logger.debug(f"[{tid}:MICRO] Error (non-blocking): {e}")
 
         # Log INTENT before execution
+        _tp_str = f"{target_price:.2f}" if target_price is not None else "MANAGED"
         logger.info(f"[INTENT:{tid}] {signal.direction} {contracts}x @ {price:.2f} "
-                     f"SL={stop_price:.2f} TP={target_price:.2f} "
+                     f"SL={stop_price:.2f} TP={_tp_str} "
                      f"risk=${risk_dollars} tier={tier} strat={signal.strategy}")
+
+        # B62 Universal sanity gate — fail-closed geometry & distance check.
+        # Runs AFTER stop/target resolution, BEFORE any OCO submission.
+        _ok, _reason = _sanity_check_entry(signal, price, stop_price, target_price)
+        if not _ok:
+            logger.critical(f"[STOP_SANITY_FAIL:{tid}] {signal.strategy} "
+                            f"{signal.direction}: {_reason}")
+            self.last_rejection = f"STOP_SANITY_FAIL: {_reason}"
+            try:
+                sig_dict = {"direction": signal.direction, "strategy": signal.strategy,
+                            "confidence": signal.confidence, "entry_score": signal.entry_score,
+                            "reason": signal.reason}
+                self.history.log_near_miss(sig_dict, market, f"stop_sanity_fail:{_reason}")
+            except Exception:
+                pass
+            return
 
         # Send trade command to bridge (bridge writes OIF with OCO brackets)
         action = "ENTER_LONG" if signal.direction == "LONG" else "ENTER_SHORT"
@@ -2415,11 +2486,18 @@ class BaseBot:
                     stop_price = round(limit_price - (stop_ticks * TICK_SIZE), 2)
                 else:
                     stop_price = round(limit_price + (stop_ticks * TICK_SIZE), 2)
-            if getattr(signal, "target_price", None) is None:
+            if getattr(signal, "target_price", None) is None and not _managed_exit_target:
                 if signal.direction == "LONG":
                     target_price = round(limit_price + (stop_ticks * TICK_SIZE * signal.target_rr), 2)
                 else:
                     target_price = round(limit_price - (stop_ticks * TICK_SIZE * signal.target_rr), 2)
+            elif _managed_exit_target:
+                # Re-anchor safety-net target to the limit fill price
+                _safety_ticks = 300
+                if signal.direction == "LONG":
+                    target_price = round(limit_price + (_safety_ticks * TICK_SIZE), 2)
+                else:
+                    target_price = round(limit_price - (_safety_ticks * TICK_SIZE), 2)
         elif signal_entry_type == "STOPMARKET":
             # Breakout entry: trigger when price crosses entry_price, fills at market.
             limit_price = round(sig_entry_price if sig_entry_price is not None else price, 2)
@@ -3024,6 +3102,42 @@ class BaseBot:
                 market_snap["mae_time_s"] = exp_analysis.get("mae_time_s")
                 market_snap["mfe_time_s"] = exp_analysis.get("mfe_time_s")
             self.history.log_exit(trade, market_snap)
+
+            # B64: target-miss forensic logging. Emit [EXIT_FORENSIC] on
+            # every exit so we can audit target-fire correctness. If
+            # MFE >= 20 ticks AND exit_reason != "target_hit", escalate
+            # with [TARGET_MISS_SUSPECT] at WARN level — these are the
+            # trades Jennifer flagged: big favorable excursion that never
+            # triggered the LIMIT target (possible causes: target leg not
+            # Working in NT8, cancelled by unrelated CANCEL_ALL, or
+            # managed-exit fired before price reached target).
+            try:
+                _mfe = market_snap.get("mfe_ticks") or 0
+                _mae = market_snap.get("mae_ticks") or 0
+                _mfe_t = market_snap.get("mfe_time_s") or 0
+                _reason = trade.get("exit_reason", "")
+                _tid = trade.get("trade_id", "")
+                logger.info(
+                    f"[EXIT_FORENSIC] tid={_tid} reason={_reason} "
+                    f"mfe_ticks={_mfe:.0f} mae_ticks={_mae:.0f} "
+                    f"time_at_mfe={_mfe_t:.1f}s "
+                    f"pnl=${trade.get('pnl_dollars', 0):.2f}"
+                )
+                if _mfe >= 20 and _reason != "target_hit":
+                    logger.warning(
+                        f"[TARGET_MISS_SUSPECT] tid={_tid} "
+                        f"strategy={trade.get('strategy','?')} "
+                        f"direction={trade.get('direction','?')} "
+                        f"entry={trade.get('entry_price',0):.2f} "
+                        f"exit={trade.get('exit_price',0):.2f} "
+                        f"target={trade.get('target_price') or 0:.2f} "
+                        f"mfe_ticks={_mfe:.0f} reason={_reason} — "
+                        f"favorable excursion did not trigger LIMIT "
+                        f"target; investigate OCO attachment or "
+                        f"managed-exit timing."
+                    )
+            except Exception as _e:
+                logger.debug(f"[EXIT_FORENSIC] log error (non-blocking): {_e}")
 
             # Phase 7: Store trade in RAG vector DB for similarity search
             try:
