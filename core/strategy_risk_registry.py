@@ -227,6 +227,92 @@ class StrategyRiskRegistry:
         except Exception as e:
             logger.error("[HALT] failed to save halt state to %s: %s", path, e)
 
+    # ─── Directional conflict observability (S6 / B70) ──────────────
+    # Data-gathering phase: detect + log cross-strategy LONG-vs-SHORT
+    # situations without blocking. Jennifer decides in 2-4 weeks whether
+    # to arbitrate / block / keep allowing.
+
+    def detect_directional_conflicts(self, position_manager) -> list[dict]:
+        """Return list of active directional conflicts.
+
+        A "conflict" = two ACTIVE positions from DIFFERENT strategies
+        with opposite directions (LONG vs SHORT). Unique pairs only —
+        (a, b) is returned, (b, a) is not.
+
+        Positions with direction == "FLAT" (or anything other than LONG/
+        SHORT) are ignored.
+        """
+        import time as _time
+        positions = [
+            p for p in position_manager.active_positions
+            if getattr(p, "direction", None) in ("LONG", "SHORT")
+        ]
+        conflicts: list[dict] = []
+        now = _time.time()
+        n = len(positions)
+        for i in range(n):
+            for j in range(i + 1, n):
+                a, b = positions[i], positions[j]
+                if a.direction == b.direction:
+                    continue
+                if a.strategy == b.strategy:
+                    # Same strategy shouldn't have opposite positions
+                    # (position manager prevents) — skip defensively.
+                    continue
+                overlap = max(
+                    0.0,
+                    now - max(
+                        getattr(a, "entry_time", now),
+                        getattr(b, "entry_time", now),
+                    ),
+                )
+                conflicts.append({
+                    "trade_id_a": a.trade_id,
+                    "strategy_a": a.strategy,
+                    "dir_a": a.direction,
+                    "account_a": a.account,
+                    "entry_a": a.entry_price,
+                    "opened_at_a": getattr(a, "entry_time", None),
+                    "trade_id_b": b.trade_id,
+                    "strategy_b": b.strategy,
+                    "dir_b": b.direction,
+                    "account_b": b.account,
+                    "entry_b": b.entry_price,
+                    "opened_at_b": getattr(b, "entry_time", None),
+                    "overlap_seconds": round(overlap, 1),
+                })
+        return conflicts
+
+    def exposure_snapshot(self, position_manager) -> dict:
+        """Return net/gross exposure snapshot across all active positions.
+
+        net = N_LONG - N_SHORT (contracts)
+        gross = N_LONG + N_SHORT (contracts)
+        """
+        longs: list[dict] = []
+        shorts: list[dict] = []
+        for p in position_manager.active_positions:
+            d = getattr(p, "direction", None)
+            row = {
+                "trade_id": p.trade_id,
+                "strategy": p.strategy,
+                "contracts": p.contracts,
+                "account": p.account,
+                "entry_price": p.entry_price,
+            }
+            if d == "LONG":
+                longs.append(row)
+            elif d == "SHORT":
+                shorts.append(row)
+        n_long = sum(r["contracts"] for r in longs)
+        n_short = sum(r["contracts"] for r in shorts)
+        return {
+            "net": n_long - n_short,
+            "gross": n_long + n_short,
+            "longs": longs,
+            "shorts": shorts,
+        }
+
     # ─── Dashboard ───────────────────────────────────────────────────
 
     def snapshot(self) -> dict:

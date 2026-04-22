@@ -387,6 +387,18 @@ class BridgeServer:
                        + (f"/{sub_strategy}" if sub_strategy else "")
                        + f" reason={reason}")
 
+        # B59 hard-guard at the bridge dispatch layer — a bot could bypass
+        # the oif_writer guards via a direct ws.send, but it still hits
+        # bridge_server first. Reject any command targeting LIVE_ACCOUNT.
+        _live = os.environ.get("LIVE_ACCOUNT", "").strip()
+        if _live and str(account or "").strip() == _live:
+            trade_log.error(
+                f"[LIVE_GUARD] BLOCKED trade command from bot={bot_name} "
+                f"targeting live account '{account}' (action={action}, "
+                f"trade_id={trade_id})"
+            )
+            return  # Do NOT dispatch to write_oif
+
         # B55: PLACE_PROTECTION is a post-fill OCO attachment (stop+target only).
         # The action carries "direction" = LONG/SHORT of the filled position;
         # stop/target exits go the opposite way.

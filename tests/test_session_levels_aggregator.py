@@ -354,5 +354,130 @@ class TestGetLevelsDict:
         assert d_after["now_ct"] == passed
 
 
+class TestRth1MinRolling:
+    """B-WSB: latest-RTH-1m-bar + rolling avg_1min_volume for opening_session."""
+
+    def test_latest_1m_ohlcv_captured_during_rth(self, agg):
+        bar = FakeBar(100.0, 101.5, 99.5, 101.0, volume=500)
+        agg.update(ct(9, 15), bar_1m=bar)
+        d = agg.get_levels_dict()
+        assert d["rth_1min_open"] == 100.0
+        assert d["rth_1min_high"] == 101.5
+        assert d["rth_1min_low"] == 99.5
+        assert d["rth_1min_close"] == 101.0
+        assert d["rth_1min_volume"] == 500
+
+    def test_1m_fields_none_before_rth_open(self, agg):
+        agg.update(ct(7, 30), bar_1m=FakeBar(100, 101, 99, 100, volume=200))
+        d = agg.get_levels_dict()
+        assert d["rth_1min_open"] is None
+        assert d["rth_1min_volume"] is None
+        assert d["avg_1min_volume"] is None
+
+    def test_1m_fields_not_updated_after_rth_close(self, agg):
+        agg.update(ct(9, 0), bar_1m=FakeBar(50, 51, 49, 50, volume=10))
+        agg.update(ct(15, 30), bar_1m=FakeBar(999, 999, 999, 999, volume=99999))
+        d = agg.get_levels_dict()
+        assert d["rth_1min_close"] == 50
+
+    def test_avg_1min_volume_none_before_20_bars(self, agg):
+        for i in range(10):
+            agg.update(ct(8, 30 + i), bar_1m=FakeBar(100, 101, 99, 100, volume=100))
+        assert agg.get_levels_dict()["avg_1min_volume"] is None
+
+    def test_avg_1min_volume_after_20_bars(self, agg):
+        vols = list(range(100, 120))  # 100..119, mean = 109.5
+        for i, v in enumerate(vols):
+            # Spread timestamps across RTH (8:30 + i minutes)
+            hh = 8 + (30 + i) // 60
+            mm = (30 + i) % 60
+            agg.update(ct(hh, mm), bar_1m=FakeBar(100, 101, 99, 100, volume=v))
+        avg = agg.get_levels_dict()["avg_1min_volume"]
+        assert avg == pytest.approx(sum(vols) / 20)
+
+    def test_avg_1min_volume_rolls_after_window_full(self, agg):
+        # First 20 bars at vol=100, then add 20 bars at vol=200 → rolling avg becomes 200.
+        for i in range(20):
+            hh = 8 + (30 + i) // 60
+            mm = (30 + i) % 60
+            agg.update(ct(hh, mm), bar_1m=FakeBar(100, 101, 99, 100, volume=100))
+        assert agg.get_levels_dict()["avg_1min_volume"] == 100
+        for i in range(20, 40):
+            hh = 8 + (30 + i) // 60
+            mm = (30 + i) % 60
+            agg.update(ct(hh, mm), bar_1m=FakeBar(100, 101, 99, 100, volume=200))
+        assert agg.get_levels_dict()["avg_1min_volume"] == 200
+
+
+class TestRth5MinCloseLast:
+    def test_tracks_latest_5m_close(self, agg):
+        agg.update(ct(8, 35), bar_5m=FakeBar(100, 105, 99, 103, volume=5000))
+        assert agg.get_levels_dict()["rth_5min_close_last"] == 103
+        agg.update(ct(8, 40), bar_5m=FakeBar(103, 108, 102, 107, volume=5000))
+        assert agg.get_levels_dict()["rth_5min_close_last"] == 107
+
+    def test_5m_close_last_none_before_rth(self, agg):
+        agg.update(ct(7, 30), bar_5m=FakeBar(100, 101, 99, 100, volume=5000))
+        assert agg.get_levels_dict()["rth_5min_close_last"] is None
+
+
+class TestOpeningSessionIntegration:
+    """Feed enriched snapshot into opening_session strategy and assert
+    no sub-evaluator returns SKIP missing_fields."""
+
+    def _seed_full_snapshot(self, agg):
+        # Prior day
+        agg.prior_day_open = 100.0
+        agg.prior_day_high = 110.0
+        agg.prior_day_low = 90.0
+        agg.prior_day_close = 105.0
+        agg.prior_day_poc = 100.0
+        agg.prior_day_vah = 108.0
+        agg.prior_day_val = 92.0
+        agg.pivot_pp = 101.0
+        agg.pivot_r1 = 105.0
+        agg.pivot_s1 = 97.0
+        # Premarket + RTH
+        agg.pmh = 112.0
+        agg.pml = 108.0
+        agg.rth_open_price = 111.0
+        agg.rth_5min_high = 112.5
+        agg.rth_5min_low = 110.0
+        agg.rth_5min_close = 112.0
+        agg._rth_5min_captured = True
+        agg.rth_15min_high = 113.0
+        agg.rth_15min_low = 109.5
+        agg.rth_60min_high = 114.0
+        agg.rth_60min_low = 108.0
+        agg.opening_type = "OPEN_DRIVE"
+        agg.opening_holds_outside_at_845 = True
+        # Prime rolling 1m avg
+        for _ in range(20):
+            agg._rth_1min_volumes.append(500)
+        agg.rth_1min_open = 112.0
+        agg.rth_1min_high = 112.8
+        agg.rth_1min_low = 111.8
+        agg.rth_1min_close = 112.5
+        agg.rth_1min_volume = 800
+        agg.rth_5min_close_last = 113.5  # beyond rth_15min_high → ORB LONG break
+
+    def test_opening_session_no_missing_fields(self, agg):
+        from strategies.opening_session import OpeningSessionStrategy
+        self._seed_full_snapshot(agg)
+        snapshot = agg.get_levels_dict()
+        snapshot["now_ct"] = ct(8, 50)
+        snapshot["price"] = 113.5
+        snapshot["news_calendar"] = []
+
+        strat = OpeningSessionStrategy({"max_trades_per_day": 2})
+        _ = strat.evaluate(snapshot)
+        # Whatever the outcome, sub-evaluators with full fields should not
+        # cache "missing_fields" as the last reason.
+        last = strat.last_skip_reason or ""
+        assert "missing_fields" not in last, (
+            f"Unexpected missing_fields after aggregator fix: {last!r}"
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

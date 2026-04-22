@@ -620,5 +620,40 @@ class TestSubStrategyMetadata:
         assert sig.metadata["sub_strategy"] == "orb"
 
 
+class TestB66LastSkipReason:
+    """B66: expose last sub-evaluator reason for observability on silent evals."""
+
+    def test_last_skip_reason_none_before_eval(self):
+        s = make_strategy()
+        assert s.last_skip_reason is None
+
+    def test_last_skip_reason_populated_when_missing_now_ct(self):
+        s = make_strategy()
+        result = s.evaluate({})
+        assert result is None
+        assert s.last_skip_reason == "SKIP missing_now_ct"
+
+    def test_last_skip_reason_captures_sub_skip_during_window(self):
+        # In ORB window (08:45-14:30) but missing all ORB fields → ORB sub
+        # returns SKIP orb missing_fields. Dispatcher should expose that
+        # as last_skip_reason (was the silent-empty-reason bug on 2026-04-22).
+        s = make_strategy()
+        result = s.evaluate({"now_ct": ct(9, 30)})
+        assert result is None
+        assert s.last_skip_reason is not None
+        assert "missing_fields" in s.last_skip_reason
+
+    def test_last_skip_reason_cleared_across_evals(self):
+        # After a call that logs nothing (pre-window time), the reason
+        # must not leak from a prior call.
+        s = make_strategy()
+        s.evaluate({})  # populates with SKIP missing_now_ct
+        assert s.last_skip_reason is not None
+        s._last_skip_reason = "STALE_LEAK"
+        # 07:00 CT is before every sub-evaluator window; no _log_eval calls.
+        s.evaluate({"now_ct": ct(7, 0)})
+        assert s.last_skip_reason is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

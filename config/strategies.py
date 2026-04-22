@@ -116,6 +116,14 @@ STRATEGIES = {
         # 60t = 15pts — a true VWAP pullback can be further out than 6 ticks on NQ.
         "max_vwap_dist_ticks": 60,
         "target_rr": 20.0,   # Reversal+stall exit drives this — target is not the OCO bracket
+        # WS-A guaranteed-loss audit (2026-04-21): target_rr=20 is effectively
+        # unreachable (40t stop × 20 = 800t / 200pts). No exit_trigger / trailing
+        # is wired in strategies/vwap_pullback.py yet, so the only real exit is
+        # max_hold_min time-out. Flagged for WS-C to either (a) implement a
+        # trailing/managed exit, or (b) bring target_rr back under 10 with a
+        # realistic OCO bracket. CI sanity test allows target_rr>=10 ONLY when
+        # this marker is present.
+        "_wide_target_requires_trailing": True,
         "min_confluence": 3.2,
         "min_tf_votes": 3,
         "max_hold_min": 60,  # Give it room — VWAP pullbacks can run 30-80pts

@@ -48,12 +48,21 @@ class TradeMemory:
             bot_id: Originating bot name ("prod" | "lab" | "sim"). Stamped
                     into trade dict so downstream consumers (dashboard,
                     learner) can partition P&L across bots. B16 fix.
+
+        B70 write-time guard: if bot_id is missing/None AND the trade dict
+        doesn't already carry a non-null bot_id, default to "unknown" and
+        log a WARNING. Prevents future null-bot_id pollution of
+        trade_memory.json that breaks the Historical Learner's grouping.
         """
         trade["recorded_at"] = datetime.now().isoformat()
         if bot_id is not None:
             trade["bot_id"] = bot_id
-        elif "bot_id" not in trade:
-            trade["bot_id"] = None
+        elif trade.get("bot_id") in (None, ""):
+            logger.warning(
+                "TradeMemory.record() called with no bot_id; defaulting to "
+                "'unknown'. Caller should pass bot_id=... explicitly."
+            )
+            trade["bot_id"] = "unknown"
         self.trades.append(trade)
         self.save()
 
