@@ -73,6 +73,34 @@ def _require_account(account: str | None, caller: str) -> str:
     return account
 
 
+# B80: Hard price-sanity guard. MNQ has traded in roughly 10000-25000 for
+# years; 10000-50000 gives decades of headroom and still catches the whole
+# class of "nonsense price reached NT8" bugs (tick-count used as price,
+# $-loss used as price, parse offset error, default 0.0, etc.). Fail closed:
+# raise instead of emitting — callers must not swallow this.
+MNQ_PRICE_MIN = 10000.0
+MNQ_PRICE_MAX = 50000.0
+
+
+def _assert_price_sane(price: float, field: str, caller: str) -> None:
+    """B80: refuse to emit an OIF with a price clearly outside MNQ's range.
+    Today's bug (stop at 100.00 on a 27000 market) would be caught here.
+    A price of 0 is allowed only via the literal "0" branch in the builders
+    (market orders) — it must never reach this function."""
+    try:
+        p = float(price)
+    except (TypeError, ValueError):
+        raise RuntimeError(
+            f"[PRICE_SANITY] {caller}: {field}={price!r} is not numeric"
+        )
+    if not (MNQ_PRICE_MIN <= p <= MNQ_PRICE_MAX):
+        raise RuntimeError(
+            f"[PRICE_SANITY] {caller}: {field}={p} outside MNQ plausible "
+            f"range [{MNQ_PRICE_MIN}, {MNQ_PRICE_MAX}]. Refusing to emit "
+            f"OIF — this would have been a catastrophic mis-priced order."
+        )
+
+
 def _build_entry_line(side: str, qty: int, order_type: str,
                       limit_price: float, stop_price: float,
                       oco_id: str = "",
@@ -89,13 +117,17 @@ def _build_entry_line(side: str, qty: int, order_type: str,
     acct = _require_account(account, "_build_entry_line")
     ot = order_type.upper()
     if ot == "LIMIT":
+        _assert_price_sane(limit_price, "limit_price", "_build_entry_line")
         lp, sp = f"{limit_price:.2f}", "0"
     elif ot == "STOPMARKET":
         # Triggers at stop_price, fills at market — correct form per NT8 ATI.
+        _assert_price_sane(stop_price, "stop_price", "_build_entry_line")
         lp, sp = "0", f"{stop_price:.2f}"
     elif ot == "STOP":
         # Stop-limit (NOT stop-loss). Triggers at stop_price, fills at limit_price.
         # For stop-LOSS protection use _build_stop_line() which emits STOPMARKET.
+        _assert_price_sane(limit_price, "limit_price", "_build_entry_line")
+        _assert_price_sane(stop_price, "stop_price", "_build_entry_line")
         lp, sp = f"{limit_price:.2f}", f"{stop_price:.2f}"
     else:  # MARKET
         lp, sp = "0", "0"
@@ -113,6 +145,7 @@ def _build_stop_line(side: str, qty: int, stop_price: float,
     4C: account must be explicit — routing per strategy/sub-strategy.
     """
     acct = _require_account(account, "_build_stop_line")
+    _assert_price_sane(stop_price, "stop_price", "_build_stop_line")
     return f"PLACE;{acct};{INSTRUMENT};{side};{qty};STOPMARKET;0;{stop_price:.2f};{tif};{oco_id};;;"
 
 
@@ -124,6 +157,7 @@ def _build_target_line(side: str, qty: int, target_price: float,
     4C: account must be explicit — routing per strategy/sub-strategy.
     """
     acct = _require_account(account, "_build_target_line")
+    _assert_price_sane(target_price, "target_price", "_build_target_line")
     return f"PLACE;{acct};{INSTRUMENT};{side};{qty};LIMIT;{target_price:.2f};0;{tif};{oco_id};;;"
 
 

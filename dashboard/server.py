@@ -353,6 +353,86 @@ def api_strategy_risk():
     })
 
 
+@app.route("/api/today-pnl")
+def api_today_pnl():
+    """B79: compute today's P&L from trade_memory.json — the durable
+    source of truth that survives bot and dashboard restarts.
+
+    Returns per-bot and per-strategy P&L for trades that closed today
+    in CT (America/Chicago). Uses exit_time (unix seconds) to filter.
+    """
+    from datetime import datetime, timezone
+    try:
+        from zoneinfo import ZoneInfo
+        ct = ZoneInfo("America/Chicago")
+    except Exception:
+        ct = timezone.utc
+
+    today_ct = datetime.now(ct).date()
+
+    tm_path = os.path.join(PROJECT_ROOT, "logs", "trade_memory.json")
+    try:
+        with open(tm_path, encoding="utf-8") as f:
+            rows = json.load(f)
+    except Exception as e:
+        return safe_jsonify({"error": f"trade_memory read: {e}",
+                             "per_bot": {}, "per_strategy": {}})
+
+    per_bot: dict = {}
+    per_strategy: dict = {}
+    today_rows = []
+    for t in rows:
+        exit_ts = t.get("exit_time") or t.get("ts_exit")
+        if not exit_ts:
+            continue
+        try:
+            # Convert unix seconds → CT date
+            if isinstance(exit_ts, (int, float)):
+                dt = datetime.fromtimestamp(float(exit_ts), tz=ct)
+            else:
+                # Fallback: ISO string
+                dt = datetime.fromisoformat(str(exit_ts)).astimezone(ct)
+        except Exception:
+            continue
+        if dt.date() != today_ct:
+            continue
+        today_rows.append(t)
+        bot = t.get("bot_id") or "unknown"
+        strat = t.get("strategy") or "unknown"
+        pnl = float(t.get("pnl_dollars") or 0.0)
+        won = 1 if pnl > 0 else 0
+        lost = 1 if pnl < 0 else 0
+        # Per-bot
+        b = per_bot.setdefault(bot, {"pnl": 0.0, "trades": 0, "wins": 0, "losses": 0})
+        b["pnl"] += pnl
+        b["trades"] += 1
+        b["wins"] += won
+        b["losses"] += lost
+        # Per-strategy (key on strategy + sub_strategy if present)
+        sub = t.get("sub_strategy")
+        key = f"{strat}.{sub}" if sub else strat
+        s = per_strategy.setdefault(key, {"pnl": 0.0, "trades": 0, "wins": 0, "losses": 0, "bot": bot})
+        s["pnl"] += pnl
+        s["trades"] += 1
+        s["wins"] += won
+        s["losses"] += lost
+    # Round for display
+    for b in per_bot.values():
+        b["pnl"] = round(b["pnl"], 2)
+        b["win_rate"] = round(100 * b["wins"] / b["trades"], 1) if b["trades"] else 0.0
+    for s in per_strategy.values():
+        s["pnl"] = round(s["pnl"], 2)
+        s["win_rate"] = round(100 * s["wins"] / s["trades"], 1) if s["trades"] else 0.0
+
+    return safe_jsonify({
+        "today_ct": str(today_ct),
+        "per_bot": per_bot,
+        "per_strategy": per_strategy,
+        "trade_count": len(today_rows),
+        "ts": time.time(),
+    })
+
+
 @app.route("/api/working-orders")
 def api_working_orders():
     """B74: unified view of every active position with its stop/target

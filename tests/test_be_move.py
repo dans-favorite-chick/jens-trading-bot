@@ -57,7 +57,7 @@ class TestBEMoveWritesOIF:
         from bridge.oif_writer import write_modify_stop
         paths = write_modify_stop(
             direction="LONG",
-            new_stop_price=100.0,
+            new_stop_price=21000.0,  # B80: realistic MNQ price (guard rejects <10000)
             n_contracts=1,
             trade_id="rider_be_test",
             account="Sim101",
