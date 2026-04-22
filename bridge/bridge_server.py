@@ -387,9 +387,13 @@ class BridgeServer:
                        + (f"/{sub_strategy}" if sub_strategy else "")
                        + f" reason={reason}")
 
+        # B55: PLACE_PROTECTION is a post-fill OCO attachment (stop+target only).
+        # The action carries "direction" = LONG/SHORT of the filled position;
+        # stop/target exits go the opposite way.
+        direction = data.get("direction")
         paths = write_oif(action, qty, stop_price, target_price, trade_id=trade_id,
                           order_type=order_type, limit_price=limit_price,
-                          account=account)
+                          account=account, direction=direction)
 
         if not paths and action not in ("CANCEL_ALL", "CANCELALLORDERS"):
             trade_log.error(f"[OIF FAIL:{trade_id}] write_oif returned 0 files for {action}!")

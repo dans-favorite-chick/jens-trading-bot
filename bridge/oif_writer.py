@@ -418,10 +418,58 @@ def verify_nt8_position(account: str, expected_direction: str, expected_qty: int
 # Legacy API (retained for existing callers — now uses STOPMARKET)
 # ═══════════════════════════════════════════════════════════════════════
 
+def write_protection_oco(direction: str, qty: int, stop_price: float,
+                         target_price: float, trade_id: str,
+                         account: str) -> list[str]:
+    """
+    B55: post-fill OCO protection. direction is the filled position side
+    (LONG or SHORT); stop + target always go the OPPOSITE direction.
+    Uses the same OCO_id on both legs so one fills cancels the other.
+    """
+    direction = direction.upper()
+    if direction not in ("LONG", "SHORT"):
+        logger.error(f"[PROTECT:{trade_id}] invalid direction: {direction}")
+        return []
+    exit_side = "SELL" if direction == "LONG" else "BUY"
+    oco_id = f"OCO_{trade_id.split('_')[0]}"  # strip "_protect" suffix
+
+    stop_line = _build_stop_line(exit_side, qty, stop_price,
+                                 oco_id=oco_id, account=account)
+    target_line = _build_target_line(exit_side, qty, target_price,
+                                     oco_id=oco_id, account=account)
+
+    staged = []
+    try:
+        staged.append(_stage_oif(stop_line, trade_id, suffix="stop"))
+        staged.append(_stage_oif(target_line, trade_id, suffix="target"))
+    except OSError as e:
+        logger.error(f"[PROTECT:{trade_id}] stage failed: {e}")
+        return []
+
+    written = _commit_staged(staged, trade_id)
+    logger.info(f"[PROTECT:{trade_id}] OCO committed: stop={stop_price:.2f} "
+                f"target={target_price:.2f} oco={oco_id}")
+
+    # B55 bulletproof: verify NT8 consumed both files within 1.5s.
+    # If still stuck → NT8 rejected (likely max-pos-qty or pricing). Caller
+    # retries. If all retries fail, caller flattens to avoid unprotected
+    # open position.
+    stuck = _verify_consumed(written, trade_id, timeout_s=1.5)
+    if stuck:
+        logger.warning(f"[PROTECT:{trade_id}] {len(stuck)} leg(s) not "
+                       f"consumed — cleaning stuck files")
+        for p in stuck:
+            try: os.remove(p)
+            except OSError: pass
+        return []  # Empty = caller treats as failure
+    return written
+
+
 def write_oif(action: str, qty: int = 1, stop_price: float = None,
               target_price: float = None, trade_id: str = "",
               order_type: str = "MARKET", limit_price: float = 0.0,
-              account: str | None = None) -> list[str]:
+              account: str | None = None,
+              direction: str | None = None) -> list[str]:
     """
     Legacy entrypoint. For new code prefer write_bracket_order().
 
@@ -460,7 +508,20 @@ def write_oif(action: str, qty: int = 1, stop_price: float = None,
     if action in _PLACE_EXIT_ACTIONS:
         _require_account(account, f"write_oif action={action}")
 
-    # Bracket path
+    # B55: PLACE_PROTECTION — post-fill OCO stop+target attachment.
+    if action == "PLACE_PROTECTION":
+        if not direction or not stop_price or not target_price:
+            logger.error(f"[PROTECT:{trade_id}] missing direction/stop/target")
+            return []
+        return write_protection_oco(
+            direction=direction, qty=qty,
+            stop_price=stop_price, target_price=target_price,
+            trade_id=trade_id, account=account or ACCOUNT,
+        )
+
+    # Bracket path (legacy callers that still pass stop+target with entry —
+    # B55 migrated the primary caller, base_bot, to split submit, but the
+    # legacy bracket path remains for scripts/tests.)
     if action in ("ENTER_LONG", "BUY") and stop_price and target_price:
         return write_bracket_order(
             "LONG", qty, order_type, limit_price or 0.0,

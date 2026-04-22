@@ -2449,14 +2449,21 @@ class BaseBot:
                 logger.debug(f"[PREENTRY:{tid}] reconcile check failed "
                              f"(non-blocking): {e}")
 
+        # B55: split bracket submit — ENTRY first, stop+target AFTER fill.
+        # Prior behavior submitted entry + OCO stop/target in one burst; NT8
+        # rejected protection legs with "Exceeds account's maximum position
+        # quantity" because it counts pending sides before the entry fills.
+        # Now we submit entry alone, wait for fill confirmation, then attach
+        # OCO protection to the filled position.
         try:
             await ws.send(json.dumps({
                 "type": "trade",
                 "trade_id": tid,
                 "action": action,
                 "qty": contracts,
-                "stop_price": round(stop_price, 2),
-                "target_price": round(target_price, 2),
+                # stop/target DELIBERATELY OMITTED — sent post-fill below
+                "stop_price": None,
+                "target_price": None,
                 "reason": signal.reason,
                 "order_type": signal_entry_type,
                 "limit_price": limit_price,
@@ -2585,6 +2592,68 @@ class BaseBot:
                             f"@ {pos_check['observed_price']}")
             except Exception as e:
                 logger.warning(f"[NT8_VERIFY:{tid}] verify failed (non-blocking): {e}")
+
+        # B55: Attach OCO stop + target NOW (post-fill, post-verify).
+        # Retry up to 3 times with 1s backoff. If all attempts fail —
+        # UNPROTECTED POSITION is in NT8 — FLATTEN immediately to prevent
+        # unbounded loss, then loud-alert.
+        if stop_price and target_price:
+            from bridge.oif_writer import write_protection_oco, write_oif
+            protection_ok = False
+            for attempt in range(1, 4):
+                try:
+                    paths = write_protection_oco(
+                        direction=signal.direction,
+                        qty=contracts,
+                        stop_price=round(stop_price, 2),
+                        target_price=round(target_price, 2),
+                        trade_id=f"{tid}_protect{attempt}",
+                        account=_account,
+                    )
+                    if paths:
+                        logger.info(
+                            f"[PROTECT:{tid}] OCO attached on attempt #{attempt} "
+                            f"stop={stop_price:.2f} target={target_price:.2f}"
+                        )
+                        protection_ok = True
+                        break
+                    logger.warning(
+                        f"[PROTECT:{tid}] attempt #{attempt} — NT8 did not "
+                        f"consume OCO legs, retrying in 1s"
+                    )
+                    await asyncio.sleep(1.0)
+                except Exception as e:
+                    logger.error(f"[PROTECT:{tid}] attempt #{attempt} error: {e}")
+                    await asyncio.sleep(1.0)
+
+            if not protection_ok:
+                # CRITICAL: unprotected position in NT8. Flatten before it
+                # bleeds. Send a CLOSEPOSITION + Telegram alert.
+                logger.critical(
+                    f"[PROTECT:{tid}] ALL 3 RETRIES FAILED — flattening "
+                    f"unprotected {signal.direction} position on {_account}"
+                )
+                try:
+                    write_oif(
+                        "CLOSEPOSITION", qty=contracts,
+                        trade_id=f"{tid}_emergency_flatten",
+                        account=_account,
+                    )
+                except Exception as e:
+                    logger.critical(f"[PROTECT:{tid}] EMERGENCY FLATTEN FAILED: {e}")
+                try:
+                    from core.telegram_notifier import send_sync
+                    send_sync(
+                        f"🚨 [UNPROTECTED] {signal.strategy} → {_account}: "
+                        f"OCO failed 3× post-fill. FLATTENING position "
+                        f"({signal.direction} {contracts}@{pos_check.get('observed_price') if 'pos_check' in dir() else '?'}). "
+                        f"Check NT8.",
+                        dedup_key=f"unprotected:{signal.strategy}:{_account}",
+                    )
+                except Exception:
+                    pass
+                self.last_rejection = f"Unprotected position flattened: {_account}"
+                return
 
         # NOW open position locally (after fill confirmation)
         # LIMIT / STOPMARKET entries fill at limit_price; MARKET fills near tick price.
