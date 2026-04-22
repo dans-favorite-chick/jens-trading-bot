@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import deque
 from dataclasses import dataclass
 from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
@@ -58,8 +59,10 @@ _RTH_OPEN = dtime(8, 30)
 _RTH_5M_COMPLETE = dtime(8, 35)
 _RTH_15M_COMPLETE = dtime(8, 45)
 _RTH_60M_COMPLETE = dtime(9, 30)
+_RTH_CLOSE = dtime(15, 0)
 _VALUE_AREA_FRACTION = 0.70
 _MIN_BARS_FOR_VA = 10
+_AVG_1MIN_VOLUME_WINDOW = 20
 
 
 @dataclass
@@ -126,6 +129,19 @@ class SessionLevelsAggregator:
 
         # ORB break
         self.orb_first_break_direction: Optional[str] = None
+
+        # Latest completed RTH 1m bar (drives opening_session sub-strategies).
+        self.rth_1min_open: Optional[float] = None
+        self.rth_1min_high: Optional[float] = None
+        self.rth_1min_low: Optional[float] = None
+        self.rth_1min_close: Optional[float] = None
+        self.rth_1min_volume: Optional[float] = None
+
+        # Rolling 20-bar average of RTH 1m volumes.
+        self._rth_1min_volumes: deque = deque(maxlen=_AVG_1MIN_VOLUME_WINDOW)
+
+        # Latest completed RTH 5m close (distinct from first-5m rth_5min_close).
+        self.rth_5min_close_last: Optional[float] = None
 
     # ═══════════════════════════════════════════════════════════════
     # Prior-day computation
@@ -299,6 +315,8 @@ class SessionLevelsAggregator:
 
         self._update_premarket(now_ct, bar_1m)
         self._update_rth_open(now_ct, bar_1m)
+        self._update_rth_1min_rolling(now_ct, bar_1m)
+        self._update_rth_5min_rolling(now_ct, bar_5m)
         self._update_rth_windows(now_ct, bar_1m, bar_5m)
         self._update_opening_type_at_835(now_ct)
         self._update_auction_out_at_845(now_ct, bar_1m)
@@ -335,6 +353,43 @@ class SessionLevelsAggregator:
             return
         if now_ct.time() >= _RTH_OPEN and now_ct.time() < dtime(14, 30):
             self.rth_open_price = bar_1m.open
+
+    def _update_rth_1min_rolling(self, now_ct: datetime, bar_1m: Any) -> None:
+        """Track latest completed 1m bar + rolling 20-bar vol avg during RTH."""
+        if bar_1m is None:
+            return
+        t = now_ct.time()
+        if t < _RTH_OPEN or t > _RTH_CLOSE:
+            return
+        try:
+            self.rth_1min_open = float(bar_1m.open)
+            self.rth_1min_high = float(bar_1m.high)
+            self.rth_1min_low = float(bar_1m.low)
+            self.rth_1min_close = float(bar_1m.close)
+            v = float(getattr(bar_1m, "volume", 0) or 0)
+            self.rth_1min_volume = v
+            self._rth_1min_volumes.append(v)
+        except (TypeError, ValueError):
+            pass
+
+    def _update_rth_5min_rolling(self, now_ct: datetime, bar_5m: Any) -> None:
+        """Track most-recent completed 5m close during RTH (for ORB)."""
+        if bar_5m is None:
+            return
+        t = now_ct.time()
+        if t < _RTH_OPEN or t > _RTH_CLOSE:
+            return
+        try:
+            self.rth_5min_close_last = float(bar_5m.close)
+        except (TypeError, ValueError):
+            pass
+
+    @property
+    def avg_1min_volume(self) -> Optional[float]:
+        """Rolling 20-bar avg RTH 1m volume; None until window is full."""
+        if len(self._rth_1min_volumes) < _AVG_1MIN_VOLUME_WINDOW:
+            return None
+        return sum(self._rth_1min_volumes) / len(self._rth_1min_volumes)
 
     def _update_rth_windows(
         self, now_ct: datetime, bar_1m: Any, bar_5m: Any,
@@ -457,4 +512,13 @@ class SessionLevelsAggregator:
             # Volume context (enables OPEN_DRIVE classifier downstream)
             "avg_5min_volume": self._avg_5min_volume,
             "rth_5min_volume": self._rth_5min_volume,
+            # Latest RTH 1m OHLCV (opening_session sub-strategies read these)
+            "rth_1min_open": self.rth_1min_open,
+            "rth_1min_high": self.rth_1min_high,
+            "rth_1min_low": self.rth_1min_low,
+            "rth_1min_close": self.rth_1min_close,
+            "rth_1min_volume": self.rth_1min_volume,
+            "avg_1min_volume": self.avg_1min_volume,
+            # Latest RTH 5m close (ORB uses this vs first-5m rth_5min_close)
+            "rth_5min_close_last": self.rth_5min_close_last,
         }
