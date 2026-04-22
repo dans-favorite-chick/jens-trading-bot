@@ -94,7 +94,7 @@ class TestLegacyPathAtomic(unittest.TestCase):
     def test_cancel_all_atomic(self):
         with _OIFIsolator() as tmp:
             from bridge.oif_writer import write_oif
-            paths = write_oif("CANCEL_ALL")
+            paths = write_oif("CANCEL_ALL", account="SimBias Momentum")  # B58
             txt, tmp_files, _ = _dir_state(tmp)
             self.assertEqual(len(txt), 1)
             self.assertEqual(len(tmp_files), 0)

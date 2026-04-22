@@ -128,15 +128,15 @@ def cancel_all_orders_line(account: str = None) -> str:
         ValueError: if `account` resolves to empty string.
     """
     if account is None:
-        # 4C: fallback retained here (unlike PLACE paths) because cancel-all
-        # is an emergency scope — we still want a valid account, just log
-        # loudly so missed routing surfaces in the logs.
-        logger.warning(
-            "[OIF] cancel_all_orders_line called without account — "
-            "falling back to module-level ACCOUNT=%s. Caller should pass "
-            "an explicit account.", ACCOUNT,
+        # B58: NO fallback. Pre-B58 this silently defaulted to module-level
+        # Sim101, which caused a CANCEL_ALL from one position's exit flow
+        # to cancel unrelated orders on Sim101 (including prod_bot's
+        # pending orders). Every caller must pass account explicitly.
+        raise ValueError(
+            "cancel_all_orders_line requires an explicit account. "
+            "Pre-B58 code silently defaulted to Sim101 and cancelled "
+            "orders on the wrong account. Pass account=<SimXxx>."
         )
-        account = ACCOUNT
     if not account or not str(account).strip():
         raise ValueError(
             "cancel_all_orders_line requires a non-empty account. "

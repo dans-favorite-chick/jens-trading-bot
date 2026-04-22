@@ -134,7 +134,7 @@ class TestB2CancelAllSemicolonCount(unittest.TestCase):
             _orig = oif.OIF_INCOMING
             oif.OIF_INCOMING = tmpdir
             try:
-                paths = oif.write_oif("CANCEL_ALL")
+                paths = oif.write_oif("CANCEL_ALL", account="SimBias Momentum")
                 self.assertEqual(len(paths), 1)
                 content = open(paths[0]).read().rstrip("\n")
                 self.assertEqual(content.count(";"), 12)  # B44
@@ -172,7 +172,11 @@ class TestB4CancelAllAccountScoping(unittest.TestCase):
     def test_cancel_all_orders_line_default_uses_configured_account(self):
         from bridge.oif_writer import cancel_all_orders_line
         from config.settings import ACCOUNT
-        line = cancel_all_orders_line()  # No account → use settings default
+        # B58: default Sim101 fallback removed — must pass explicit account.
+        import pytest
+        with pytest.raises(ValueError):
+            cancel_all_orders_line()
+        return  # reached intended assertion
         self.assertIn(ACCOUNT, line)
 
     def test_cancel_all_action_never_emits_no_args_form(self):
@@ -183,7 +187,7 @@ class TestB4CancelAllAccountScoping(unittest.TestCase):
             _orig = oif.OIF_INCOMING
             oif.OIF_INCOMING = tmpdir
             try:
-                paths = oif.write_oif("CANCEL_ALL")
+                paths = oif.write_oif("CANCEL_ALL", account="SimBias Momentum")
                 content = open(paths[0]).read().rstrip("\n")
                 # Must have non-empty first field after CANCELALLORDERS
                 fields = content.split(";")
@@ -277,7 +281,7 @@ class TestRegressionNoOldFormats(unittest.TestCase):
             _orig = oif.OIF_INCOMING
             oif.OIF_INCOMING = tmpdir
             try:
-                paths = oif.write_oif("CANCEL_ALL")
+                paths = oif.write_oif("CANCEL_ALL", account="SimBias Momentum")
                 content = open(paths[0]).read().rstrip("\n")
                 self.assertNotEqual(
                     content.count(";"), 15,

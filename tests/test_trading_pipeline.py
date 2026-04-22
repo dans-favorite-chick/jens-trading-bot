@@ -66,7 +66,7 @@ class TestZeroContractRejection:
     def test_oif_writer_allows_zero_qty_for_cancel(self):
         from bridge.oif_writer import write_oif
         # CANCEL_ALL with qty=0 should be allowed
-        paths = write_oif("CANCEL_ALL", qty=0, trade_id="test_cancel")
+        paths = write_oif("CANCEL_ALL", qty=0, trade_id="test_cancel", account="Sim101")
         # May or may not write depending on folder access, but should not error
         assert isinstance(paths, list)
 

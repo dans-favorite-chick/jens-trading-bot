@@ -2800,11 +2800,15 @@ class BaseBot:
                     f"dir={pos.direction} contracts={pos.contracts} "
                     f"mom_score={mom_score}")
 
-        # STEP 1: Cancel existing OCO brackets in NT8
+        # STEP 1: Cancel existing OCO brackets in NT8 — scoped to THIS
+        # position's account ONLY (B58). Pre-B58 this sent CANCEL_ALL
+        # with no account → bridge fell back to module-level Sim101,
+        # cancelling unrelated orders on the default account.
         try:
             await ws.send(json.dumps({
                 "type": "trade", "trade_id": tid,
                 "action": "CANCEL_ALL", "qty": 0,
+                "account": pos.account,  # B58: scope to this pos's account
                 "reason": "scale_out_cancel_oco",
             }))
             await asyncio.sleep(0.1)  # Brief pause before sending new orders
@@ -2916,12 +2920,15 @@ class BaseBot:
         self.status = "EXIT_PENDING"
         logger.info(f"[EXIT_PENDING:{tid}] Sending exit for {pos.direction} @ {price:.2f}, reason={reason}")
 
-        # STEP 1: Send CANCEL_ALL + EXIT to NT8 BEFORE touching Python state
+        # STEP 1: Send CANCEL_ALL + EXIT to NT8 BEFORE touching Python state.
+        # B58: both msgs now carry pos.account so bridge doesn't fall back
+        # to module-level Sim101 and accidentally cancel unrelated orders.
         exit_sent = False
         try:
             await ws.send(json.dumps({
                 "type": "trade", "trade_id": tid,
                 "action": "CANCEL_ALL", "qty": 0,
+                "account": pos.account,
                 "reason": "cancel_oco_before_exit",
             }))
         except Exception:
@@ -2931,6 +2938,7 @@ class BaseBot:
             await ws.send(json.dumps({
                 "type": "trade", "trade_id": tid,
                 "action": "EXIT", "qty": pos.contracts,
+                "account": pos.account,
                 "reason": reason,
             }))
             exit_sent = True
