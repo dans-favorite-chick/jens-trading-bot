@@ -24,6 +24,12 @@ logger = logging.getLogger("ProdBot")
 class ProdBot(BaseBot):
     bot_name = "prod"
     only_validated = True  # Only runs validated strategies
+    # B57 2026-04-22: ProdBot routes EVERY signal to Sim101 (single-account
+    # mode). This is the first go-live candidate bot — keeping it on one
+    # account makes P&L tracking clean and prevents collisions with
+    # sim_bot's 16 per-strategy accounts. To change, set FORCE_ACCOUNT=None
+    # which falls back to config/account_routing.py map resolution.
+    FORCE_ACCOUNT = "Sim101"
 
 
 def main():

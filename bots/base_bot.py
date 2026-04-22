@@ -2416,9 +2416,18 @@ class BaseBot:
 
         # Phase 4C: resolve NT8 account for this signal so the OIF writer
         # routes fills to the per-strategy sim account instead of Sim101.
+        # B57: if the bot class defines FORCE_ACCOUNT, override routing —
+        # prod_bot uses this to pin everything to Sim101 (single-account
+        # P&L tracking for the first-go-live candidate).
         from config.account_routing import get_account_for_signal
         _sub_strategy = (getattr(signal, "metadata", {}) or {}).get("sub_strategy")
-        _account = get_account_for_signal(signal.strategy, _sub_strategy)
+        _force = getattr(self, "FORCE_ACCOUNT", None)
+        if _force:
+            _account = _force
+            logger.debug(f"[ROUTING] {self.bot_name}: FORCE_ACCOUNT -> {_account} "
+                         f"(strategy={signal.strategy}, sub={_sub_strategy})")
+        else:
+            _account = get_account_for_signal(signal.strategy, _sub_strategy)
 
         # B50: pre-entry position-reconcile guard (inverse phantom).
         # If NT8 already reports a position on this account (e.g. Python
