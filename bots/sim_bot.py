@@ -511,16 +511,10 @@ class SimBot(BaseBot):
             pos = self.positions.get_position(trade_id)
             if pos is None:
                 return
-            try:
-                await ws.send(json.dumps({
-                    "type": "trade", "trade_id": trade_id,
-                    "action": "CANCEL_ALL", "qty": 0,
-                    "reason": "cancel_oco_before_flatten",
-                    "account": pos.account,
-                    "sub_strategy": pos.sub_strategy,
-                }))
-            except Exception:
-                pass
+            # B75: skip pre-exit CANCEL_ALL (NT8 ATI ignores account
+            # scoping on CANCELALLORDERS → wipes OCOs on every connected
+            # account). EXIT MARKET flattens the position; NT8 OCO
+            # auto-cancels the orphan stop+target legs.
             try:
                 await ws.send(json.dumps({
                     "type": "trade", "trade_id": trade_id,

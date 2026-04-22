@@ -2958,20 +2958,19 @@ class BaseBot:
                     f"dir={pos.direction} contracts={pos.contracts} "
                     f"mom_score={mom_score}")
 
-        # STEP 1: Cancel existing OCO brackets in NT8 — scoped to THIS
-        # position's account ONLY (B58). Pre-B58 this sent CANCEL_ALL
-        # with no account → bridge fell back to module-level Sim101,
-        # cancelling unrelated orders on the default account.
-        try:
-            await ws.send(json.dumps({
-                "type": "trade", "trade_id": tid,
-                "action": "CANCEL_ALL", "qty": 0,
-                "account": pos.account,  # B58: scope to this pos's account
-                "reason": "scale_out_cancel_oco",
-            }))
-            await asyncio.sleep(0.1)  # Brief pause before sending new orders
-        except Exception as e:
-            logger.warning(f"[SCALE_OUT:{tid}] CANCEL_ALL failed (non-blocking): {e}")
+        # STEP 1: SKIP pre-exit CANCEL_ALL (B75).
+        # Pre-B75 we sent account-scoped CANCELALLORDERS here to clear
+        # the OCO bracket before submitting new orders. Problem: NT8 ATI
+        # IGNORES the account field on CANCELALLORDERS and nukes every
+        # pending order on every connected account, wiping sim_bot's
+        # OCO protection on unrelated positions (root cause of the
+        # 2026-04-22 orphan-long incidents on SimSpring Setup + SimNoise
+        # Area). Solution: don't explicitly cancel. When we send the
+        # partial-exit MARKET order below, position contracts decrease
+        # from N to N-n_exit. The existing OCO stop/target remain but
+        # will now target a smaller position; NT8 automatically adjusts
+        # the OCO qty to match the remaining position size. If qty
+        # reaches zero, NT8 auto-cancels the OCO.
 
         # STEP 2: Write partial exit OIF (exit n_exit contracts at market)
         try:
@@ -3078,20 +3077,14 @@ class BaseBot:
         self.status = "EXIT_PENDING"
         logger.info(f"[EXIT_PENDING:{tid}] Sending exit for {pos.direction} @ {price:.2f}, reason={reason}")
 
-        # STEP 1: Send CANCEL_ALL + EXIT to NT8 BEFORE touching Python state.
-        # B58: both msgs now carry pos.account so bridge doesn't fall back
-        # to module-level Sim101 and accidentally cancel unrelated orders.
+        # STEP 1: B75 — SKIP pre-exit CANCELALLORDERS. Rely on NT8 OCO
+        # auto-cancel: when the EXIT MARKET order fills, position goes
+        # flat, and NT8 automatically cancels the orphaned OCO stop +
+        # target because their OCO group detects position closure.
+        # Pre-B75 behavior (CANCELALLORDERS before EXIT) wiped OCOs on
+        # every connected account because NT8 ATI ignores the account
+        # field on CANCELALLORDERS. Send EXIT directly — OCO cleans up.
         exit_sent = False
-        try:
-            await ws.send(json.dumps({
-                "type": "trade", "trade_id": tid,
-                "action": "CANCEL_ALL", "qty": 0,
-                "account": pos.account,
-                "reason": "cancel_oco_before_exit",
-            }))
-        except Exception:
-            pass  # Best effort on bracket cancel
-
         try:
             await ws.send(json.dumps({
                 "type": "trade", "trade_id": tid,

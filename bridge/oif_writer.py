@@ -152,6 +152,21 @@ def cancel_all_orders_line(account: str = None) -> str:
     Raises:
         ValueError: if `account` resolves to empty string.
     """
+    # B75 DEPRECATION: CANCELALLORDERS is fundamentally unsafe in Phoenix.
+    # NT8 ATI ignores the account field and cancels orders on EVERY
+    # connected account regardless of scoping. We preserve this function
+    # for NT8's own consumption patterns but flag every call at ERROR
+    # so any residual use surfaces loudly. Normal Phoenix exit flow no
+    # longer calls this; OCO auto-cancel handles bracket cleanup when
+    # EXIT MARKET flattens the position.
+    logger.error(
+        "[CANCELALLORDERS_DEPRECATED] Caller '%s' is invoking "
+        "cancel_all_orders_line — NT8 ATI WILL cross-cancel this to "
+        "every connected account. Switch to per-order CANCEL or drop "
+        "the pre-exit cancel and rely on OCO auto-cancel. (B75)",
+        "cancel_all_orders_line",
+    )
+
     if account is None:
         # B58: NO fallback. Pre-B58 this silently defaulted to module-level
         # Sim101, which caused a CANCEL_ALL from one position's exit flow
@@ -686,12 +701,20 @@ def write_oif(action: str, qty: int = 1, stop_price: float = None,
         if stop_price:
             cmds.append(_build_stop_line("BUY", qty, stop_price, account=account) + "\n")
     elif action == "CANCEL_ALL":
-        # B2 + B4 fix: 13-semi account-scoped CANCELALLORDERS (was 15-semi
-        # CANCELALLORDERS;{ACCOUNT};{INSTRUMENT};;;;;;;;;;;; which both
-        # exceeded the spec and cross-accounted when parsed).
-        # 4C: account optional here — cancel_all_orders_line has its own
-        # WARNING-logged fallback to module-level ACCOUNT if omitted.
-        cmds.append(cancel_all_orders_line(account=account) + "\n")
+        # B75 HARD BLOCK: refuse to emit CANCELALLORDERS from any bot path.
+        # NT8 ATI cross-cancels across every connected account regardless
+        # of the account field. That's how the 2026-04-22 orphan-long
+        # incidents happened (prod_bot Sim101 exit nuked sim_bot OCOs).
+        # Callers that legitimately need per-order cancel should use the
+        # CANCEL action with a captured NT8 order_id (B75 Option-A).
+        logger.error(
+            "[CANCEL_ALL_BLOCKED:%s] write_oif CANCEL_ALL refused (B75). "
+            "NT8 ATI cross-cancels CANCELALLORDERS across every connected "
+            "account. Use OCO auto-cancel (send EXIT MARKET) or per-order "
+            "CANCEL by captured NT8 order_id.",
+            trade_id or "N/A",
+        )
+        return []  # No OIF written — caller proceeds without explicit cancel
     elif action == "CANCEL":
         # B5: single-order cancel. trade_id doubles as ORDER ID here.
         if not trade_id:

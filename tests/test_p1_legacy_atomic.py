@@ -92,11 +92,14 @@ class TestLegacyPathAtomic(unittest.TestCase):
             self.assertIn("21950.00", content)
 
     def test_cancel_all_atomic(self):
+        """B75: write_oif(CANCEL_ALL) is blocked. No file is written.
+        OCO auto-cancel handles bracket cleanup when EXIT fires."""
         with _OIFIsolator() as tmp:
             from bridge.oif_writer import write_oif
-            paths = write_oif("CANCEL_ALL", account="SimBias Momentum")  # B58
+            paths = write_oif("CANCEL_ALL", account="SimBias Momentum")
             txt, tmp_files, _ = _dir_state(tmp)
-            self.assertEqual(len(txt), 1)
+            self.assertEqual(paths, [])
+            self.assertEqual(len(txt), 0)
             self.assertEqual(len(tmp_files), 0)
 
 

@@ -127,7 +127,15 @@ class TestB2CancelAllSemicolonCount(unittest.TestCase):
         self.assertTrue(line.startswith("CANCELALLORDERS;"))
 
     def test_cancel_all_action_path_uses_12_semi_form(self):
-        """write_oif(CANCEL_ALL) writes a 12-semi line to disk."""
+        """write_oif(CANCEL_ALL) is BLOCKED in B75. Verify builder line form."""
+        # B75: write_oif("CANCEL_ALL") now refuses and returns [] because
+        # NT8 ATI cross-cancels across every account. We validate the
+        # line-builder form (kept for audit only) directly.
+        from bridge.oif_writer import cancel_all_orders_line
+        line = cancel_all_orders_line(account="SimBias Momentum")
+        self.assertEqual(line.count(";"), 12)  # B44
+        self.assertNotIn("MNQM6", line)
+        # And confirm write_oif path is blocked (returns [])
         tmpdir = tempfile.mkdtemp()
         try:
             import bridge.oif_writer as oif
@@ -135,11 +143,7 @@ class TestB2CancelAllSemicolonCount(unittest.TestCase):
             oif.OIF_INCOMING = tmpdir
             try:
                 paths = oif.write_oif("CANCEL_ALL", account="SimBias Momentum")
-                self.assertEqual(len(paths), 1)
-                content = open(paths[0]).read().rstrip("\n")
-                self.assertEqual(content.count(";"), 12)  # B44
-                # Old broken form had INSTRUMENT field populated
-                self.assertNotIn("MNQM6", content)
+                self.assertEqual(paths, [])
             finally:
                 oif.OIF_INCOMING = _orig
         finally:
@@ -188,9 +192,12 @@ class TestB4CancelAllAccountScoping(unittest.TestCase):
             oif.OIF_INCOMING = tmpdir
             try:
                 paths = oif.write_oif("CANCEL_ALL", account="SimBias Momentum")
-                content = open(paths[0]).read().rstrip("\n")
-                # Must have non-empty first field after CANCELALLORDERS
-                fields = content.split(";")
+                # B75: write_oif CANCEL_ALL blocked — returns [].
+                self.assertEqual(paths, [])
+                # Verify line-builder still enforces account non-empty (B58).
+                from bridge.oif_writer import cancel_all_orders_line
+                line = cancel_all_orders_line(account="SimBias Momentum")
+                fields = line.split(";")
                 self.assertEqual(fields[0], "CANCELALLORDERS")
                 self.assertNotEqual(fields[1], "", "Account field must NEVER be empty")
             finally:
@@ -274,7 +281,15 @@ class TestRegressionNoOldFormats(unittest.TestCase):
             shutil.rmtree(tmpdir, ignore_errors=True)
 
     def test_no_15_semi_cancelall_anywhere(self):
-        """Grep the generated CANCELALLORDERS line; if it ever emits 15 semis again, fail."""
+        """Grep the line-builder; if it ever emits 15 semis again, fail.
+        B75: write_oif path is blocked; we test the builder line directly."""
+        from bridge.oif_writer import cancel_all_orders_line
+        line = cancel_all_orders_line(account="SimBias Momentum")
+        self.assertNotEqual(
+            line.count(";"), 15,
+            "CANCELALLORDERS regressed to 15-semi pre-B2 form: " + line,
+        )
+        # Belt: verify write_oif path does NOT write any 15-semi file either
         tmpdir = tempfile.mkdtemp()
         try:
             import bridge.oif_writer as oif
@@ -282,11 +297,7 @@ class TestRegressionNoOldFormats(unittest.TestCase):
             oif.OIF_INCOMING = tmpdir
             try:
                 paths = oif.write_oif("CANCEL_ALL", account="SimBias Momentum")
-                content = open(paths[0]).read().rstrip("\n")
-                self.assertNotEqual(
-                    content.count(";"), 15,
-                    "CANCEL_ALL regressed to 15-semi pre-B2 form: " + content,
-                )
+                self.assertEqual(paths, [])  # B75 block
             finally:
                 oif.OIF_INCOMING = _orig
         finally:
