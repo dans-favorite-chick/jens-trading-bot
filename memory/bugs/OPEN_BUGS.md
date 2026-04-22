@@ -1,349 +1,200 @@
-# Phoenix Bot — Open Bugs
+# Phoenix Bot — Bug Tracker
 
-Tracking file for bugs discovered but not yet scheduled for fix.
-Newest first. B15 backlog (6 pre-existing test failures) tracked
-separately via the pytest suite itself.
+_Newest-first ledger. OPEN = needs work. Everything else = historical audit trail._
 
----
-
-## B40 — NT8 ATI not configured for multi-account routing (HOTFIXED)
-**Status**: HOTFIXED 2026-04-21 via `MULTI_ACCOUNT_ROUTING_ENABLED=False`.
-Proper fix still required.
-
-**Root cause of B39 (phantom fills):** Python routes OIFs to 16 dedicated
-Sim sub-accounts (`SimSpring Setup`, `SimBias Momentum`, etc.) — all
-visible and green in NT8's Accounts panel — but NT8's ATI executor
-apparently only auto-fills orders routed to **`Sim101`**. Orders targeted
-at named sub-accounts were silently dropped (no fill confirmation written
-to `outgoing/`), which cascaded into B39.
-
-**Evidence**:
-- `outgoing/` contains ~100 `Sim101_T05_STPB_*.txt` fill files up to 16:24 CT
-- Zero fill files for any `SimSpring Setup / SimBias Momentum / ...` account
-- 16:24 is approximately when sim_bot started emitting OIFs with named-account
-  routing (post-DailyFlattener 16:00 transition)
-- OIF file format is correct NT8-ATI (`PLACE;<account>;MNQM6;BUY;...`)
-- All 16 accounts exist in NT8 (Accounts tab screenshot confirms green "My
-  Coinbase" connection)
-
-**Hotfix applied:**
-- Added `MULTI_ACCOUNT_ROUTING_ENABLED` boolean to `config/settings.py`
-  (default `False`).
-- `config/account_routing.get_account_for_signal()` short-circuits to
-  `Sim101` when flag is off.
-- Per-strategy risk isolation is unaffected — that's `StrategyRiskRegistry`
-  (Python-side). Only NT8-side P&L split per account is lost.
-
-**Proper fix** (required before multi-account execution resumes):
-1. Investigate NT8 ATI configuration. Options:
-   - `Tools → Options → ATI` — verify "Enable ATI Server" + order routing
-   - Possibly need to start ATI for each connection / each account
-   - NT8 docs on "Order Instruction File" with non-default account routing
-2. Integration probe: write a test OIF directly to a named account and
-   verify fill appears in `outgoing/` with matching account prefix.
-3. Flip `MULTI_ACCOUNT_ROUTING_ENABLED=True` once named accounts fill.
-4. Add watchdog/startup probe that writes a zero-qty test order per
-   account and asserts fill-ACK before the bot takes real signals.
+_Last comprehensive audit: 2026-04-21 late evening. End-to-end validated with
+`tools/test_all_accounts.py` → **17/17 NT8 sim accounts PASS** (entry fill,
+flatten, FLAT verification)._
 
 ---
 
-## B39 — Silent phantom-fill divergence in sim_bot (HIGH PRIORITY)
-**Status**: OPEN
-**Discovered**: 2026-04-21 evening, first sim_bot run after Phase C flip
-**Symptom**: Python's PositionManager shows `active_positions=1` while NT8
-shows no active trade on the routed Sim account.
+## 🔴 OPEN
 
-**Root cause**: When `write_bracket_order` fires and the 5s fill-wait expires
-without a confirmation file appearing in `outgoing/`, the bot logs:
-```
-[OIF:<id>] No fill confirmation after 5.0s
-[<id>] No fill file (sim mode) — assuming filled
-[OPEN:<id>] LONG 1x @ <price> ... account=<Sim*>
-```
-…and *silently* opens the position in internal state anyway. This creates
-divergence: Python thinks it's in a trade (blocks other strategies via
-`is_flat_for`, bleeds imaginary P&L, eventually trips halts), while NT8 has
-no position so no actual fill/exit ever occurs.
+_No open bugs as of 2026-04-21 20:30 CDT._
 
-**Contributing factors suspected (not confirmed):**
-1. One or more of the 16 dedicated Sim accounts (`SimSpring Setup`, etc.)
-   may not exist in NT8 yet — orders route to nonexistent account → no fill
-2. After-hours MNQ liquidity too thin for immediate sim-fill
-3. `incoming/`/`outgoing/` path config mismatch between Python and NT8
-4. NT8 TickStreamer or OIF-reader indicator not consuming orders during
-   afterhours session
+## ✅ RESOLVED — 2026-04-21 (today's fixes)
 
-**Required fix** (design):
-- When `live_trading=False` AND a fill-confirmation file is absent after
-  timeout, EITHER:
-  (a) Treat as paper-only: open Python position but tag it `paper_only=True`,
-      never route real NT8 exits to it, and emit a WARNING alert so the
-      operator knows NT8 didn't execute; OR
-  (b) Hard-fail: do NOT open internal position; log error + Telegram alert.
-- Add integration test: OIF writer + fill-reader round-trip, assert
-  divergence path either rejects or clearly marks paper-only.
-- Verify all 16 dedicated Sim account names exist in NT8 Control Center
-  before any trade fires. Add startup sanity check that queries NT8 for
-  account list via bridge and WARNs on missing accounts.
+### B47 — NT8 fill verification via outgoing/ position file
+**Resolution**: `bridge/oif_writer.verify_nt8_position()` reads
+`outgoing/{inst}_{account}_position.txt` and asserts direction+qty match
+expected. Wired into `bots/base_bot.py` entry path for sim_bot only.
+On mismatch: abort entry + Telegram alert.
+**Commit**: `2bb9ed6`. **Status**: RESOLVED.
 
-**Immediate mitigation** (already applied 2026-04-21):
-- Killed sim_bot PIDs 32584+30464 to clear phantom position from memory.
-- Operator to verify all SimXxx accounts exist in NT8 before next restart.
+### B46 — Post-submit incoming/ clearance check
+**Resolution**: `bridge/oif_writer._verify_consumed()` waits 1s after
+bracket commit for NT8 to consume the files. Still present → logs
+`[OIF_STUCK]` + Telegram alert. Catches silent NT8 rejections (wrong
+TIF, bad account, ATI off).
+**Commit**: `2bb9ed6`. **Status**: RESOLVED.
 
-**Files to touch**:
-- `bots/base_bot.py` (fill-wait fallback logic)
-- `bridge/oif_writer.py` (or wherever fill-file polling lives)
-- `core/position_manager.py` (add `paper_only` flag to Position)
-- `tests/test_4c_integration.py` (extend with divergence path)
+### B45 — OIF staging extension issues
+**Resolution**: Rev 3 reverts to direct write in `incoming/*.txt`.
+Rev 1 (`.tmp`) spewed cosmetic "Could not find file" errors; rev 2
+(`.stage` in sibling dir + `os.replace`) completely broke NT8 ATI
+consumption because cross-directory replace doesn't fire NT8's
+FileSystemWatcher. Direct write's sub-millisecond partial-write
+window is not a real race.
+**Commits**: `2bb9ed6` (rev 2), `079b3ba` (rev 3 final).
+**Status**: RESOLVED.
+
+### B44 — CANCELALLORDERS param count (14→13 fields)
+**Resolution**: `cancel_all_orders_line` trailing semicolons reduced
+from 12 to 11. NT8 ATI rejected `CANCELALLORDERS;Sim101;;;;;;;;;;;;`
+("should be 13 but is 14"). Spec: 13 fields = 12 semicolons total.
+Tests in `tools/verification_2026_04_18/test_p5b_oif_correctness.py`
+updated to assert 12-semi form.
+**Commit**: `2bb9ed6`. **Status**: RESOLVED.
+
+### B43 — Claude timeout 10s insufficient for real prompts
+**Resolution**: Session Debriefer `timeout_s=90`, Historical Learner
+`timeout_s=120`. Default 10s × 3 retries was hitting 33s ceiling and
+timing out every large-context Claude call (2500–3500 input tokens).
+Real Claude debrief first successful run: 60246ms latency.
+**Commit**: `2d8d6b0`. **Status**: RESOLVED.
+
+### B42 — load_dotenv ignored .env keys when OS env had them empty
+**Resolution**: `load_dotenv(override=True)` across 15 loaders. Host OS
+(Claude Code's OAuth shim) was setting `ANTHROPIC_API_KEY=""` at
+process level; dotenv default behavior skips any key already in
+`os.environ`. Direct probe after fix: 108 chars loaded, `DEGRADED=False`.
+Also unified GOOGLE_API_KEY vs GEMINI_API_KEY precedence across all
+call sites.
+**Commits**: `eac5ae4` (primary), `7f11aaa` (extended audit).
+**Status**: RESOLVED.
+
+### B41 — Entry orders TIF=DAY rejected by 24/7-sim connections
+**Resolution**: All OIF entry + exit + CLOSEPOSITION + PARTIAL_EXIT
+paths now use TIF=GTC. "My Coinbase" sim connection rejects DAY
+because crypto has no session concept. GTC is universally accepted
+by NT8 (Kinetick, Live broker, Coinbase). DailyFlattener at 16:00 CT
+prevents unintended overnight holds.
+**Commits**: `65cc9d6` (entry), `66a8e7a` (exit paths).
+**Status**: RESOLVED.
+
+### B40 — NT8 ATI "not configured for multi-account routing"
+**Resolution**: FALSE ROOT CAUSE. Real issue was B41 (TIF=DAY).
+Once entries used GTC, all 16 dedicated Sim accounts filled.
+Hotfix kill-switch `MULTI_ACCOUNT_ROUTING_ENABLED` was reverted;
+flag stays True by default.
+**Validated**: 17/17 accounts PASS via `tools/test_all_accounts.py`.
+**Status**: RESOLVED (misdiagnosis, no actual routing issue).
+
+### B39 — Silent phantom-fill divergence in sim_bot (HIGH)
+**Resolution**: `bots/base_bot.py` entry path now:
+1. For sim_bot specifically, fill-timeout ABORTS entry (was "assume
+   filled" → phantom Python position while NT8 had nothing).
+2. Post-fill, reads NT8 `outgoing/position.txt` to verify direction
+   + qty match (B47). Rejects + Telegram alerts on mismatch.
+3. Paper-mode prod_bot (Sim101-only) keeps legacy "assume filled"
+   for mock tracking.
+**Commit**: `2bb9ed6`. **Status**: RESOLVED.
+
+### B38 — gamma_regime missing from log_eval
+**Resolution**: First-class field in `core/history_logger.log_eval`.
+Enum `.value` flattened for JSON serialization.
+**Commit**: `341f15a` (Phases E–H sprint, S1). **Status**: RESOLVED.
+
+### B37 — 4C integration test gap
+**Resolution**: New `tests/test_4c_integration.py` — 12 tests covering
+_require_account guard, routing→OIF→disk round-trip, byte-exact account
+string survival, Sim101 fallback.
+**Commit**: `4158e35` (Phases E–H sprint, S2). **Status**: RESOLVED.
+
+### B33 — Parallel MenthorQ data sources, stale Path A
+**Resolution**: `score_menthorq_gamma()` rewired Path A → Path B —
+reads `market_snapshot["gamma_regime"]` enum directly (fresh B27 data)
+instead of the stale `menthorq_daily.json`. Overclaiming warning
+tightened to list only real consumers.
+**Commit**: `e11dafe` (Phases E–H sprint, S3). **Status**: RESOLVED.
+
+### B32 — Alpaca VIX API 401 Unauthorized
+**Resolution**: yfinance promoted to **primary** VIX source (was
+silently succeeding as fallback all along). Alpaca demoted to
+optional-try-first with a module-level `_alpaca_latch` that skips
+after first 401 until bot restart — eliminates repeated 401 log spam.
+**Commit**: `7cc171b`. **Status**: RESOLVED.
+
+### B26 — MenthorQ parser empty-value robustness
+**Resolution**: `_coerce_float()` helper in `core/menthorq_feed.py`
+handles empty strings, NaN, None, negative zero. Round-trip tests
+added in `tests/test_menthorq_feed.py`.
+**Commit**: `8d09b23` (Phases E–H sprint, S1). **Status**: RESOLVED.
+
+### B21 — noise_area stop_ticks inflates position sizing
+**Resolution**: `BaseStrategy.uses_managed_exit` attribute added; set
+True on `noise_area`. In `core/risk_manager.py`, position-sizing
+pathway substitutes a risk-reference stop (from
+`PER_STRATEGY_DAILY_LOSS_CAP` / contracts) when the strategy uses a
+managed exit, preventing the 150-600 tick structural stop from
+artificially shrinking position sizes.
+**Commit**: `337f60c`. **Status**: RESOLVED.
+
+### B19 — simple_sizing.py stale default
+**Resolution**: `core/simple_sizing.py` no longer hardcodes
+`max_daily_loss_usd=15.0`. Now requires from settings.
+**Commit**: `955e366`. **Status**: RESOLVED.
+
+### B16 — Trade memory bot_id attribution missing
+**Resolution**: `trade_memory.record()` stamps `bot_id=self.bot_name`
+at every trade close site in `bots/base_bot.py`. New trade_memory
+entries now carry `prod`/`sim`/`lab` attribution for dashboard P&L
+split and post-hoc analysis.
+**Commit**: `905b31b`. **Status**: RESOLVED.
 
 ---
 
-## B12 — fix/b12-vwap-pullback-base-strategy SUPERSEDED
-**Status**: SUPERSEDED (not merged)
-**Reason**: b12's BaseStrategy-contract concern was already resolved
-by Fix 6's refactor of vwap_pullback. b12's algorithm rewrite
-(1σ/2σ bands + RSI(2)) was reshaped into a new strategy file
-`strategies/vwap_band_pullback.py` via feat/vwap-band-pullback-from-b12
-(commit adf6b4e, merged 69dcfd4) so it runs alongside vwap_pullback
-for head-to-head lab data collection.
-**Branch disposition**: fix/b12-vwap-pullback-base-strategy left on
-origin but should not be merged — kept for historical reference.
+## 🟡 CLOSED / PARKED / SUPERSEDED
+
+### B36 — Lab bot silent crash PID 40908
+**Status**: PARKED — lab decommissioned 2026-04-21. Preserving
+defensive shutdown telemetry in base_bot for possible recurrence
+on prod/sim.
+
+### B35 — base_bot.py:2421 missing account= parameter
+**Status**: CLOSED (not a bug) — line was a `return` statement,
+not a write_oif call. PowerShell grep artifact.
+
+### B27 — GammaLevels Net GEX + Total GEX magnitudes
+**Status**: FIXED on `feat/b27-net-gex-regime`, merged prior to
+Phases E–H.
+
+### B23 — Third-party DEBUG log noise
+**Status**: FIXED commit `62b2085` (websockets/yfinance/peewee silenced).
+
+### B22 — EVAL debug logs invisible at lab INFO level
+**Status**: RESOLVED commit `e22a4a1` (lab log level DEBUG); lab
+subsequently retired.
+
+### B20 — ib_breakout structural stop exceeds NQ ceiling
+**Status**: RESOLVED commit `7e0dab1` (max_stop_ticks=120 skip guard).
+
+### B18 — Stop placement audit: remaining fixed-tick strategies
+**Status**: RESOLVED via Fix 7 + Fix 8 (commit `645b097` / `7e0dab1`).
+
+### B17 — Dashboard state push stale after full reboot
+**Status**: RESOLVED via merge `f4647b1` (datetime ISO-serialize fix).
+
+### B15 — Six pre-existing test failures
+**Status**: CLEARED in Phases E–H sprint commits 267ced4, f850fde,
+814a269 — all 6 were test-stale (B13 commission math, cooloff
+threshold, regime override contract drift). No production regressions.
+
+### B12 — fix/b12-vwap-pullback-base-strategy
+**Status**: SUPERSEDED — reshaped into `strategies/vwap_band_pullback.py`
+via commit `adf6b4e`.
 
 ---
 
-## B16 — Trade memory bot_id attribution missing
-**Discovered**: 2026-04-20 during Task B P&L diagnostic
-**Severity**: Medium
-**Root cause**: All 864+ trade_memory.json entries have bot_id=None.
-Dashboard cannot separate lab vs prod P&L because the attribution
-field is never populated on trade commit.
-**Impact**: Dashboard P&L panel unreliable; post-hoc analysis
-cannot split lab/prod performance.
-**Location**: core/trade_memory.py commit path or wherever bot
-passes bot_id on trade close.
-**Fix owner**: TBD. Not scheduled.
+## End-to-End Validation (2026-04-21 20:28 CDT)
 
-## B17 — Dashboard state push stale after full reboot
-**Discovered**: 2026-04-20 during Task B P&L diagnostic
-**Severity**: Medium
-**Root cause**: After full-stack reboot 07:47, dashboard's in-memory
-_state["lab"]["trades"] never refreshed despite 40 fresh trades in
-trade_memory.json. Dashboard /api/trades returned 07:45 data as of
-09:07 (1h22m stale).
-**Impact**: Dashboard P&L panel shows stale data after any reboot.
-**Resolution**: 2026-04-20. Merged fix/tl1-dashboard-datetime-serialize
-(base_bot.py + tests/test_dashboard_serialize.py). Datetime fields
-now serialize to ISO strings; state-push warnings eliminated.
-Merge commit: f4647b1.
-**Status**: RESOLVED
+`python tools/test_all_accounts.py` — **17/17 PASS**.
 
-## B18 — Stop placement audit: remaining fixed-tick strategies
-**Discovered**: 2026-04-20 during Fix 6 research
-**Severity**: Low-Medium
-**Root cause**: Fix 6 refactored vwap_pullback, bias_momentum, and
-dom_pullback to NQ-calibrated ATR-anchored stops (2.0x / 40-120
-clamp / 64 fallback). Other strategies not audited against
-research-consensus NQ stop standards.
-**Impact**: If any other strategy uses undersized stops, it will
-be stop-hunted by NQ noise similarly to what Fix 6 addressed.
-**Audit targets**: spring_setup (1.1x — intentional structure
-anchor, likely correct), compression_breakout (ATR-pure, verify
-multiplier), ib_breakout (structural, verify buffer), orb
-(structural, verify buffer), noise_area (structural, verify buffer).
-**Resolution**: 2026-04-20 Fix 7 + Fix 8.
-- compression_breakout + spring_setup clamps raised 8/40 → 40/120
-  (Fix 7, commit 645b097).
-- ib_breakout gains max_stop_ticks=120 skip-guard mirroring ORB
-  pattern (Fix 8, commit 7e0dab1).
-- orb already compliant (min_or_size_points=10 floor,
-  max_stop_points=25pt/100t ceiling skip).
-- noise_area uses managed exit; stop_ticks inflation tracked
-  separately as B21.
-**Status**: RESOLVED
+For each of Sim101 + 16 dedicated sub-accounts:
+- Submitted MARKET BUY 1-contract with TIF=GTC
+- Verified NT8 consumed OIF file (disappeared from `incoming/` within 3s)
+- Verified NT8 `outgoing/position.txt` reports LONG 1 at a valid price
+- Submitted MARKET SELL 1-contract flatten
+- Verified NT8 position file flips to FLAT 0 0
 
-## B20 — ib_breakout structural stop exceeds NQ ceiling
-**Discovered**: 2026-04-20 during Fix 6 follow-up audit
-**Severity**: Medium
-**Root cause**: Structural stop at opposite IB boundary produced
-80-320 tick stops on normal-to-high vol days.
-**Resolution**: 2026-04-20 Fix 8. Added max_stop_ticks=120
-skip-signal guard. Commit: 7e0dab1.
-**Status**: RESOLVED
-
-## B21 — noise_area stop_ticks inflates risk manager position sizing
-**Discovered**: 2026-04-20 during Fix 6 follow-up audit
-**Severity**: Low-Medium
-**Root cause**: noise_area reports 150-600 tick "stops" to risk
-manager, but actual strategy uses managed-exit (momentum/
-reversal/EoD), not stop orders. Inflated stop_ticks feeds
-into position_manager sizing logic and may reduce position
-sizes inappropriately.
-**Impact**: Positions may be sized smaller than intended on
-noise_area trades.
-**Fix owner**: TBD. Architectural — not a parameter tweak.
-Needs investigation of whether position sizing should read
-"disaster stop" or a different risk reference.
-**Status**: OPEN
-
-## B19 — simple_sizing.py stale default
-**Discovered**: 2026-04-20 during Task D / daily cap audit
-**Severity**: Low
-**Root cause**: core/simple_sizing.py line 33 has max_daily_loss_usd
-hardcoded default of 15.0, but line 68 imports from settings. The
-line 33 default is dead code.
-**Impact**: None in production, but misleading if someone reads
-the module and assumes 15.0 applies.
-**Fix owner**: TBD. Cleanup task.
-
-## B22 — EVAL debug logs invisible at lab INFO level
-**Discovered**: 2026-04-20 during Phase 5 restart R5 observation
-**Severity**: Low-Medium
-**Root cause**: Fix 5 logs [EVAL] BLOCKED/SKIP/NO_SIGNAL events at
-`logger.debug()` level. Lab bot ran at logging.INFO, so those
-reject-reason events never surfaced in the log — defeating Fix 5's
-observability goal for lab data collection. Only SIGNAL events
-(logger.info) were visible.
-**Impact**: Could not see *why* strategies passed on setups in lab
-— only that they did or didn't fire.
-**Resolution**: 2026-04-20. Lab bot log level raised INFO → DEBUG.
-Prod stays INFO (production logs stay quiet). Commit e22a4a1,
-merge fbe215d.
-**Status**: RESOLVED
-
-## B26 — MenthorQ parser empty-value robustness
-**Discovered**: 2026-04-21 during gamma ingest blocker review
-**Severity**: Low
-**Root cause**: core/menthorq_gamma.parse_gamma_paste has not been
-tested against paste strings with empty values, e.g.
-`Put Support 0DTE, ,` (comma with whitespace where a number should
-be). Current parser may crash or swallow the key silently instead
-of treating empty values as explicit None.
-**Impact**: If Jennifer's paste accidentally includes a blank value
-on a Tier 1 field, the daily ingest could fail loudly or — worse —
-silently load with a corrupted level.
-**Fix owner**: TBD. Add test case + graceful None handling.
-**Status**: OPEN
-
-## B27 — GammaLevels schema ext: Net GEX + Total GEX magnitudes
-**Discovered**: 2026-04-21 during gamma ingest blocker review
-**Severity**: Low-Medium → PRIORITY: HIGH after 2026-04-21 regime
-disagreement between HVL proxy and MenthorQ's Net GEX authoritative.
-**Root cause**: GammaLevels dataclass stored individual strike
-levels but not the absolute Net GEX magnitude that MenthorQ reports.
-Regime classification was relative (price vs HVL), which disagreed
-with MenthorQ's ground-truth Net GEX sign.
-**Resolution**: 2026-04-21 on feat/b27-net-gex-regime. Schema
-extended with `net_gex` / `total_gex` / `iv_30d`. Classifier
-rewritten with Net GEX as primary signal and HVL as fallback.
-6-value enum `GammaRegime` (POSITIVE_STRONG/NORMAL, NEUTRAL,
-NEGATIVE_NORMAL/STRONG, UNKNOWN) replaces legacy 4-value. Parser
-accepts K/M/B suffixes. Migration touched 2 call sites inside
-`core/menthorq_gamma.py` (classify_regime + regime_multipliers);
-`bots/base_bot.py` needed no change because it only used
-`GammaRegime.UNKNOWN`, which is preserved. Thresholds
-(`MENTHORQ_NET_GEX_STRONG_THRESHOLD=3_000_000`,
-`MENTHORQ_NET_GEX_NORMAL_THRESHOLD=500_000`) live in
-`config/settings.py`. Paste format documented in
-`data/menthorq/gamma/README.md`.
-**Status**: FIXED
-
-## B23 — Third-party DEBUG log noise
-**Discovered**: 2026-04-20 post-restart observation + 2026-04-21 crash review
-**Severity**: LOW-MEDIUM
-**Root cause**: After B22 raised lab to DEBUG log level, `websockets.client`
-emits ~10 lines/sec of raw tick dumps and yfinance/peewee/httpcore emit
-dozens of lines per intermarket cycle. Log grew 199 MB in 22h, drowning
-the Fix 5 [EVAL] reject-reason output and potentially contributing to
-silent-crash hypothesis (log I/O pressure).
-**Resolution**: 2026-04-21 commit 62b2085. Added logger-level overrides
-in bots/lab_bot.py immediately after basicConfig: websockets.client/server,
-yfinance, httpcore (+ connection + http11), peewee, chromadb all set to INFO.
-Bot-level DEBUG preserved for strategy observability.
-**Effect**: Reduces log volume ~10× while keeping [EVAL] signal visibility.
-Takes hold on next lab restart.
-**Status**: FIXED
-
-## B32 — Alpaca VIX API returning 401 Unauthorized
-**Discovered**: 2026-04-21 during lab session reconciliation
-**Severity**: MEDIUM
-**Root cause**: Alpaca API credentials for VIX endpoint appear invalid or expired;
-intermarket filter unable to fetch VIX readings, running blind on one signal.
-**Impact**: Intermarket filter degrades gracefully but VIX-based regime input absent.
-**Fix owner**: TBD — rotate Alpaca key or investigate whether VIX moved to different endpoint.
-**Status**: OPEN
-
-## B33 — Parallel MenthorQ data sources with stale Path A feeding structural_bias
-**Discovered**: 2026-04-21 during post-merge 4C verification session
-**Severity**: MEDIUM (downgraded from initial HIGH after scope precision)
-
-**Architecture diagnosis** (confirmed via code-archaeology on 2026-04-21):
-Two independent MenthorQ data paths currently coexist:
-
-Path A — `data/menthorq/menthorq_daily.json` (stale since 2026-04-17):
-  - Writer: dashboard/server.py (user edits via UI)
-  - Reader: core/menthorq_feed.py → market_snapshot["menthorq"]
-  - Consumer: core/structural_bias.py score_menthorq_gamma() — 15-pt weight
-
-Path B — `data/menthorq/gamma/YYYY-MM-DD_levels.txt` (fresh, B14/B27):
-  - Writer: user paste
-  - Reader: core/menthorq_gamma.py → self.gamma_levels + B27 regime classifier
-  - Consumers:
-    * bots/base_bot.py entry-wall gate (critical path)
-    * strategies/opening_session.py is_entry_into_wall() (direct)
-    * snapshot enrichment (market_snapshot["gamma_regime"])
-
-**Impact**: structural_bias scoring layer is degraded (reading 4-day-old gamma),
-  biasing composite scores based on stale Net GEX. Entry-wall gate and
-  opening_session direct gamma checks remain on fresh data — not broken,
-  but bias-scored trades are being evaluated against stale context.
-
-**NOT affected** (contrary to startup warning text in menthorq_feed.py):
-  - spring_setup.py (zero menthorq references)
-  - gamma_flip_detector.py (zero menthorq references)
-  - Fix: tighten the warning message to mention structural_bias only.
-
-**Fix plan**:
-  (a) Tactical: update menthorq_daily.json daily alongside the gamma paste
-      until (b) lands. Zero-risk, 5-min add to paste ritual.
-  (b) Strategic: re-wire score_menthorq_gamma to read from
-      market_snapshot["gamma_regime"] (the B27 6-value enum) instead of
-      the legacy menthorq dict. Retire Path A once structural_bias migrated.
-
-**Status**: OPEN (tactical fix applicable immediately; strategic fix queued)
-
-## B35 — bots/base_bot.py:2421 missing account= parameter
-**Discovered**: 2026-04-21 during CC code review
-**Resolution**: FALSE ALARM. Line 2421 is a `return` statement, not a write_oif call.
-Earlier grep output misread due to PowerShell Select-String row-duplication artifact.
-Verified via Read: line 2702 is the single EXIT write_oif call site and correctly
-passes account=pos.account. No bug exists.
-**Status**: CLOSED (not a bug)
-
-## B36 — Lab bot silent crash PID 40908 (23.7 min uptime)
-**Discovered**: 2026-04-21 10:42:40 CT during 4C verification session
-**Severity**: LOW (parked pending recurrence)
-**Signature**: WS close code=1006, no Python traceback, no Windows Error Reporting event,
-no shutdown log, process vanished.
-**Hypotheses investigated and ruled out**:
-- Native extension crash: no WER event
-- Missing account→ValueError: all call sites correctly pass account=
-- Log-volume threshold: PID 32412 has exceeded 40908's log size without crashing
-**Remaining hypothesis**: event-triggered transient (bad tick sequence, transient
-resource spike, yfinance/intermarket API stall during RTH burst).
-**Mitigation in flight**: B23 (log-noise silencer, commit 62b2085) may address
-the log-pressure sub-hypothesis even if the primary trigger is something else.
-Takes effect on next lab restart.
-**Fix owner**: Monitor for recurrence. If crash #3 happens, capture last 500 non-websockets
-log lines + Windows System event log around crash timestamp.
-**Status**: PARKED
-
-## B37 — 4C integration test gap
-**Discovered**: 2026-04-21 during test coverage review
-**Severity**: LOW
-**Root cause**: test_account_routing.py covers map correctness, _require_account raises,
-and wire-format position — all unit-level. No end-to-end integration test covers
-signal → bot._enter_trade → bridge → write_oif path with account plumbing, nor
-bridge-side handling of missing account in WS message, nor write_bracket_order's
-delegated guard.
-**Fix owner**: Add tests/test_4c_integration.py in a follow-up testing sprint.
-**Status**: OPEN
+Report: `logs/ati_smoke_test_2026-04-21_2028.md`.

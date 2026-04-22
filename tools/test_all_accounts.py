@@ -107,10 +107,35 @@ def wait_for_position(account: str, expected_direction: str, expected_qty: int,
     return last
 
 
+def _position_file_path(account: str) -> str | None:
+    """Return the existing outgoing/position file path or None."""
+    for p in [
+        os.path.join(OUTGOING, f"{INSTRUMENT} Globex_{account}_position.txt"),
+        os.path.join(OUTGOING, f"{INSTRUMENT}_{account}_position.txt"),
+    ]:
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def _mtime(path: str | None) -> float:
+    try:
+        return os.path.getmtime(path) if path else 0.0
+    except Exception:
+        return 0.0
+
+
 def test_one_account(account: str, dry_run: bool = False) -> dict:
-    """Submit BUY → verify LONG → flatten → verify FLAT. Returns a result dict."""
+    """Submit BUY → verify LONG → flatten → verify FLAT. Returns a result dict.
+
+    Hardening (post 8:28 PM NT8 log audit):
+    - Pre-flatten any lingering position (NT8 sim max-pos-qty=1)
+    - Require position file mtime to ADVANCE after BUY (catches false PASS
+      when fill didn't actually happen but old position still shows LONG)
+    """
     result = {
         "account": account,
+        "pre_clean": None,
         "entry_path": None,
         "entry_consumed": False,
         "entry_position": None,
@@ -126,6 +151,28 @@ def test_one_account(account: str, dry_run: bool = False) -> dict:
             result["error"] = "dry-run"
             return result
 
+        pos_file = _position_file_path(account)
+
+        # Step 0: pre-flatten if account has a lingering position
+        pre_pos = read_position(account)
+        if pre_pos and pre_pos[0] not in ("FLAT", None):
+            side = "SELL" if pre_pos[0] == "LONG" else "BUY"
+            qty = abs(pre_pos[1])
+            clean_line = (
+                f"PLACE;{account};{INSTRUMENT};{side};{qty};MARKET;0;0;GTC;"
+                f"PRECLEAN_{random.randint(10000,99999)};;;"
+            )
+            cp = write_oif(clean_line, tag=f"clean_{account.replace(' ','_')}")
+            wait_for_consume(cp, timeout_s=3.0)
+            wait_for_position(account, "FLAT", 0, timeout_s=5.0)
+            result["pre_clean"] = pre_pos
+            post_clean = read_position(account)
+            if post_clean and post_clean[0] != "FLAT":
+                result["error"] = f"Could not pre-flatten; stuck at {post_clean}"
+                return result
+
+        mtime_before = _mtime(pos_file)
+
         # Step 1: BUY 1 contract MARKET, GTC
         oco = f"SMOKE_{random.randint(10000, 99999)}"
         buy_line = f"PLACE;{account};{INSTRUMENT};BUY;1;MARKET;0;0;GTC;{oco};;;"
@@ -135,11 +182,20 @@ def test_one_account(account: str, dry_run: bool = False) -> dict:
             result["error"] = "NT8 did not consume entry OIF within 3s"
             return result
 
-        # Step 2: verify position LONG 1
+        # Step 2: verify LONG 1 AND position file updated since BUY
         pos = wait_for_position(account, "LONG", 1, timeout_s=5.0)
         result["entry_position"] = pos
         if not pos or pos[0] != "LONG" or pos[1] != 1:
             result["error"] = f"Expected LONG 1, got {pos}"
+            return result
+        if pos_file is None:
+            pos_file = _position_file_path(account)
+        mtime_after = _mtime(pos_file)
+        if mtime_after <= mtime_before:
+            result["error"] = (
+                f"Position file mtime did not advance ({mtime_before} → "
+                f"{mtime_after}) — BUY may have been rejected; stale LONG"
+            )
             return result
 
         # Step 3: flatten
