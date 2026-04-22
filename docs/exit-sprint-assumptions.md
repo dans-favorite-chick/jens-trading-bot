@@ -58,3 +58,33 @@
   is naive-local on the CT Windows host. If the host TZ ever moves,
   this breaks silently; a future hardening ticket (B68-equivalent) is
   still worth filing, just not under "explains today's silence".
+
+## S2 — target fire verification (B63/B64) — 2026-04-22
+
+- **"Consumed" = file disappeared from `incoming/`.** Existing
+  `_verify_consumed` treats NT8 deletion of the OIF file as proof of
+  acceptance. Weaker than "Working in NT8" (which would require
+  reading `outgoing/` orders file), but it's the contract the rest of
+  the codebase assumes. B63 preserves that contract.
+- **Half-success recovery re-places ONLY the missing leg once, not
+  the full OCO pair.** Re-submitting both risks double-attach — NT8
+  OCO semantics for duplicate registrations aren't documented. We
+  re-stage the single missing leg with the same OCO id. If that also
+  fails, we emit a cleanup `CANCEL_ALL` on the account before
+  giving up so the caller's outer 3-retry loop starts from a clean
+  NT8 state.
+- **`[TARGET_MISS_SUSPECT]` threshold = MFE ≥ 20 ticks**, not the
+  literal 80-tick (20-point) Jennifer cited. 20 t (5 pts) is a low
+  enough bar to surface managed-exit leakage, and today's sample had
+  no MFE ≥ 80 trades at all — 20 t gives us signal.
+- **Forensic logging is non-blocking.** The `[EXIT_FORENSIC]` /
+  `[TARGET_MISS_SUSPECT]` emit is wrapped in a bare `try/except`
+  with DEBUG swallow. A logging defect must never crash the exit
+  path.
+- **Root cause for today's apparent target misses is strategy-side,
+  not OCO-side.** 7/7 MFE≥20 non-target exits were managed exits
+  (`ema_dom_exit`, `trend_stall`, `time_stop`) firing before price
+  reached the LIMIT. Targets for the two big winners (105 t and 83 t
+  MFE) were physically unreachable inside the trade's hold. That's
+  S1/strategy territory. B63 closes the observability gap so if the
+  real OCO-half-attach bug does occur it can't hide any more.
