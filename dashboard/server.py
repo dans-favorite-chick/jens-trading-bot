@@ -93,27 +93,76 @@ def _start_bot(name: str) -> dict:
 
 
 def _stop_bot(name: str) -> dict:
-    """Stop a running bot subprocess."""
+    """Stop a running bot — whether started by dashboard or externally.
+
+    First kills a tracked subprocess (if any). Then scans for ANY python
+    process whose command line matches `{name}_bot.py` (handles externally
+    started bots from launch_all.bat or PowerShell) and kills those too.
+    """
+    killed_pids: list[int] = []
+
+    # Path 1: dashboard-spawned subprocess
     with _bot_proc_lock:
-        proc = _bot_processes.get(name)
-        if not proc or proc.poll() is not None:
-            _bot_processes.pop(name, None)
-            return {"ok": True, "message": f"{name} bot not running"}
+        proc = _bot_processes.pop(name, None)
+        if proc and proc.poll() is None:
+            try:
+                if sys.platform == "win32":
+                    proc.send_signal(signal.CTRL_BREAK_EVENT)
+                else:
+                    proc.terminate()
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            except Exception:
+                try: proc.kill()
+                except Exception: pass
+            killed_pids.append(proc.pid)
 
-        try:
-            if sys.platform == "win32":
-                proc.send_signal(signal.CTRL_BREAK_EVENT)
-            else:
-                proc.terminate()
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-        except Exception:
-            proc.kill()
+    # Path 2: externally-started bots (PowerShell, launch_all.bat, etc.)
+    # Use psutil if available for clean cross-platform; fall back to taskkill.
+    target_script = f"{name}_bot.py"
+    try:
+        import psutil  # type: ignore
+        for p in psutil.process_iter(["pid", "name", "cmdline"]):
+            try:
+                if p.info["name"] and "python" in p.info["name"].lower():
+                    cmd = " ".join(p.info["cmdline"] or [])
+                    if target_script in cmd and p.info["pid"] not in killed_pids:
+                        p.terminate()
+                        try:
+                            p.wait(timeout=3)
+                        except psutil.TimeoutExpired:
+                            p.kill()
+                        killed_pids.append(p.info["pid"])
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+    except ImportError:
+        # Fallback: taskkill via command line (Windows)
+        if sys.platform == "win32":
+            try:
+                result = subprocess.run(
+                    ["wmic", "process", "where",
+                     f"name='python.exe' and commandline like '%{target_script}%'",
+                     "get", "processid", "/format:value"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                for line in result.stdout.splitlines():
+                    line = line.strip()
+                    if line.startswith("ProcessId="):
+                        try:
+                            pid = int(line.split("=", 1)[1])
+                            subprocess.run(["taskkill", "/F", "/PID", str(pid)],
+                                           capture_output=True, timeout=5)
+                            killed_pids.append(pid)
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.warning(f"fallback taskkill for {name} failed: {e}")
 
-        _bot_processes.pop(name, None)
-        logger.info(f"Stopped {name} bot")
-        return {"ok": True}
+    if killed_pids:
+        logger.info(f"Stopped {name} bot (PIDs: {killed_pids})")
+        return {"ok": True, "pids": killed_pids}
+    return {"ok": True, "message": f"{name} bot was not running"}
 
 
 def _bot_status(name: str) -> str:
