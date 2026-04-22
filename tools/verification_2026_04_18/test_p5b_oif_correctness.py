@@ -114,20 +114,20 @@ class TestB3StopMarket(unittest.TestCase):
 
 
 class TestB2CancelAllSemicolonCount(unittest.TestCase):
-    """B2 — CANCELALLORDERS must have exactly 13 semicolons per NT8 ATI spec."""
+    """B2 — CANCELALLORDERS must have exactly 12 semicolons (13 fields) per NT8 ATI spec."""
 
-    def test_cancel_all_orders_line_has_13_semicolons(self):
+    def test_cancel_all_orders_line_has_12_semicolons(self):
         from bridge.oif_writer import cancel_all_orders_line
         line = cancel_all_orders_line("Sim101")
-        self.assertEqual(line.count(";"), 13)
+        self.assertEqual(line.count(";"), 12)  # B44: NT8 wants 13 fields = 12 semis
 
     def test_cancel_all_orders_line_starts_with_command(self):
         from bridge.oif_writer import cancel_all_orders_line
         line = cancel_all_orders_line("Sim101")
         self.assertTrue(line.startswith("CANCELALLORDERS;"))
 
-    def test_cancel_all_action_path_uses_13_semi_form(self):
-        """write_oif(CANCEL_ALL) writes a 13-semi line to disk."""
+    def test_cancel_all_action_path_uses_12_semi_form(self):
+        """write_oif(CANCEL_ALL) writes a 12-semi line to disk."""
         tmpdir = tempfile.mkdtemp()
         try:
             import bridge.oif_writer as oif
@@ -137,7 +137,7 @@ class TestB2CancelAllSemicolonCount(unittest.TestCase):
                 paths = oif.write_oif("CANCEL_ALL")
                 self.assertEqual(len(paths), 1)
                 content = open(paths[0]).read().rstrip("\n")
-                self.assertEqual(content.count(";"), 13)
+                self.assertEqual(content.count(";"), 12)  # B44
                 # Old broken form had INSTRUMENT field populated
                 self.assertNotIn("MNQM6", content)
             finally:

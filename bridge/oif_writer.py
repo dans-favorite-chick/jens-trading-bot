@@ -143,8 +143,10 @@ def cancel_all_orders_line(account: str = None) -> str:
             "The no-args form cancels across ALL NT8-connected accounts "
             "(including live brokerage) and is never an acceptable default."
         )
-    # 13 semicolons total: 1 after CANCELALLORDERS + 12 after {account}
-    return f"CANCELALLORDERS;{account};;;;;;;;;;;;"
+    # B44 fix: NT8 ATI rejected `CANCELALLORDERS;Sim101;;;;;;;;;;;;` with
+    # "invalid # of parameters, should be 13 but is 14". NT8 wants 13
+    # fields = 12 semicolons total (1 after CANCELALLORDERS + 11 trailing).
+    return f"CANCELALLORDERS;{account};;;;;;;;;;;"
 
 
 def cancel_single_order_line(order_id: str) -> str:
@@ -177,21 +179,32 @@ def cancel_single_order_line(order_id: str) -> str:
 # Atomic file staging: write to .tmp, rename to .txt
 # ═══════════════════════════════════════════════════════════════════════
 
+_OIF_STAGING_DIR = os.path.join(os.path.dirname(OIF_INCOMING), "oif_staging")
+
+
 def _stage_oif(cmd: str, trade_id: str, suffix: str = "") -> tuple[str, str]:
     """
-    Write cmd to a .tmp file. Returns (tmp_path, final_path). NT8 only
-    watches .txt — the .tmp file is invisible until os.rename flips it.
+    Write cmd to a staging file OUTSIDE incoming/, return (stage_path, final_path).
+
+    B45 (rev 2): NT8's watcher on `incoming/` scans ALL files regardless
+    of extension — .tmp produced "Could not find file" read errors,
+    .stage produced "Unknown OIF file type" warnings. Staging in a
+    sibling directory NT8 doesn't watch eliminates both. os.replace()
+    (rename-if-same-drive, atomic on NTFS) moves stage→incoming/*.txt
+    only when the write is complete.
     """
     global _oif_counter
     _oif_counter += 1
     os.makedirs(OIF_INCOMING, exist_ok=True)
+    os.makedirs(_OIF_STAGING_DIR, exist_ok=True)
     tag = f"_{trade_id}" if trade_id else ""
     sfx = f"_{suffix}" if suffix else ""
-    final_path = os.path.join(OIF_INCOMING, f"oif{_oif_counter}{tag}{sfx}.txt")
-    tmp_path = final_path + ".tmp"
-    with open(tmp_path, "w") as f:
+    fname = f"oif{_oif_counter}{tag}{sfx}.txt"
+    final_path = os.path.join(OIF_INCOMING, fname)
+    stage_path = os.path.join(_OIF_STAGING_DIR, fname)
+    with open(stage_path, "w") as f:
         f.write(cmd + "\n")
-    return tmp_path, final_path
+    return stage_path, final_path
 
 
 def _commit_staged(staged: list[tuple[str, str]], trade_id: str) -> list[str]:
@@ -199,7 +212,7 @@ def _commit_staged(staged: list[tuple[str, str]], trade_id: str) -> list[str]:
     written = []
     for tmp, final in staged:
         try:
-            os.rename(tmp, final)
+            os.replace(tmp, final)  # atomic cross-dir rename on NTFS
             written.append(final)
             logger.info(f"[OIF:{trade_id or 'N/A'}] committed {os.path.basename(final)}")
         except OSError as e:
@@ -310,7 +323,94 @@ def write_bracket_order(
         logger.info(f"[OIF:{trade_id}] bracket committed: {direction} qty={qty} "
                     f"entry={entry_type}@{entry_price:.2f} stop={stop_price:.2f} "
                     f"target={target_price if target_price else 'managed'} oco={oco_id}")
+
+    # B46: Post-submit incoming-folder clearance check. If NT8 ATI consumed
+    # the file, it disappears from incoming/ within milliseconds. If it's
+    # still there 1s later, NT8 rejected it (bad TIF, bad account, etc.)
+    # or the ATI server isn't running. Either way — red flag.
+    _verify_consumed(written, trade_id, timeout_s=1.0)
     return written
+
+
+def _verify_consumed(paths: list[str], trade_id: str, timeout_s: float = 1.0) -> list[str]:
+    """Check that NT8 consumed (deleted) the submitted OIF files within timeout.
+
+    Returns a list of paths STILL PRESENT (i.e. NOT consumed — a red flag).
+    Logs an error + emits a Telegram warning if anything is stuck.
+    """
+    import time as _time
+    deadline = _time.monotonic() + timeout_s
+    while _time.monotonic() < deadline:
+        remaining = [p for p in paths if os.path.exists(p)]
+        if not remaining:
+            return []
+        _time.sleep(0.1)
+    stuck = [p for p in paths if os.path.exists(p)]
+    if stuck:
+        names = ", ".join(os.path.basename(p) for p in stuck)
+        logger.error(
+            f"[OIF_STUCK:{trade_id}] NT8 did NOT consume {len(stuck)} "
+            f"OIF file(s) within {timeout_s}s: {names}. "
+            f"ATI likely rejected — check NT8 Log tab."
+        )
+        try:
+            from core.telegram_notifier import send_sync
+            send_sync(
+                f"⚠️ [OIF_STUCK] {trade_id}: {len(stuck)} file(s) not "
+                f"consumed by NT8 — probable ATI rejection. "
+                f"Check NT8 Log tab. Files: {names}"
+            )
+        except Exception:
+            pass
+    return stuck
+
+
+def verify_nt8_position(account: str, expected_direction: str, expected_qty: int,
+                        instrument: str = None, timeout_s: float = 3.0) -> dict:
+    """Read NT8's outgoing/ position file to verify a fill actually happened.
+
+    Format NT8 writes: `outgoing/MNQM6 Globex_{account}_position.txt`
+    containing a single line like `LONG;1;26741.25` or `FLAT;0;0`.
+
+    Returns {status: "confirmed"|"wrong_direction"|"wrong_qty"|"flat"|"missing",
+             observed_direction, observed_qty, observed_price}.
+    """
+    import time as _time
+    inst = instrument or INSTRUMENT
+    outgoing = os.path.join(os.path.dirname(OIF_INCOMING), "outgoing")
+    # NT8 uses space between instrument and exchange suffix in filename
+    candidates = [
+        os.path.join(outgoing, f"{inst} Globex_{account}_position.txt"),
+        os.path.join(outgoing, f"{inst}_{account}_position.txt"),
+    ]
+    deadline = _time.monotonic() + timeout_s
+    while _time.monotonic() < deadline:
+        for path in candidates:
+            if os.path.exists(path):
+                try:
+                    content = open(path).read().strip()
+                    parts = content.split(";")
+                    if len(parts) >= 3:
+                        obs_dir, obs_qty, obs_price = parts[0], int(parts[1]), float(parts[2])
+                        result = {
+                            "observed_direction": obs_dir,
+                            "observed_qty": obs_qty,
+                            "observed_price": obs_price,
+                        }
+                        if obs_dir == "FLAT":
+                            result["status"] = "flat"
+                        elif obs_dir != expected_direction:
+                            result["status"] = "wrong_direction"
+                        elif obs_qty != expected_qty:
+                            result["status"] = "wrong_qty"
+                        else:
+                            result["status"] = "confirmed"
+                        return result
+                except Exception as e:
+                    logger.debug(f"[NT8_POS] read error {path}: {e}")
+        _time.sleep(0.15)
+    return {"status": "missing", "observed_direction": None,
+            "observed_qty": 0, "observed_price": 0.0}
 
 
 # ═══════════════════════════════════════════════════════════════════════

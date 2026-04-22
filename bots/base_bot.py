@@ -2441,21 +2441,86 @@ class BaseBot:
             return
 
         if fill_result["status"] == "TIMEOUT":
-            if not LIVE_TRADING:
-                # Sim mode: assume filled (NT8 sim doesn't always write fill files)
-                logger.info(f"[{tid}] No fill file (sim mode) — assuming filled")
-            else:
+            if LIVE_TRADING:
                 # LIVE mode: DO NOT proceed without fill confirmation
                 logger.error(f"[{tid}] Fill timeout in LIVE mode — ABORTING entry. "
                               f"Check NT8 manually for order status.")
                 self.last_rejection = f"Fill timeout in LIVE mode — entry aborted"
                 return
+            # B39 hardening: for the sim bot (routes real OIFs to real NT8
+            # sub-accounts), a fill timeout means NT8 likely REJECTED the
+            # order (wrong TIF, account permissions, etc.). Silently
+            # assuming-filled creates phantom Python positions that never
+            # close in NT8. ABORT and alert instead.
+            if getattr(self, "bot_name", "prod") == "sim":
+                logger.error(f"[PHANTOM_GUARD:{tid}] Fill timeout on SIM bot — "
+                              f"ABORTING entry (would have opened phantom position). "
+                              f"Check NT8 Log tab for ATI rejection messages. "
+                              f"Account={_account} strategy={signal.strategy}")
+                self.last_rejection = (
+                    f"Phantom-guard: NT8 sim fill timeout for {_account}/"
+                    f"{signal.strategy} — check NT8 Log tab"
+                )
+                try:
+                    from core.telegram_notifier import send_sync
+                    send_sync(
+                        f"⚠️ [PHANTOM_GUARD] {signal.strategy} → {_account} "
+                        f"NT8 fill timeout. Order probably rejected by NT8 ATI. "
+                        f"Entry aborted. Check NT8 Log tab."
+                    )
+                except Exception:
+                    pass  # Telegram is nice-to-have, never block
+                return
+            # Paper mode (prod_bot with LIVE_TRADING=False): keep legacy
+            # "assume filled" behavior for Sim101-only mock tracking.
+            logger.info(f"[{tid}] No fill file (paper mode) — assuming filled")
 
         # Inject regime and Phase 6b data into market snapshot for analytics
         market["regime"] = self.session.get_current_regime()
         market["signal_price"] = price  # Price at signal generation time
         market["microstructure"] = micro_result
         market["fill_latency_ms"] = fill_result.get("latency_ms", 0)
+
+        # B47: For sim_bot, verify the fill actually happened by reading
+        # NT8's outgoing/ position file for this account. If NT8 reports
+        # FLAT or wrong direction/qty, we have a phantom — reject the entry.
+        if getattr(self, "bot_name", "prod") == "sim":
+            try:
+                from bridge.oif_writer import verify_nt8_position
+                pos_check = verify_nt8_position(
+                    account=_account,
+                    expected_direction=signal.direction,
+                    expected_qty=contracts,
+                    timeout_s=3.0,
+                )
+                if pos_check["status"] != "confirmed":
+                    logger.error(
+                        f"[NT8_VERIFY:{tid}] Fill verification FAILED: "
+                        f"status={pos_check['status']} "
+                        f"observed={pos_check.get('observed_direction')}"
+                        f"/{pos_check.get('observed_qty')} "
+                        f"@ {pos_check.get('observed_price')} — aborting entry."
+                    )
+                    self.last_rejection = (
+                        f"NT8 position verify {pos_check['status']} on {_account}"
+                    )
+                    try:
+                        from core.telegram_notifier import send_sync
+                        send_sync(
+                            f"⚠️ [NT8_VERIFY] {signal.strategy} → {_account}: "
+                            f"NT8 reports {pos_check['status']} after entry. "
+                            f"Expected {signal.direction}/{contracts}, got "
+                            f"{pos_check.get('observed_direction')}"
+                            f"/{pos_check.get('observed_qty')}. Entry aborted."
+                        )
+                    except Exception:
+                        pass
+                    return
+                logger.info(f"[NT8_VERIFY:{tid}] Position confirmed: "
+                            f"{pos_check['observed_direction']} {pos_check['observed_qty']} "
+                            f"@ {pos_check['observed_price']}")
+            except Exception as e:
+                logger.warning(f"[NT8_VERIFY:{tid}] verify failed (non-blocking): {e}")
 
         # NOW open position locally (after fill confirmation)
         # LIMIT / STOPMARKET entries fill at limit_price; MARKET fills near tick price.
