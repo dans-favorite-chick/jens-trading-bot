@@ -2455,29 +2455,54 @@ class BaseBot:
                               f"Check NT8 manually for order status.")
                 self.last_rejection = f"Fill timeout in LIVE mode — entry aborted"
                 return
-            # B39 hardening: for the sim bot (routes real OIFs to real NT8
-            # sub-accounts), a fill timeout means NT8 likely REJECTED the
-            # order (wrong TIF, account permissions, etc.). Silently
-            # assuming-filled creates phantom Python positions that never
-            # close in NT8. ABORT and alert instead.
+            # B39 hardening (B48 refinement): on sim bot, distinguish
+            #   (a) NT8 REJECTED order (OIF still in incoming/) → phantom risk,
+            #       loud alert + cleanup stop/target orphans
+            #   (b) NT8 ACCEPTED but waiting for limit/stop trigger (OIF
+            #       consumed, no fill yet) → NOT a phantom, skip quietly
             if getattr(self, "bot_name", "prod") == "sim":
-                logger.error(f"[PHANTOM_GUARD:{tid}] Fill timeout on SIM bot — "
-                              f"ABORTING entry (would have opened phantom position). "
-                              f"Check NT8 Log tab for ATI rejection messages. "
-                              f"Account={_account} strategy={signal.strategy}")
-                self.last_rejection = (
-                    f"Phantom-guard: NT8 sim fill timeout for {_account}/"
-                    f"{signal.strategy} — check NT8 Log tab"
-                )
+                import glob as _glob
                 try:
-                    from core.telegram_notifier import send_sync
-                    send_sync(
-                        f"⚠️ [PHANTOM_GUARD] {signal.strategy} → {_account} "
-                        f"NT8 fill timeout. Order probably rejected by NT8 ATI. "
-                        f"Entry aborted. Check NT8 Log tab."
-                    )
+                    from config.settings import NT8_DATA_ROOT
+                    incoming_dir = os.path.join(NT8_DATA_ROOT, "incoming")
                 except Exception:
-                    pass  # Telegram is nice-to-have, never block
+                    incoming_dir = r"C:\Users\Trading PC\Documents\NinjaTrader 8\incoming"
+                # Any of this trade's OIFs still sitting in incoming/?
+                stuck = _glob.glob(os.path.join(incoming_dir, f"*_{tid}*.txt"))
+                if stuck:
+                    # Case (a): NT8 rejected — real phantom risk
+                    logger.error(f"[PHANTOM_GUARD:{tid}] NT8 REJECTED order — "
+                                  f"{len(stuck)} OIF(s) stuck in incoming/. "
+                                  f"Aborting entry + removing stuck legs. "
+                                  f"Account={_account} strategy={signal.strategy}")
+                    for p in stuck:
+                        try: os.remove(p)
+                        except OSError: pass
+                    self.last_rejection = (
+                        f"Phantom-guard: NT8 rejected {_account}/{signal.strategy}"
+                    )
+                    try:
+                        from core.telegram_notifier import send_sync
+                        send_sync(
+                            f"⚠️ [PHANTOM_GUARD] {signal.strategy} → {_account} "
+                            f"NT8 REJECTED order ({len(stuck)} OIF stuck). "
+                            f"Check NT8 Log tab."
+                        )
+                    except Exception:
+                        pass
+                    return
+                # Case (b): order accepted, waiting for trigger. Clean up
+                # orphan stop/target legs (they'll have no position to protect
+                # if entry never fills) and skip quietly.
+                orphans = _glob.glob(os.path.join(incoming_dir, f"*_{tid}_stop.txt"))
+                orphans += _glob.glob(os.path.join(incoming_dir, f"*_{tid}_target.txt"))
+                for p in orphans:
+                    try: os.remove(p)
+                    except OSError: pass
+                logger.info(f"[ENTRY_PENDING:{tid}] NT8 accepted entry @ "
+                             f"{limit_price:.2f} on {_account}, waiting for trigger. "
+                             f"Skipping Python open (re-eval next tick). "
+                             f"Cleaned {len(orphans)} orphan OCO legs.")
                 return
             # Paper mode (prod_bot with LIVE_TRADING=False): keep legacy
             # "assume filled" behavior for Sim101-only mock tracking.
