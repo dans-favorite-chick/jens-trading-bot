@@ -310,7 +310,9 @@ class BaseBot:
             logger.info(f"[WARMUP] Aggregator state restored — indicators pre-loaded")
         self.risk = RiskManager()
         self.session = SessionManager(bot_name=self.bot_name)
-        self.positions = PositionManager()
+        # P0.1 (D13): load durable trade history so dashboard P&L and any
+        # in-process consumer of trade_history survive bot restart.
+        self.positions = PositionManager(load_history=True)
         self.trade_memory = TradeMemory()
         self.history = HistoryLogger(bot_name=self.bot_name)
         self.tracker = StrategyTracker()

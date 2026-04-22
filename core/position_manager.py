@@ -12,6 +12,7 @@ close_all(), and trade_id-scoped variants of scale_out / move_stop /
 close / check_exits.
 """
 
+import json
 import time
 import logging
 from dataclasses import dataclass, field
@@ -25,6 +26,14 @@ logger = logging.getLogger("PositionManager")
 
 # MNQ: each tick (0.25) = $0.50
 DOLLAR_PER_TICK = TICK_SIZE * 2
+
+# ── P0.1: Trade memory persistence path (D13 fix) ────────────────────
+# Resolved against project root (same directory layout used by
+# core/trade_memory.py and dashboard/server.py's /api/today-pnl).
+# Exposed at module level so tests can monkeypatch the path without
+# touching the real file.
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+TRADE_MEMORY_PATH = os.path.join(_PROJECT_ROOT, "logs", "trade_memory.json")
 
 
 @dataclass
@@ -100,7 +109,7 @@ class PositionManager:
     and trade_id-scoped variants.
     """
 
-    def __init__(self):
+    def __init__(self, load_history: bool = False):
         # Canonical storage: trade_id -> Position
         self._positions: dict[str, Position] = {}
         # Trade history (closed trades) — list of trade dicts
@@ -108,6 +117,58 @@ class PositionManager:
         # Insertion-order tracker for "most-recently-opened" semantics
         # (used when legacy .position is called with multiple positions).
         self._open_order: list[str] = []
+
+        # ── P0.1 (D13): hydrate historical closed trades from disk ──────
+        # Dashboard P&L and any consumer of .trade_history / .recent_trades()
+        # used to reset to 0 on every restart. trade_memory.json is the
+        # durable source of truth; load it into memory at init time.
+        # Graceful: missing -> empty+INFO; corrupt -> empty+WARNING.
+        if load_history:
+            self._load_trade_history()
+
+    def _load_trade_history(self) -> None:
+        """Populate self.trade_history from TRADE_MEMORY_PATH.
+
+        - Missing file: stays empty, INFO log.
+        - Corrupt JSON / IO error: stays empty, WARNING log, no crash.
+        - Success: full schema preserved per-row; INFO log with count.
+
+        Module-level TRADE_MEMORY_PATH is read at call-time so tests can
+        monkeypatch position_manager.TRADE_MEMORY_PATH.
+        """
+        # Resolve lazily so tests can monkeypatch the module attribute.
+        path = sys.modules[__name__].TRADE_MEMORY_PATH
+        if not os.path.exists(path):
+            logger.info(
+                "[TRADE_MEMORY] no trade_memory.json found at %s — starting fresh",
+                path,
+            )
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                rows = json.load(f)
+        except Exception as e:
+            logger.warning(
+                "[TRADE_MEMORY] failed to load %s (%s: %s) — starting fresh",
+                path, type(e).__name__, e,
+            )
+            return
+
+        if not isinstance(rows, list):
+            logger.warning(
+                "[TRADE_MEMORY] %s did not contain a JSON list (got %s) — "
+                "starting fresh", path, type(rows).__name__,
+            )
+            return
+
+        # Schema-preserving: keep rows as-is; downstream consumers key off
+        # pnl_dollars / exit_time / bot_id / strategy which already exist
+        # (verified against 968-row live file 2026-04-22).
+        self.trade_history = list(rows)
+        logger.info(
+            "[TRADE_MEMORY] loaded %d historical trades from %s",
+            len(self.trade_history), path,
+        )
 
     # ─── Legacy single-position API (back-compat) ──────────────────────
 
