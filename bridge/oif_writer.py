@@ -455,6 +455,23 @@ def write_protection_oco(direction: str, qty: int, stop_price: float,
     B55: post-fill OCO protection. direction is the filled position side
     (LONG or SHORT); stop + target always go the OPPOSITE direction.
     Uses the same OCO_id on both legs so one fills cancels the other.
+
+    B63: After the initial commit we verify NT8 consumed BOTH legs (the
+    stop and the target file disappeared from incoming/). Three outcomes:
+
+      - Both consumed → success, return [stop_path, target_path].
+      - Exactly one consumed (half-success) → log [PROTECT_HALF], remove
+        the stuck file, and re-stage the SAME leg exactly once. If the
+        retry is also stuck, treat as failure and return [] so caller's
+        3-retry loop engages (and ultimately flattens on full failure).
+      - Neither consumed → treat as failure, return [] (caller retries).
+
+    Jennifer's observation: winning trades going +20 points then
+    reversing to LOSS without the LIMIT target triggering implies the
+    target leg was NEVER working in NT8 — either it was rejected at
+    submit (stuck in incoming/) or it was cancelled by an unrelated
+    CANCEL_ALL. Half-success recovery addresses the former; the
+    account-scoped CANCEL_ALL (B58) addresses the latter.
     """
     direction = direction.upper()
     if direction not in ("LONG", "SHORT"):
@@ -479,22 +496,103 @@ def write_protection_oco(direction: str, qty: int, stop_price: float,
         return []
 
     written = _commit_staged(staged, trade_id)
+    if len(written) != 2:
+        logger.error(f"[PROTECT:{trade_id}] commit produced only "
+                     f"{len(written)}/2 files — treating as failure")
+        for p in written:
+            try: os.remove(p)
+            except OSError: pass
+        return []
+    stop_path, target_path = written[0], written[1]
     logger.info(f"[PROTECT:{trade_id}] OCO committed: stop={stop_price:.2f} "
                 f"target={target_price:.2f} oco={oco_id}")
 
-    # B55 bulletproof: verify NT8 consumed both files within 1.5s.
-    # If still stuck → NT8 rejected (likely max-pos-qty or pricing). Caller
-    # retries. If all retries fail, caller flattens to avoid unprotected
-    # open position.
+    # B55/B63 bulletproof: verify NT8 consumed both files within 1.5s.
     stuck = _verify_consumed(written, trade_id, timeout_s=1.5)
-    if stuck:
-        logger.warning(f"[PROTECT:{trade_id}] {len(stuck)} leg(s) not "
-                       f"consumed — cleaning stuck files")
+    if not stuck:
+        return written  # Both legs consumed — happy path.
+
+    # If BOTH legs stuck → full failure; nothing is Working in NT8. Clean
+    # up and let caller's retry loop engage.
+    if len(stuck) == 2:
+        logger.warning(f"[PROTECT:{trade_id}] BOTH legs stuck — NT8 "
+                       f"rejected OCO pair; cleaning and returning failure")
         for p in stuck:
             try: os.remove(p)
             except OSError: pass
-        return []  # Empty = caller treats as failure
-    return written
+        return []
+
+    # Half-success: exactly one leg consumed, the other stuck. This is the
+    # Jennifer scenario: an unprotected leg is in NT8 and the position is
+    # half-covered (e.g. stop Working but NO target → winner reverses to
+    # loss without the LIMIT triggering, or vice versa).
+    stuck_path = stuck[0]
+    stuck_leg = "target" if stuck_path == target_path else "stop"
+    working_leg = "stop" if stuck_leg == "target" else "target"
+    logger.warning(
+        f"[PROTECT_HALF:{trade_id}] {working_leg} leg consumed by NT8 but "
+        f"{stuck_leg} leg stuck ({os.path.basename(stuck_path)}). "
+        f"Position is half-protected — attempting single re-place of "
+        f"{stuck_leg} leg."
+    )
+    try: os.remove(stuck_path)
+    except OSError: pass
+
+    # Re-stage the missing leg ONCE with a fresh oif counter. Same OCO id
+    # so the already-Working leg still cancels when this one fills.
+    try:
+        retry_line = (target_line if stuck_leg == "target" else stop_line)
+        retry_tmp, retry_final = _stage_oif(retry_line, trade_id,
+                                            suffix=f"{stuck_leg}_retry")
+    except OSError as e:
+        logger.error(f"[PROTECT_HALF:{trade_id}] retry stage failed: {e} — "
+                     f"position still half-protected, returning failure")
+        try: os.remove(working_leg == "stop" and stop_path or target_path)
+        except OSError: pass
+        return []
+
+    retry_written = _commit_staged([(retry_tmp, retry_final)], trade_id)
+    if not retry_written:
+        logger.error(f"[PROTECT_HALF:{trade_id}] retry commit failed — "
+                     f"position still half-protected, returning failure")
+        return []
+
+    retry_stuck = _verify_consumed(retry_written, trade_id, timeout_s=1.5)
+    if retry_stuck:
+        logger.error(
+            f"[PROTECT_HALF:{trade_id}] {stuck_leg} retry ALSO stuck — "
+            f"giving up; caller's outer retry will re-place the full pair "
+            f"or flatten. Cleaning up remaining files."
+        )
+        for p in retry_stuck:
+            try: os.remove(p)
+            except OSError: pass
+        # Also remove the working leg so caller's outer retry starts clean
+        # (otherwise we'd have a Working stop/target in NT8 that could
+        # double-hit when the outer retry submits another OCO pair).
+        working_path = stop_path if stuck_leg == "target" else target_path
+        try:
+            from bridge.oif_writer import cancel_all_orders_line
+            cancel_line = cancel_all_orders_line(account=account)
+            cancel_tmp, cancel_final = _stage_oif(cancel_line, trade_id,
+                                                  suffix="half_cleanup")
+            _commit_staged([(cancel_tmp, cancel_final)], trade_id)
+            logger.warning(
+                f"[PROTECT_HALF:{trade_id}] submitted CANCEL_ALL on "
+                f"{account} to clear the lingering {working_leg} leg "
+                f"before outer retry."
+            )
+        except Exception as e:
+            logger.error(f"[PROTECT_HALF:{trade_id}] cleanup cancel failed: {e}")
+        return []
+
+    logger.info(
+        f"[PROTECT_HALF:{trade_id}] {stuck_leg} retry consumed — OCO "
+        f"now fully protected (stop + target Working in NT8)."
+    )
+    # Return both legs: the originally-working path + the retry path.
+    working_path = stop_path if stuck_leg == "target" else target_path
+    return [working_path, retry_written[0]]
 
 
 def write_oif(action: str, qty: int = 1, stop_price: float = None,
