@@ -27,15 +27,39 @@ logger = logging.getLogger("SimpleSizing")
 PHOENIX_ROOT = Path(__file__).parent.parent
 CONFIG_PATH = PHOENIX_ROOT / "memory" / "procedural" / "small_account_config.yaml"
 
-# Fallback defaults if YAML not yet present (Saturday will create the file)
-DEFAULT_CONFIG = {
+# Fallback defaults if YAML not yet present (Saturday will create the file).
+# B19: max_daily_loss_usd is NOT defaulted here — it must come from
+# config/settings.DAILY_LOSS_LIMIT to stay in sync with the single source
+# of truth. _build_default_config() below materializes it at call time.
+_STATIC_DEFAULTS = {
     "max_loss_per_trade_usd": 5.0,
-    "max_daily_loss_usd": 15.0,
     "contracts_per_trade": 1,
     "max_trades_per_day": 4,
     "veto_low_conviction_threshold": 80,
     "loss_streak_cooldown_minutes": 5,
 }
+
+
+def _build_default_config() -> dict:
+    """
+    Assemble small-account defaults, sourcing max_daily_loss_usd from
+    config/settings.py so we never drift from the real daily cap.
+    """
+    cfg = dict(_STATIC_DEFAULTS)
+    try:
+        from config.settings import DAILY_LOSS_LIMIT
+        cfg["max_daily_loss_usd"] = float(DAILY_LOSS_LIMIT)
+    except Exception as e:
+        # Settings should always be importable; if not, fail loudly rather
+        # than resurrect a stale hardcoded fallback (B19).
+        raise RuntimeError(
+            "simple_sizing requires config.settings.DAILY_LOSS_LIMIT"
+        ) from e
+    return cfg
+
+
+# Back-compat alias (any external import of DEFAULT_CONFIG still works).
+DEFAULT_CONFIG = _build_default_config()
 
 
 def _load_config() -> dict:
@@ -48,7 +72,7 @@ def _load_config() -> dict:
     """
     if not CONFIG_PATH.exists():
         logger.debug(f"[SIZING] Config not found at {CONFIG_PATH}, using defaults")
-        return DEFAULT_CONFIG.copy()
+        return _build_default_config()
     try:
         try:
             import yaml
@@ -79,17 +103,17 @@ def _load_config() -> dict:
                     return full_account
                 except ImportError as e:
                     logger.warning(f"[SIZING] settings.py defaults unavailable: {e}")
-                    return DEFAULT_CONFIG.copy()
+                    return _build_default_config()
             # Enabled: merge YAML values over defaults
-            merged = DEFAULT_CONFIG.copy()
+            merged = _build_default_config()
             merged.update({k: v for k, v in cfg.items() if v is not None and k != "enabled"})
             return merged
         except ImportError:
             logger.warning("[SIZING] PyYAML not installed, using defaults")
-            return DEFAULT_CONFIG.copy()
+            return _build_default_config()
     except Exception as e:
         logger.warning(f"[SIZING] Config load failed ({e}), using defaults")
-        return DEFAULT_CONFIG.copy()
+        return _build_default_config()
 
 
 class SimpleSizer:
