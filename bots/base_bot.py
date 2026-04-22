@@ -2686,7 +2686,7 @@ class BaseBot:
         partial = self.positions.scale_out_partial(price, n_exit, "scale_out_target")
         if partial:
             self.risk.record_trade(partial["pnl_dollars"])
-            self.trade_memory.record(partial)
+            self.trade_memory.record(partial, bot_id=self.bot_name)
             logger.info(f"[SCALE_OUT:{tid}] Partial P&L: ${partial['pnl_dollars']:.2f} "
                         f"({partial['pnl_ticks']:.1f}t)")
 
@@ -2816,7 +2816,7 @@ class BaseBot:
         trade = self.positions.close_position(price, reason, trade_id=tid)
         if trade:
             self.risk.record_trade(trade["pnl_dollars"])
-            self.trade_memory.record(trade)
+            self.trade_memory.record(trade, bot_id=self.bot_name)
             self.tracker.record_trade(trade)
             self._on_trade_closed(trade)  # P3: wire circuit breakers (stub; P10a completes wiring)
 

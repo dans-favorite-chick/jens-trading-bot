@@ -39,8 +39,21 @@ class TradeMemory:
         except Exception as e:
             logger.error(f"Could not save trade memory: {e}")
 
-    def record(self, trade: dict):
+    def record(self, trade: dict, bot_id: str | None = None):
+        """
+        Persist a closed trade.
+
+        Args:
+            trade: Trade dict from position manager.
+            bot_id: Originating bot name ("prod" | "lab" | "sim"). Stamped
+                    into trade dict so downstream consumers (dashboard,
+                    learner) can partition P&L across bots. B16 fix.
+        """
         trade["recorded_at"] = datetime.now().isoformat()
+        if bot_id is not None:
+            trade["bot_id"] = bot_id
+        elif "bot_id" not in trade:
+            trade["bot_id"] = None
         self.trades.append(trade)
         self.save()
 

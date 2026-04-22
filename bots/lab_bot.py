@@ -453,7 +453,7 @@ class LabBot(BaseBot):
             return
 
         self.risk.record_trade(trade["pnl_dollars"])
-        self.trade_memory.record(trade)
+        self.trade_memory.record(trade, bot_id=self.bot_name)
         self.tracker.record_trade(trade)
 
         # MAE/MFE analysis
