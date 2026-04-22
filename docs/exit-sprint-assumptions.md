@@ -88,3 +88,28 @@
   MFE) were physically unreachable inside the trade's hold. That's
   S1/strategy territory. B63 closes the observability gap so if the
   real OCO-half-attach bug does occur it can't hide any more.
+
+## S6 — Directional conflict observability (B70-B72, 2026-04-21)
+
+- **Non-blocking**: conflicts are DETECTED and LOGGED only. No block,
+  arbitrate, or auto-flatten. Decision deferred 2-4 weeks pending data.
+- **P&L attribution**: per-event P&L in the 17:00 CT recap and in
+  `analyze_conflicts.py` is matched by `trade_id` out of trade_memory.
+  Both halves of a conflict pair contribute independently; "conflict
+  cost" is the sum of P&L across every trade that was part of ANY pair
+  that day. Overlap time reported is the MAX overlap any pair reached
+  (simpler than per-pair integration and good enough for the Yes/No
+  "are we seeing conflicts" question).
+- **Dedup key format**: `conflict_opened:<strategyA>-<strategyB>` with
+  the two names alphabetically sorted, so "A vs B" and "B vs A" share
+  one 15-minute cooldown (per B54's send_sync).
+- **Registry instance**: base_bot lazily constructs a local
+  `StrategyRiskRegistry` for conflict detection only (attr
+  `_conflict_reg`). This does NOT replace sim_bot's per-strategy halt
+  registry — the detector is stateless w.r.t. halts, it only needs the
+  two helper methods (`detect_directional_conflicts`, `exposure_snapshot`).
+- **Log dir override**: tests set `PHOENIX_CONFLICT_LOG_DIR` to sandbox
+  jsonl writes; production uses `logs/conflicts/YYYY-MM-DD.jsonl`.
+- **B73 dashboard panel**: deferred. Scope-trade to keep the sprint
+  tight; conflict data is already captured to jsonl and accessible via
+  the CLI. Add panel in a follow-up if Jennifer wants live visibility.
