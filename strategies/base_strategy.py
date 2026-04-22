@@ -99,6 +99,13 @@ class BaseStrategy:
     # or ATR_STOP_MAX_TICKS) when this flag is set. Subclasses using
     # managed exits (time-based, signal-flip, EoD-flat) should set True.
     uses_managed_exit: bool = False
+    # WS-A guaranteed-loss audit (2026-04-21): CI sanity tests use these
+    # flags to recognize strategies that bypass config-driven target_rr /
+    # stop_ticks and instead compute prices directly from market structure.
+    # Set True only when evaluate() emits a concrete Signal.target_price
+    # / self-computed stop on every signal path.
+    computes_own_target: bool = False
+    computes_own_stop: bool = False
 
     def __init__(self, config: dict):
         """

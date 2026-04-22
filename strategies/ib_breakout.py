@@ -34,6 +34,10 @@ _REGIME_OVERRIDES = {
 
 class IBBreakout(BaseStrategy):
     name = "ib_breakout"
+    # Computes target_rr from IB width and stop from IB structure per signal;
+    # config carries no static target_rr / stop_ticks.
+    computes_own_target = True
+    computes_own_stop = True
 
     def __init__(self, config: dict):
         super().__init__(config)

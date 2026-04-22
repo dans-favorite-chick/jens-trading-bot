@@ -78,6 +78,10 @@ class OpeningSessionStrategy(BaseStrategy):
     """Single strategy dispatching to 6 opening-window sub-evaluators."""
 
     name = "opening_session"
+    # Each sub-evaluator computes stop_price from structure and target_price
+    # from pivots / OR; config carries no static target_rr / stop_ticks.
+    computes_own_target = True
+    computes_own_stop = True
 
     def __init__(self, config: dict):
         super().__init__(config)

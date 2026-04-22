@@ -48,6 +48,8 @@ class NoiseAreaMomentum(BaseStrategy):
     # risk_manager is a structural disaster anchor, not a real stop —
     # sizing must not take it at face value or contracts collapse to 0.
     uses_managed_exit = True
+    # Stop computed from wick geometry at signal time; no config stop_ticks.
+    computes_own_stop = True
 
     def __init__(self, config: dict):
         super().__init__(config)
