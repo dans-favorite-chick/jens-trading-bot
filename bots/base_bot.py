@@ -518,12 +518,27 @@ class BaseBot:
     # tests can monkeypatch (via bots.base_bot.RUNTIME_RECON_INTERVAL_S).
     RUNTIME_RECON_INTERVAL_S: float = 30.0
 
-    async def _runtime_reconciliation_loop(self) -> None:
-        """P0.3: periodic NT8-ledger reconciliation during the session.
+    # P0.6 (D7) exit_pending timeout. If a position sits in exit_pending
+    # state for longer than this, the CLOSEPOSITION OIF probably never
+    # filled at NT8 — fire CRITICAL + halt the strategy so a "Python
+    # thinks flat but NT8 isn't" divergence doesn't bleed silently.
+    EXIT_PENDING_TIMEOUT_S: float = 60.0
 
-        Runs `_reconcile_positions_from_nt8` on a timer. A clean-shutdown
-        flag (`self._shutdown_reconciliation`) lets run() stop the loop
-        gracefully without hanging on sleep.
+    async def _runtime_reconciliation_loop(self) -> None:
+        """P0.3 + P0.6: periodic NT8-ledger reconciliation during the
+        session.
+
+        Each cycle:
+          1. Run `_reconcile_positions_from_nt8` to adopt any orphan NT8
+             position not tracked in PositionManager (P0.3).
+          2. Walk every `exit_pending` position: if NT8 shows FLAT for
+             its account+instrument, call `finalize_exit_pending` to
+             promote it to a closed trade. If a position has been
+             exit_pending longer than EXIT_PENDING_TIMEOUT_S, fire a
+             CRITICAL alert so the operator can investigate.
+
+        A clean-shutdown flag (`self._shutdown_reconciliation`) lets
+        run() stop the loop gracefully without hanging on sleep.
 
         Exceptions are caught + logged so one bad cycle doesn't kill the
         loop — the next tick keeps trying.
@@ -533,6 +548,7 @@ class BaseBot:
                 await asyncio.sleep(self.RUNTIME_RECON_INTERVAL_S)
                 if getattr(self, "_shutdown_reconciliation", False):
                     break
+                # P0.3: orphan adoption.
                 adopted = self._reconcile_positions_from_nt8()
                 if adopted:
                     logger.info(
@@ -540,12 +556,98 @@ class BaseBot:
                         f"position(s) mid-session (accounts: "
                         f"{[a['account'] for a in adopted]})"
                     )
+                # P0.6: exit_pending resolution.
+                self._resolve_exit_pending_positions()
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(
                     f"[RUNTIME_RECON] cycle failed (will retry next interval): {e!r}"
                 )
+
+    def _resolve_exit_pending_positions(self) -> None:
+        """P0.6 (D7): finalize exit_pending positions when NT8 confirms
+        FLAT, or escalate when the pending window exceeds
+        EXIT_PENDING_TIMEOUT_S.
+
+        NT8's position file shape: `<instrument> Globex_<account>_position.txt`
+        containing `LONG;qty;price` / `SHORT;qty;price` / `FLAT;0;0`.
+        `FLAT` (or file missing) means the account+instrument has no
+        open position — safe to finalize our pending exit.
+        """
+        pending = self.positions.exit_pending_positions()
+        if not pending:
+            return
+
+        from config.settings import OIF_OUTGOING, INSTRUMENT
+        from core.startup_reconciliation import _read_position_file
+
+        now = time.time()
+        for pos in pending:
+            nt8_state = _read_position_file(OIF_OUTGOING, INSTRUMENT, pos.account)
+            if nt8_state is None:
+                # FLAT or unreadable → treat as confirmed-closed; finalize.
+                trade = self.positions.finalize_exit_pending(pos.trade_id)
+                logger.info(
+                    f"[EXIT_FINALIZED:{pos.trade_id}] NT8 confirmed FLAT "
+                    f"on {pos.account} — closed {pos.direction} @ "
+                    f"{pos.pending_exit_price:.2f} "
+                    f"reason={pos.pending_exit_reason}"
+                )
+                # Propagate to risk / tracker / trade_memory / circuit
+                # breakers — same post-close hooks that _exit_trade used
+                # to fire synchronously before P0.6 moved the finalize
+                # out here.
+                if trade:
+                    try:
+                        self.risk.record_trade(trade["pnl_dollars"])
+                    except Exception as _e:
+                        logger.error(f"[EXIT_FINALIZE] risk.record_trade failed: {_e!r}")
+                    try:
+                        self.trade_memory.record(trade, bot_id=self.bot_name)
+                    except Exception as _e:
+                        logger.error(f"[EXIT_FINALIZE] trade_memory.record failed: {_e!r}")
+                    try:
+                        self.tracker.record_trade(trade)
+                    except Exception as _e:
+                        logger.error(f"[EXIT_FINALIZE] tracker.record failed: {_e!r}")
+                    try:
+                        self._on_trade_closed(trade)
+                    except Exception as _e:
+                        logger.error(f"[EXIT_FINALIZE] _on_trade_closed failed: {_e!r}")
+                continue
+
+            # NT8 still shows a position on this account. Check timeout.
+            age_s = now - pos.exit_pending_since
+            if age_s > self.EXIT_PENDING_TIMEOUT_S:
+                msg = (
+                    f"[EXIT_PENDING_TIMEOUT:{pos.trade_id}] {pos.account} "
+                    f"still shows {nt8_state[0]} {nt8_state[1]}@{nt8_state[2]} "
+                    f"after {age_s:.0f}s — Python thinks flat but NT8 is not. "
+                    f"CLOSEPOSITION OIF likely never filled. Halting "
+                    f"strategy '{pos.strategy}' — operator flatten required."
+                )
+                logger.critical(msg)
+                try:
+                    from core.telegram_notifier import send_sync
+                    send_sync(
+                        f"🚨 [EXIT_TIMEOUT] {pos.account} stuck exit_pending "
+                        f"{age_s:.0f}s — {msg}",
+                        dedup_key=f"exit_pending_timeout:{pos.trade_id}",
+                    )
+                except Exception:
+                    pass
+                # Strategy halt hook — existing StrategyRiskRegistry has a
+                # halt_strategy method; best-effort.
+                try:
+                    from core.strategy_risk_registry import StrategyRiskRegistry
+                    reg = getattr(self, "_conflict_reg", None) or StrategyRiskRegistry()
+                    if hasattr(reg, "halt_strategy"):
+                        reg.halt_strategy(pos.strategy, reason="exit_pending_timeout")
+                except Exception as _e:
+                    logger.error(
+                        f"[EXIT_PENDING_TIMEOUT] halt_strategy failed: {_e!r}"
+                    )
 
     def load_strategies(self):
         """Load strategy instances from config. Override in subclass if needed."""
@@ -3300,10 +3402,27 @@ class BaseBot:
         except Exception:
             pass
 
-        # Phase C: pass trade_id explicitly so multi-position close operates
-        # on the right slot (no-op for single-position since _resolve_trade_id
-        # will pick the sole active).
-        trade = self.positions.close_position(price, reason, trade_id=tid)
+        # P0.6 (D7): mark the position exit_pending and let runtime
+        # reconciliation finalize it only when NT8 confirms FLAT. Before
+        # P0.6, close_position was called unconditionally — Python
+        # thought the position was closed even if NT8 never filled the
+        # EXIT (e.g. ATI rejection, bridge crash post-send). That left
+        # dashboards showing flat while a bleeding position sat on NT8.
+        #
+        # Fallback: if exit WS-send failed AND OIF fallback also failed
+        # (exit_sent=False), we STILL close the Python position to avoid
+        # leaking a Position record nobody will ever close — but we log
+        # CRITICAL because this is the manual-exit-required scenario.
+        if exit_sent:
+            self.positions.mark_exit_pending(tid, price, reason)
+            trade = None  # finalized later by runtime reconciliation
+        else:
+            logger.critical(
+                f"[EXIT_FORCE_CLOSE:{tid}] NT8 exit send failed; force-"
+                f"closing Python state to avoid leaked Position record. "
+                f"Operator MUST verify NT8 is flat on {pos.account}."
+            )
+            trade = self.positions.close_position(price, reason, trade_id=tid)
 
         # B70: if the closing trade was in any conflict pair, log it.
         try:

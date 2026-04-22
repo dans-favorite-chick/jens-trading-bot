@@ -49,6 +49,21 @@ class Position:
     reason: str
     market_snapshot: dict  # Snapshot of market data at entry
 
+    # ── P0.6 (D7) exit_pending state ───────────────────────────────
+    # Flipped by mark_exit_pending(). While exit_pending is True, the
+    # Position remains in the PositionManager (NOT yet closed) but is
+    # blocked from new entries on the same account. Runtime
+    # reconciliation transitions the position to "closed" (full
+    # close_position / trade_history append) only once NT8 confirms
+    # FLAT for the instrument+account. If exit_pending persists beyond
+    # EXIT_PENDING_TIMEOUT_S, base_bot fires a CRITICAL alert + halts
+    # the strategy so a lingering "thinks flat but isn't" divergence
+    # never bleeds silently.
+    exit_pending: bool = False
+    exit_pending_since: float = 0.0   # unix epoch seconds
+    pending_exit_price: float = 0.0
+    pending_exit_reason: str = ""
+
     # ── Phase 4C multi-account routing ─────────────────────────────
     # account is the NT8 sim account the entry was routed to; exit /
     # scale-out / BE-stop OIFs must use the same account.
@@ -386,6 +401,67 @@ class PositionManager:
                      f"reason={exit_reason} hold={trade['hold_time_s']:.0f}s")
 
         return trade
+
+    # ─── P0.6 (D7) exit_pending state management ───────────────────────
+    def mark_exit_pending(
+        self, trade_id: str, exit_price: float, exit_reason: str,
+        now: float | None = None,
+    ) -> bool:
+        """Flag a position as awaiting NT8 flatten confirmation.
+
+        The Position remains in `_positions` (NOT deleted) so downstream
+        consumers see it as a blocker for new entries on its account.
+        Runtime reconciliation will finalize (call close_position) once
+        NT8 outgoing/ confirms FLAT. Returns True on success, False if
+        trade_id not found.
+        """
+        tid = self._resolve_trade_id(trade_id)
+        if tid is None or tid not in self._positions:
+            return False
+        pos = self._positions[tid]
+        pos.exit_pending = True
+        pos.exit_pending_since = time.time() if now is None else now
+        pos.pending_exit_price = exit_price
+        pos.pending_exit_reason = exit_reason
+        logger.info(
+            f"[EXIT_PENDING:{tid}] {pos.direction} @ {exit_price} "
+            f"reason={exit_reason} — awaiting NT8 flatten confirmation"
+        )
+        return True
+
+    def finalize_exit_pending(self, trade_id: str) -> dict | None:
+        """Complete an exit_pending position using the stashed exit
+        price/reason. Called by runtime reconciliation once NT8 is FLAT
+        for the position's account. No-op if the position isn't pending.
+        """
+        tid = self._resolve_trade_id(trade_id)
+        if tid is None or tid not in self._positions:
+            return None
+        pos = self._positions[tid]
+        if not pos.exit_pending:
+            # Not in pending state — caller shouldn't call this. Return
+            # None instead of silently closing.
+            logger.warning(
+                f"[FINALIZE:{tid}] called but position is not exit_pending — "
+                f"ignoring"
+            )
+            return None
+        return self.close_position(
+            pos.pending_exit_price, pos.pending_exit_reason, trade_id=tid,
+        )
+
+    def exit_pending_positions(self) -> list[Position]:
+        """All positions currently awaiting NT8 flatten confirmation."""
+        return [p for p in self._positions.values() if p.exit_pending]
+
+    def has_exit_pending_for_account(self, account: str) -> bool:
+        """P0.6: prevents new entries on an account while a close is
+        pending — callers should check this before emitting a new signal
+        so we don't double-fill during the reconciliation window."""
+        return any(
+            p.exit_pending and p.account == account
+            for p in self._positions.values()
+        )
 
     def close_all(self, exit_price: float, exit_reason: str) -> list[dict]:
         """Close ALL active positions (e.g. 4pm CT daily flatten).

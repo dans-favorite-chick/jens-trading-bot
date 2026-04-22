@@ -257,4 +257,73 @@ duplicating the logic inside `write_be_stop` would fork the cancel-replace
 policy into two places — higher maintenance burden, higher drift risk.
 
 ## P0.6 Close-Position Verification
-_(to be filled in by S6)_
+
+**New Position fields:** `exit_pending: bool`, `exit_pending_since: float`,
+`pending_exit_price: float`, `pending_exit_reason: str`. Default
+empty — a freshly opened position has no pending exit.
+
+**New PositionManager methods:**
+- `mark_exit_pending(trade_id, exit_price, exit_reason, now=None)` —
+  flips the flags but keeps the Position in `_positions`. Dashboard
+  and `is_flat` / `active_count` continue to see it. Idempotent-ish:
+  calling twice just refreshes timestamps.
+- `finalize_exit_pending(trade_id)` — completes the close using the
+  stashed exit price/reason/time. Returns the same trade dict that
+  `close_position` does, so post-close hooks work identically. **No-op
+  (returns None + WARNING log) if the position is NOT in pending
+  state** — prevents silent close bugs if the resolver is called on a
+  still-live position.
+- `exit_pending_positions()` — list accessor for the resolver.
+- `has_exit_pending_for_account(account)` — entry-side gate. Callers
+  that open new signals should check this to prevent double-fills
+  during the reconciliation window.
+
+**Timeout: 60 seconds** (`BaseBot.EXIT_PENDING_TIMEOUT_S`). Rationale:
+- NT8 sim fills usually happen within 1–3 seconds. 60s is 20× the
+  happy-path window — anything longer is a real failure mode (ATI
+  reject, bridge crash, connection loss).
+- Module-level constant so tests monkeypatch it.
+
+**Timeout behaviour: CRITICAL log + Telegram + halt strategy. Does NOT
+force-finalize.** Critical distinction: if Python silently marks the
+position closed while NT8 still has a live position, the operator loses
+visibility of the real risk. Better to leave the position tagged
+exit_pending, halt new entries on its strategy, and surface the alert
+so the operator flattens manually and then reconciliation picks up the
+natural FLAT state.
+
+**`_exit_trade` wired to the new path:** if the exit WS-send succeeded
+it calls `mark_exit_pending(...)` and returns `trade=None` — no
+immediate close, no immediate trade_history append. If BOTH the
+WS-send AND the OIF fallback failed (`exit_sent=False`), we fall back
+to the old unconditional `close_position` to avoid leaking a Position
+record nobody will ever close — but log CRITICAL because this is the
+manual-exit-required scenario.
+
+**Post-close hooks moved into resolver** (`_resolve_exit_pending_positions`
+inside the runtime-reconciliation loop): when NT8 confirms FLAT and
+`finalize_exit_pending` returns a trade dict, the resolver fires the
+same `risk.record_trade` / `trade_memory.record` / `tracker.record_trade`
+/ `_on_trade_closed` hooks that `_exit_trade` used to fire synchronously.
+Hooks are each wrapped in try/except — one bad consumer doesn't stop
+the others from running.
+
+**Known deferral: expectancy engine + conflict resolution logging.**
+`_exit_trade` also called `self.expectancy.close_trade(...)` and the
+B70 conflict-closed logging path BEFORE close_position. Those paths
+aren't wired into the resolver yet because (a) they need market-snap
+context captured at exit time, not at finalize time; (b) they'd need
+their own data stash on the Position alongside pending_exit_price /
+pending_exit_reason. Flagged in `docs/phase-0-report.md` as a known
+gap — Phase 1 broker-event stream will resolve it naturally.
+
+**Tests: 14 new.**
+- `mark_exit_pending`: 3 tests (flips flags, keeps position, refuses
+  unknown trade_id).
+- `finalize_exit_pending`: 4 tests (produces trade record, removes
+  from active, appends to trade_history, no-op when not pending).
+- Entry blocking: 4 tests (no-pending unblocked / pending blocks
+  same account / doesn't block other accounts / pending_positions
+  accessor returns only pending).
+- Runtime resolution: 3 tests (finalize when NT8 FLAT / stays pending
+  when NT8 still shows position / CRITICAL fires after timeout).
