@@ -3163,18 +3163,26 @@ class BaseBot:
         be_price = pos.entry_price
         self.positions.move_stop_to_be(be_price)
 
-        # STEP 5: Place new BE stop order in NT8 for remaining contract
+        # STEP 5: Move the EXISTING OCO stop to break-even via the B76
+        # cancel+replace flow. Do NOT use write_be_stop (which only PLACES
+        # a new stop without cancelling the old one) — that leaves TWO
+        # stops on the account:
+        #   - the original OCO stop (auto-reduced by NT8 from qty=2 to
+        #     qty=1 after the partial-exit market order filled), still at
+        #     the original entry-stop_price
+        #   - the new BE stop at entry_price
+        # If the market moves adversely, the BE stop fires for qty=1,
+        # CLOSING the position. But the OCO stop is still working — if
+        # price bounces and hits IT, NT8 places a REVERSAL fill. That's
+        # the orphan-phantom-trade signature from the 2026-04-22 incident.
+        # P0.5 (D4) fix: use _move_nt8_stop → write_modify_stop, which
+        # stages PLACE-new-stop + CANCEL-old-stop atomically (PLACE first,
+        # CANCEL second — the safe ordering; see write_modify_stop docstring
+        # for the full hierarchy).
         try:
-            from bridge.oif_writer import write_be_stop
-            write_be_stop(
-                direction=pos.direction,
-                stop_price=be_price,
-                n_contracts=pos.contracts,  # After scale-out, remaining count
-                trade_id=f"{tid}_be",
-                account=pos.account,
-            )
+            _move_nt8_stop(pos, pos.entry_price, be_price)
         except Exception as e:
-            logger.warning(f"[SCALE_OUT:{tid}] BE stop OIF failed (non-blocking): {e}")
+            logger.warning(f"[SCALE_OUT:{tid}] BE stop-modify failed (non-blocking): {e}")
 
         # STEP 6: Activate rider mode — stall detector now owns the exit
         pos.rider_mode = True

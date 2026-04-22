@@ -199,7 +199,62 @@ Catching-and-ignoring defeats the defence. This is in-scope for S4/S5/S6
 since those streams touch the caller sites.
 
 ## P0.5 Scale-Out Race Fix
-_(to be filled in by S5)_
+
+**Root cause analysis.** Before P0.5, `_scale_out_trade` called
+`write_be_stop` (pure PLACE, no CANCEL) to place a NEW break-even stop
+after the partial-exit market fill. Meanwhile the ORIGINAL OCO stop —
+auto-reduced by NT8 from qty=2 → qty=1 when the partial fill cleared —
+remained working at its original trigger price.
+
+Result: TWO stops on the same position. If price moved adversely, the
+BE stop fired first (closing the position). If price then bounced back
+past the ORIGINAL stop, NT8 placed a REVERSAL fill — the orphan-phantom
+SHORT/LONG signature seen on 2026-04-22.
+
+**Fix.** Switched `_scale_out_trade` from `write_be_stop(...)` to
+`_move_nt8_stop(pos, pos.entry_price, be_price)`. `_move_nt8_stop`
+threads through the existing B76 `write_modify_stop` cancel+replace
+path, which uses `pos.stop_order_id` (captured when the bracket was
+entered) to target the exact OCO stop leg — no dangling stops.
+
+**Commit-order ordering in `write_modify_stop` (critical).** Previously
+staged CANCEL-old THEN PLACE-new. `_commit_staged` walks the list in
+order, so the cancel committed first — brief no-stop window until the
+new stop lands. P0.5 flipped the stage order: PLACE-new FIRST, CANCEL
+SECOND.
+
+Sprint-spec hierarchy:
+```
+CHANGE > PLACE_NEW + CANCEL_OLD > CANCEL_OLD + PLACE_NEW  (FORBIDDEN)
+```
+NT8 ATI doesn't expose a true CHANGE verb via OIF, so the middle
+option is our best available. CHANGE-via-event-stream is Phase-1 work.
+
+**Why PLACE-before-CANCEL is safe even with a brief two-stop window:**
+if price races past both triggers during the ~100 ms window, NT8 fills
+the FIRST-touched stop — which is the better-priced one for our P&L
+direction. The second stop then tries to fire on a flat position and
+NT8 rejects it cleanly. Worst case: one unnecessary round-trip of
+OIF noise. Contrast with CANCEL-first: if price gaps in the no-stop
+window, we're exposed to unlimited loss. Asymmetric: PLACE-first's
+downside is noise, CANCEL-first's downside is money.
+
+**Tests: 6 new.** Coverage:
+- `write_modify_stop` commit order: new-stop file FIRST, cancel file SECOND.
+- First file body starts with `PLACE…STOPMARKET`, second with `CANCEL`.
+- Source-level grep on `_scale_out_trade`: MUST NOT contain
+  `write_be_stop(` call (regression guard for the orphan-stop bug).
+- Source-level grep on `_scale_out_trade`: MUST contain `_move_nt8_stop`.
+- Source-level grep on `_move_nt8_stop`: MUST route through
+  `write_modify_stop` (not a bare place path).
+- Source-order check inside `write_modify_stop`: `stop_replace` stage
+  must appear before `stop_cancel` stage in the function source.
+
+Alternative considered + rejected: passing a `cancel_old_stop=True` kwarg
+to `write_be_stop` so it internally does the cancel+replace. Rejected
+because `write_modify_stop` already exists for exactly that purpose;
+duplicating the logic inside `write_be_stop` would fork the cancel-replace
+policy into two places — higher maintenance burden, higher drift risk.
 
 ## P0.6 Close-Position Verification
 _(to be filled in by S6)_

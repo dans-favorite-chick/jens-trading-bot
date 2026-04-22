@@ -619,12 +619,24 @@ def scan_outgoing_for_order_id(account, expected_price, tolerance=0.01, timeout_
 
 
 def write_modify_stop(direction, new_stop_price, n_contracts, trade_id, account, old_stop_order_id):
-    """B76: cancel the existing STOPMARKET stop (by NT8 order_id) and
-    immediately submit a replacement at new_stop_price. Brief unprotected
-    window between cancel confirm and new-stop accepted is accepted.
+    """B76 + P0.5 (D4): replace an existing STOPMARKET stop with a new one
+    at new_stop_price.
 
-    Returns list of OIF file paths written (2 on success) or [] on
-    early-guard rejection.
+    Ordering (P0.5): PLACE new stop FIRST, verify it's working, THEN
+    CANCEL the old stop. The reverse order (CANCEL → PLACE) is FORBIDDEN
+    because it opens a brief no-stop window during which adverse price
+    movement is completely unprotected. Placing first opens a brief
+    two-stop window instead — worse case is that a sharp move hits the
+    LESS favourable stop first, which is recoverable; a no-stop gap is
+    a real loss.
+
+    Ordering hierarchy (spec § scale-out):
+      CHANGE in place > PLACE_NEW+CANCEL_OLD > CANCEL_OLD+PLACE_NEW (FORBIDDEN)
+    NT8 ATI doesn't expose a true CHANGE verb on OIF, so we use the
+    middle option. CHANGE upgrade is Phase-1 event-stream work.
+
+    Returns list of OIF file paths written (2 on success, in commit
+    order: [new_stop, cancel_old]) or [] on early-guard rejection.
     """
     _reject_live_account(account, f"write_modify_stop[{trade_id}]")
     if direction is None or direction.upper() not in ("LONG", "SHORT"):
@@ -643,10 +655,12 @@ def write_modify_stop(direction, new_stop_price, n_contracts, trade_id, account,
         side=exit_side, qty=n_contracts, stop_price=new_stop_price, account=account,
     )
 
+    # P0.5 ORDERING: stage new stop FIRST so it commits first (no-stop
+    # window would be catastrophic; two-stop window is merely inefficient).
     staged = []
     try:
-        staged.append(_stage_oif(cancel_line, trade_id, suffix="stop_cancel"))
         staged.append(_stage_oif(new_stop_line, trade_id, suffix="stop_replace"))
+        staged.append(_stage_oif(cancel_line, trade_id, suffix="stop_cancel"))
     except OSError as e:
         logger.error(f"[STOP_MODIFY:{trade_id}] stage failed: {e}")
         return []
