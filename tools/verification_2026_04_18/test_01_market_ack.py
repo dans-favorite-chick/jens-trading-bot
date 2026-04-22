@@ -1,5 +1,5 @@
 """
-Verification test 01 — does NT8 write outgoing/<orderId>.txt for a MARKET order?
+Verification test 01 â€” does NT8 write outgoing/<orderId>.txt for a MARKET order?
 
 Sends BUY 1 MNQ MARKET via OIF with ORDER ID at field index 10 (per NT8 docs):
   PLACE; 1:ACCT; 2:INST; 3:ACTION; 4:QTY; 5:TYPE; 6:LIMIT; 7:STOP; 8:TIF; 9:OCO; 10:ORDER_ID; 11:STRAT; 12:STRAT_ID
@@ -26,11 +26,11 @@ from config.settings import OIF_INCOMING, OIF_OUTGOING, ACCOUNT, INSTRUMENT
 
 ORDER_ID = f"MANTEST_MKT_{int(time.time() * 1000)}"
 
-# NT8 PLACE template — ORDER ID at field 10
-oif_line = f"PLACE;{ACCOUNT};{INSTRUMENT};BUY;1;MARKET;0;0;DAY;;{ORDER_ID};;"
+# NT8 PLACE template â€” ORDER ID at field 10
+oif_line = f"PLACE;{ACCOUNT};{INSTRUMENT};BUY;1;MARKET;0;0;GTC;;{ORDER_ID};;"
 
 print("=" * 60)
-print("Test 01 — MARKET order ACK verification")
+print("Test 01 â€” MARKET order ACK verification")
 print("=" * 60)
 print(f"Account:    {ACCOUNT}")
 print(f"Instrument: {INSTRUMENT}")
@@ -59,7 +59,7 @@ print(f"Wrote OIF to incoming: {oif_name}")
 print()
 
 # Poll outgoing for 30s
-print("Polling OIF_OUTGOING (30s) — new/modified files only:")
+print("Polling OIF_OUTGOING (30s) â€” new/modified files only:")
 start = time.time()
 seen = {}  # fname -> list of (timestamp, size, content)
 
@@ -115,7 +115,7 @@ cancel_line = f"CANCEL;;;;;;;;;;{ORDER_ID};;"
 with open(os.path.join(OIF_INCOMING, f"oif_verify_mkt_cancel_{ORDER_ID}.txt"), "w") as f:
     f.write(cancel_line + "\n")
 time.sleep(1)
-close_line = f"CLOSEPOSITION;{ACCOUNT};{INSTRUMENT};DAY;;;;;;;;;"
+close_line = f"CLOSEPOSITION;{ACCOUNT};{INSTRUMENT};GTC;;;;;;;;;"
 with open(os.path.join(OIF_INCOMING, f"oif_verify_mkt_close_{int(time.time() * 1000)}.txt"), "w") as f:
     f.write(close_line + "\n")
 time.sleep(2)

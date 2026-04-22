@@ -1,5 +1,5 @@
 """
-Verification test 04 — which OIF field does NT8 treat as ORDER ID?
+Verification test 04 â€” which OIF field does NT8 treat as ORDER ID?
 
 Sends three LIMIT orders with distinctive IDs placed at different field
 positions. Whichever ID appears as a filename in outgoing/ reveals the
@@ -31,13 +31,13 @@ ID_AT_9  = f"FIELD9_ID_{ts}"   # OCO ID slot per docs
 ID_AT_10 = f"FIELD10_ID_{ts}"  # ORDER ID slot per docs
 ID_AT_11 = f"FIELD11_ID_{ts}"  # STRATEGY slot per docs
 
-# Three OIF lines — same order otherwise, different ID placement
-oif_field_9  = f"PLACE;{ACCOUNT};{INSTRUMENT};BUY;1;LIMIT;20000;0;DAY;{ID_AT_9};;;"
-oif_field_10 = f"PLACE;{ACCOUNT};{INSTRUMENT};BUY;1;LIMIT;20000;0;DAY;;{ID_AT_10};;"
-oif_field_11 = f"PLACE;{ACCOUNT};{INSTRUMENT};BUY;1;LIMIT;20000;0;DAY;;;{ID_AT_11};"
+# Three OIF lines â€” same order otherwise, different ID placement
+oif_field_9  = f"PLACE;{ACCOUNT};{INSTRUMENT};BUY;1;LIMIT;20000;0;GTC;{ID_AT_9};;;"
+oif_field_10 = f"PLACE;{ACCOUNT};{INSTRUMENT};BUY;1;LIMIT;20000;0;GTC;;{ID_AT_10};;"
+oif_field_11 = f"PLACE;{ACCOUNT};{INSTRUMENT};BUY;1;LIMIT;20000;0;GTC;;;{ID_AT_11};"
 
 print("=" * 60)
-print("Test 04 — ORDER ID field position verification")
+print("Test 04 â€” ORDER ID field position verification")
 print("=" * 60)
 print(f"ID at field 9  (OCO ID slot):  {ID_AT_9}")
 print(f"ID at field 10 (ORDER ID slot): {ID_AT_10}")
@@ -97,7 +97,7 @@ while time.time() - start < 10:
 
 print()
 print("=" * 60)
-print("VERDICT — which ID appeared as a filename?")
+print("VERDICT â€” which ID appeared as a filename?")
 print("=" * 60)
 found = {"field_9": False, "field_10": False, "field_11": False}
 for fname in seen:
@@ -112,7 +112,7 @@ for pos, yes in found.items():
     mark = "YES" if yes else "no"
     print(f"  {pos}: {mark}")
 
-# Cleanup — cancel all three
+# Cleanup â€” cancel all three
 print()
 print("Cleanup: CANCELALLORDERS")
 cancel_line = f"CANCELALLORDERS;{ACCOUNT};{INSTRUMENT};;;;;;;;;;;;"

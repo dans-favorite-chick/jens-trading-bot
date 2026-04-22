@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -51,7 +51,7 @@ def tmp_log_dir(tmp_path, monkeypatch):
 
     def _daily(date_str: str | None = None) -> Path:
         if date_str is None:
-            date_str = datetime.utcnow().strftime("%Y-%m-%d")
+            date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         return log_dir / f"{date_str}_agent_calls.jsonl"
 
     monkeypatch.setattr(agent_config, "daily_log_path", _daily)

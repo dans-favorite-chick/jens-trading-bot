@@ -36,9 +36,9 @@ def tmp_log_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_config, "LOG_DIR", log_dir)
 
     def _daily(date_str: str | None = None) -> Path:
-        from datetime import datetime
+        from datetime import datetime, timezone
         if date_str is None:
-            date_str = datetime.utcnow().strftime("%Y-%m-%d")
+            date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         return log_dir / f"{date_str}_agent_calls.jsonl"
 
     monkeypatch.setattr(agent_config, "daily_log_path", _daily)

@@ -28,7 +28,10 @@ logger = logging.getLogger("PandasTA")
 
 try:
     import pandas as pd
-    import pandas_ta as ta
+    try:
+        import pandas_ta as ta  # legacy package
+    except ImportError:
+        import pandas_ta_classic as ta  # B52: maintained fork (preferred)
     PANDAS_TA_AVAILABLE = True
 except ImportError:
     PANDAS_TA_AVAILABLE = False

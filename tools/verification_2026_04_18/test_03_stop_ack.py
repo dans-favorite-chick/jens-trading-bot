@@ -1,5 +1,5 @@
 """
-Verification test 03 — STOP MARKET order ACK.
+Verification test 03 â€” STOP MARKET order ACK.
 
 Places BUY STOPMARKET at 30000 (far above market). Should sit Working
 until cancelled.
@@ -20,13 +20,13 @@ from config.settings import OIF_INCOMING, OIF_OUTGOING, ACCOUNT, INSTRUMENT
 
 ORDER_ID = f"MANTEST_STP_{int(time.time() * 1000)}"
 STOP_PRICE = 30000.00
-oif_line = f"PLACE;{ACCOUNT};{INSTRUMENT};BUY;1;STOPMARKET;0;{STOP_PRICE:.2f};DAY;;{ORDER_ID};;"
+oif_line = f"PLACE;{ACCOUNT};{INSTRUMENT};BUY;1;STOPMARKET;0;{STOP_PRICE:.2f};GTC;;{ORDER_ID};;"
 
 print("=" * 60)
-print("Test 03 — STOPMARKET order ACK verification")
+print("Test 03 â€” STOPMARKET order ACK verification")
 print("=" * 60)
 print(f"ORDER ID:   {ORDER_ID}")
-print(f"STOP price: {STOP_PRICE}  (far above market — should sit Working)")
+print(f"STOP price: {STOP_PRICE}  (far above market â€” should sit Working)")
 print(f"OIF ({oif_line.count(';')} semicolons):")
 print(f"  {oif_line}")
 print()

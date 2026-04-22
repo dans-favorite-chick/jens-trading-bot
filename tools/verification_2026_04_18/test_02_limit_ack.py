@@ -1,5 +1,5 @@
 """
-Verification test 02 — does NT8 write outgoing/<Account>_<orderId>.txt
+Verification test 02 â€” does NT8 write outgoing/<Account>_<orderId>.txt
 for a LIMIT order placed far below market (won't fill)?
 
 Tests the Submitted / Working state ACKs even when no fill occurs.
@@ -23,13 +23,13 @@ ORDER_ID = f"MANTEST_LMT_{int(time.time() * 1000)}"
 # MNQ recent range 26172-26802 per memory. Use 20000 (well below) so order
 # sits Working even if market data arrives. Buy LIMIT 20000 = buy-if-cheap.
 LIMIT_PRICE = 20000.00
-oif_line = f"PLACE;{ACCOUNT};{INSTRUMENT};BUY;1;LIMIT;{LIMIT_PRICE:.2f};0;DAY;;{ORDER_ID};;"
+oif_line = f"PLACE;{ACCOUNT};{INSTRUMENT};BUY;1;LIMIT;{LIMIT_PRICE:.2f};0;GTC;;{ORDER_ID};;"
 
 print("=" * 60)
-print("Test 02 — LIMIT order ACK verification")
+print("Test 02 â€” LIMIT order ACK verification")
 print("=" * 60)
 print(f"ORDER ID:   {ORDER_ID}")
-print(f"LIMIT price: {LIMIT_PRICE}  (far below market — should sit Working)")
+print(f"LIMIT price: {LIMIT_PRICE}  (far below market â€” should sit Working)")
 print(f"OIF ({oif_line.count(';')} semicolons):")
 print(f"  {oif_line}")
 print()

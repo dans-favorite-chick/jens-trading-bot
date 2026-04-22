@@ -3005,15 +3005,27 @@ class BaseBot:
                 logger.debug(f"[COT] Refresh error: {e}")
 
             # Phase 8: Feed intermarket engine with external data
+            # B51: get_vix() and get_intermarket() return DICTS, not floats.
+            # Unwrap .get("vix"/"vix_proxy"/"dxy") before float() conversion.
             try:
                 from core.market_intel import get_full_intel
                 intel = await get_full_intel()
                 if intel:
                     im_data = {}
-                    if "vix" in intel and intel["vix"]:
-                        im_data["VIX"] = float(intel["vix"])
-                    if "dxy" in intel and intel["dxy"]:
-                        im_data["DXY"] = float(intel["dxy"])
+                    vix_raw = intel.get("vix")
+                    if isinstance(vix_raw, dict):
+                        v = vix_raw.get("vix") or vix_raw.get("vix_proxy")
+                        if v:
+                            im_data["VIX"] = float(v)
+                    elif vix_raw:
+                        im_data["VIX"] = float(vix_raw)
+                    dxy_raw = intel.get("dxy")
+                    if isinstance(dxy_raw, dict):
+                        d = dxy_raw.get("dxy") or dxy_raw.get("value")
+                        if d:
+                            im_data["DXY"] = float(d)
+                    elif dxy_raw:
+                        im_data["DXY"] = float(dxy_raw)
                     if im_data:
                         self.intermarket.update_from_external(im_data)
                         logger.debug(f"[INTERMARKET] Updated: {im_data}")

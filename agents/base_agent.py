@@ -39,12 +39,23 @@ logger = logging.getLogger("agents.base")
 
 # ─── Optional-dep import shims ───────────────────────────────────────────
 
+# B53: prefer modern `google.genai` SDK (legacy `google.generativeai`
+# is deprecated and emits FutureWarning on import).
+_GENAI_KIND = None  # "new" | "legacy" | None
 try:
-    import google.generativeai as _genai  # type: ignore
+    from google import genai as _genai_new  # type: ignore
+    _GENAI_KIND = "new"
     _HAS_GENAI = True
+    _genai = None  # unused in new mode
 except Exception:
-    _genai = None
-    _HAS_GENAI = False
+    _genai_new = None
+    try:
+        import google.generativeai as _genai  # type: ignore
+        _GENAI_KIND = "legacy"
+        _HAS_GENAI = True
+    except Exception:
+        _genai = None
+        _HAS_GENAI = False
 
 try:
     import anthropic as _anthropic  # type: ignore
@@ -131,20 +142,35 @@ class AIClient:
             raise RuntimeError("GOOGLE_API_KEY not set")
 
         if _HAS_GENAI:
-            def _call() -> str:
-                _genai.configure(api_key=agent_config.GOOGLE_API_KEY)
-                m = _genai.GenerativeModel(
-                    model_name=model,
-                    system_instruction=system or None,
-                )
-                resp = m.generate_content(
-                    prompt,
-                    generation_config={
-                        "temperature": temperature,
-                        "max_output_tokens": max_tokens,
-                    },
-                )
-                return getattr(resp, "text", "") or ""
+            if _GENAI_KIND == "new":
+                def _call() -> str:
+                    client = _genai_new.Client(api_key=agent_config.GOOGLE_API_KEY)
+                    # New SDK uses config object; system_instruction goes in config.
+                    from google.genai import types as _genai_types  # type: ignore
+                    cfg = _genai_types.GenerateContentConfig(
+                        temperature=temperature,
+                        max_output_tokens=max_tokens,
+                        system_instruction=system or None,
+                    )
+                    resp = client.models.generate_content(
+                        model=model, contents=prompt, config=cfg,
+                    )
+                    return getattr(resp, "text", "") or ""
+            else:
+                def _call() -> str:
+                    _genai.configure(api_key=agent_config.GOOGLE_API_KEY)
+                    m = _genai.GenerativeModel(
+                        model_name=model,
+                        system_instruction=system or None,
+                    )
+                    resp = m.generate_content(
+                        prompt,
+                        generation_config={
+                            "temperature": temperature,
+                            "max_output_tokens": max_tokens,
+                        },
+                    )
+                    return getattr(resp, "text", "") or ""
 
             loop = asyncio.get_event_loop()
             return await asyncio.wait_for(

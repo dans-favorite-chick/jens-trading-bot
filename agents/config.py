@@ -58,9 +58,9 @@ LOG_DIR = Path(os.environ.get("AGENT_LOG_DIR", _PROJECT_ROOT / "logs" / "agents"
 
 def daily_log_path(date_str: str | None = None) -> Path:
     """Return the path for today's (or given date's) agent-call log file."""
-    from datetime import datetime
+    from datetime import datetime, timezone
     if date_str is None:
-        date_str = datetime.utcnow().strftime("%Y-%m-%d")
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     return LOG_DIR / f"{date_str}_agent_calls.jsonl"
 
 

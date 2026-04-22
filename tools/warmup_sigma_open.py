@@ -11,7 +11,7 @@ Per Zarattini et al. 2024:
 
 import json
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -69,7 +69,7 @@ def build_sigma_open_table(bars_path, output_path, session_open_hour_et=9, sessi
     # Convert defaultdict to regular dict, add metadata
     output = {
         "metadata": {
-            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "generated_at": datetime.now(timezone.utc).isoformat() + "Z",
             "source_file": str(bars_path),
             "total_sessions": len(sorted_dates),
             "formula": "move_open = abs(close / open_of_day - 1)",

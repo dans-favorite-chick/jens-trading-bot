@@ -126,24 +126,29 @@ class TestFileContentWellFormed(unittest.TestCase):
         self.assertIn("_commit_staged", src)
 
     def test_legacy_path_no_longer_uses_plain_open_write(self):
-        """Pre-P1 pattern was `with open(filepath, \"w\") as f: f.write(cmd)`
-        in the legacy single-order loop. That pattern must no longer exist
-        anywhere in the legacy commit loop."""
+        """B45 rev3 (2026-04-21) intentionally reverted to direct write
+        inside _stage_oif after .tmp/.stage attempts broke NT8's
+        FileSystemWatcher. The original P1 concern (partial-write race on
+        concurrent NT8 read) is empirically non-existent for ~100-byte
+        OIF files on Windows NTFS — partial-write window is sub-ms and
+        NT8 reads only on complete-write events.
+
+        New contract: _stage_oif must write to the final path directly,
+        no cross-directory rename. Other functions in oif_writer must
+        NOT do their own `with open(filepath, "w")` (all file IO goes
+        through _stage_oif).
+        """
         src = (Path(__file__).parent.parent / "bridge" / "oif_writer.py").read_text(
             encoding="utf-8"
         )
-        # The only remaining `open(...,"w")` inside oif_writer should be
-        # the one inside _stage_oif (it's the atomic-primitive that actually
-        # writes the .tmp file). No OTHER plain writes.
-        # Count occurrences and verify they're all inside _stage_oif's region.
         stage_start = src.index("def _stage_oif")
         stage_end = src.index("def ", stage_start + 1)
         stage_region = src[stage_start:stage_end]
-        self.assertIn('open(tmp_path, "w")', stage_region,
-                      "_stage_oif must still have its .tmp open() call")
+        # B45 rev3: direct-write to final_path (no staging dir).
+        self.assertIn('open(final_path, "w")', stage_region,
+                      "_stage_oif must write directly to final_path (B45 rev3)")
         # Everywhere else: should NOT have plain `open(filepath, "w")` ops
         rest = src[:stage_start] + src[stage_end:]
-        # There should be no `open(filepath, "w")` in the legacy path anymore.
         self.assertNotIn('with open(filepath, "w")', rest,
                          "Legacy write_oif() reverted to plain open() — P1 regressed")
 
