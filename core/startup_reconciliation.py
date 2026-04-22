@@ -158,11 +158,32 @@ def reconcile_positions_from_nt8(
 
     adopted: list[dict] = []
 
+    # P0.3 (D12): idempotent re-entry. The runtime reconciliation timer
+    # calls this same function every 30s during the session — we must not
+    # re-adopt the same NT8 position on every tick. Skip any account that
+    # already has a tracked Position in the manager.
+    already_tracked_accounts: set[str] = set()
+    try:
+        for _p in positions.active_positions:
+            acct = getattr(_p, "account", None)
+            if acct:
+                already_tracked_accounts.add(acct)
+    except Exception:
+        pass  # Any positions API mismatch → fall back to scan-everything
+
     for account in routed_accounts:
         parsed = _read_position_file(outgoing_dir, instrument, account)
         if parsed is None:
             continue
         direction, qty, avg_price = parsed
+
+        # P0.3: skip accounts we already track — runtime timer idempotency.
+        if account in already_tracked_accounts:
+            logger.debug(
+                f"[RECONCILE:{account}] already tracked in PositionManager — "
+                f"skipping re-adopt (direction={direction} qty={qty})"
+            )
+            continue
 
         # Strategy inference (best-effort).
         inferred = _infer_strategy_from_account(account)

@@ -484,12 +484,16 @@ class BaseBot:
         self.aggregator.on_bar(self._on_bar)
 
     def _reconcile_positions_from_nt8(self) -> list[dict]:
-        """B77: scan NT8 outgoing/ for non-FLAT positions and adopt them.
+        """B77 + P0.3: scan NT8 outgoing/ for non-FLAT positions and adopt
+        them.
 
-        Called once at the start of run(), before the bot accepts any new
-        signals. Adopted positions get a wide safety-net OCO and are
-        flagged Position.reconciled=True so strategy-side exit triggers
-        skip them (they have no entry-signal context).
+        Called at startup AND periodically during the session (every
+        RUNTIME_RECON_INTERVAL_S seconds via _runtime_reconciliation_loop)
+        so a mid-session orphan can't drift unnoticed until next restart.
+
+        The underlying reconcile_positions_from_nt8 is idempotent: it
+        skips any account with an already-tracked Position in the
+        PositionManager, so re-calling every 30s never creates phantoms.
         """
         from core.startup_reconciliation import reconcile_positions_from_nt8
         from config.settings import OIF_OUTGOING, INSTRUMENT
@@ -507,6 +511,41 @@ class BaseBot:
             instrument=INSTRUMENT,
             telegram_notify=telegram_notify,
         )
+
+    # P0.3 (D12) runtime reconciliation interval. 30s is the interim
+    # polling cadence — Phase 1's broker-event stream will replace the
+    # timer with sub-second reaction later. Module-level constant so
+    # tests can monkeypatch (via bots.base_bot.RUNTIME_RECON_INTERVAL_S).
+    RUNTIME_RECON_INTERVAL_S: float = 30.0
+
+    async def _runtime_reconciliation_loop(self) -> None:
+        """P0.3: periodic NT8-ledger reconciliation during the session.
+
+        Runs `_reconcile_positions_from_nt8` on a timer. A clean-shutdown
+        flag (`self._shutdown_reconciliation`) lets run() stop the loop
+        gracefully without hanging on sleep.
+
+        Exceptions are caught + logged so one bad cycle doesn't kill the
+        loop — the next tick keeps trying.
+        """
+        while not getattr(self, "_shutdown_reconciliation", False):
+            try:
+                await asyncio.sleep(self.RUNTIME_RECON_INTERVAL_S)
+                if getattr(self, "_shutdown_reconciliation", False):
+                    break
+                adopted = self._reconcile_positions_from_nt8()
+                if adopted:
+                    logger.info(
+                        f"[RUNTIME_RECON] adopted {len(adopted)} orphan "
+                        f"position(s) mid-session (accounts: "
+                        f"{[a['account'] for a in adopted]})"
+                    )
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(
+                    f"[RUNTIME_RECON] cycle failed (will retry next interval): {e!r}"
+                )
 
     def load_strategies(self):
         """Load strategy instances from config. Override in subclass if needed."""
@@ -612,6 +651,13 @@ class BaseBot:
             self._reconcile_positions_from_nt8()
         except Exception as e:
             logger.error(f"[RECONCILE] startup reconciliation failed: {e!r}")
+
+        # P0.3 (D12) runtime reconciliation: schedule the async timer
+        # BEFORE the tick loop starts so mid-session orphans get caught
+        # within RUNTIME_RECON_INTERVAL_S of appearing. Clean-shutdown
+        # flag drives the loop's termination condition.
+        self._shutdown_reconciliation = False
+        asyncio.ensure_future(self._runtime_reconciliation_loop())
 
         # Phase 4C: one-shot [SESSION+GAMMA] regime log fires from inside
         # the tick loop once last_price > 0 and gamma_levels is loaded.

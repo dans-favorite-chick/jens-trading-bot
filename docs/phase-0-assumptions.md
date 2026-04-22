@@ -99,7 +99,49 @@ verified the author.
    incoming/ — should appear in quarantine/, not execute on chart.
 
 ## P0.3 Runtime Reconciliation
-_(to be filled in by S4)_
+
+**Interval: 30 seconds** (`BaseBot.RUNTIME_RECON_INTERVAL_S`). Rationale:
+- Fast enough to catch a mid-session orphan before a 4pm flatten
+  (trading day has ~390 min of live hours → 30s = 0.13% of the day).
+- Slow enough not to saturate NT8 with file reads — NT8 writes
+  `*_position.txt` every tick, a 30s read rhythm is < 0.01% of that.
+- Phase 1 will replace this timer with a broker-event stream; 30s is
+  interim. Exposed as a module-level constant so tests monkeypatch it
+  (all loop tests use 10 ms intervals to finish in fractions of a second).
+
+**Reused existing `reconcile_positions_from_nt8` — no extraction refactor.**
+The function was already parameterised with the `positions` manager and
+writers, so the runtime timer just invokes it periodically. The sprint
+plan's "extract into reusable function" step was already done at B77.
+
+**Idempotency fix inside `reconcile_positions_from_nt8` (not in the loop).**
+Before P0.3, calling the function twice against the same NT8 state
+adopted the same orphan twice — duplicate Position records with
+different `trade_id`s. Fix: scan `positions.active_positions` once at
+the top of the function, build a set of already-tracked accounts, and
+skip any account present in it. Means the runtime timer can re-enter
+the function every 30s safely.
+
+**Clean shutdown via `_shutdown_reconciliation` flag,** checked both
+before and after each sleep so the loop doesn't hang for 30s after a
+bot-stop signal. Exceptions in any single cycle are caught, logged,
+and the loop carries on — one bad cycle doesn't kill the whole timer.
+
+**Telegram notify hook reused from B77 adoption path.** The function
+already fires a telegram alert per adopted orphan; no new wiring.
+Mid-session orphans surface as "⚠️ Reconciled orphan …" messages.
+
+**Tests: 7 new.** Coverage:
+- 3 tests on `reconcile_positions_from_nt8` idempotency (first call
+  adopts; second call doesn't re-adopt; new orphans on different
+  accounts DO get adopted on the second call).
+- 3 tests on the async loop (invocation cadence / shutdown flag
+  respected / survives mid-cycle exception).
+- 1 test verifying the telegram hook fires with account + direction.
+
+Async tests use plain `asyncio.run()` rather than pytest-asyncio (not
+installed in this env) — each test is a sync function that builds and
+runs a coroutine.
 
 ## P0.4 Mandatory OIF Verification
 
