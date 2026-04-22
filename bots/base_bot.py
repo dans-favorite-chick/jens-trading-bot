@@ -2420,6 +2420,35 @@ class BaseBot:
         _sub_strategy = (getattr(signal, "metadata", {}) or {}).get("sub_strategy")
         _account = get_account_for_signal(signal.strategy, _sub_strategy)
 
+        # B50: pre-entry position-reconcile guard (inverse phantom).
+        # If NT8 already reports a position on this account (e.g. Python
+        # state was lost on restart but NT8 still holds the real fill),
+        # abort the new entry — otherwise NT8 rejects with "Exceeds
+        # account's maximum position quantity" and leaves orphan OCO legs.
+        if getattr(self, "bot_name", "prod") == "sim":
+            try:
+                from bridge.oif_writer import verify_nt8_position
+                pre = verify_nt8_position(
+                    account=_account, expected_direction="FLAT",
+                    expected_qty=0, timeout_s=0.5,
+                )
+                if pre["status"] not in ("flat", "missing"):
+                    logger.warning(
+                        f"[PREENTRY_SKIP:{tid}] NT8 already has position on "
+                        f"{_account}: {pre.get('observed_direction')} "
+                        f"{pre.get('observed_qty')} @ {pre.get('observed_price')}. "
+                        f"Skipping {signal.strategy} {signal.direction} entry "
+                        f"(inverse-phantom guard)."
+                    )
+                    self.last_rejection = (
+                        f"Pre-entry skip: {_account} already "
+                        f"{pre.get('observed_direction')} {pre.get('observed_qty')}"
+                    )
+                    return
+            except Exception as e:
+                logger.debug(f"[PREENTRY:{tid}] reconcile check failed "
+                             f"(non-blocking): {e}")
+
         try:
             await ws.send(json.dumps({
                 "type": "trade",
