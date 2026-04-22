@@ -2802,6 +2802,51 @@ class BaseBot:
             sub_strategy=_sub_strategy,
         )
 
+        # ── B70: directional conflict observability (non-blocking) ──────
+        # Detect cross-strategy LONG-vs-SHORT, log to jsonl, dedup-alert.
+        # Conflicts are ALLOWED — data-gathering only.
+        try:
+            from core.strategy_risk_registry import StrategyRiskRegistry
+            from core import conflict_logger as _cflog
+            _reg = getattr(self, "_conflict_reg", None)
+            if _reg is None:
+                _reg = StrategyRiskRegistry()
+                self._conflict_reg = _reg
+            all_conflicts = _reg.detect_directional_conflicts(self.positions)
+            # Filter to only pairs that include the just-opened trade.
+            involved = [c for c in all_conflicts
+                        if tid in (c["trade_id_a"], c["trade_id_b"])]
+            if involved:
+                exposure = _reg.exposure_snapshot(self.positions)
+                new_pos = self.positions.get_position(tid)
+                _cflog.log_conflict_opened(new_pos, involved, exposure)
+                # Dedup Telegram alert: alphabetically sort pair names.
+                try:
+                    from core.telegram_notifier import send_sync
+                    pair_names = sorted({c["strategy_a"] for c in involved} |
+                                         {c["strategy_b"] for c in involved})
+                    # Pick the primary pair involving the new entry for the
+                    # human-readable line.
+                    c0 = involved[0]
+                    if c0["trade_id_a"] == tid:
+                        new_s, new_d, new_e = c0["strategy_a"], c0["dir_a"], c0["entry_a"]
+                        oth_s, oth_d, oth_e = c0["strategy_b"], c0["dir_b"], c0["entry_b"]
+                    else:
+                        new_s, new_d, new_e = c0["strategy_b"], c0["dir_b"], c0["entry_b"]
+                        oth_s, oth_d, oth_e = c0["strategy_a"], c0["dir_a"], c0["entry_a"]
+                    sorted_pair = "-".join(sorted([new_s, oth_s]))
+                    send_sync(
+                        f"⚠️ CONFLICT | {new_s} {new_d} @ {new_e:.2f} vs "
+                        f"{oth_s} {oth_d} @ {oth_e:.2f}\n"
+                        f"Both positions active. Net exposure: "
+                        f"{exposure.get('net')}. Allowing (data mode).",
+                        dedup_key=f"conflict_opened:{sorted_pair}",
+                    )
+                except Exception:
+                    pass
+        except Exception as _e:
+            logger.warning(f"[CONFLICT] post-open detection failed: {_e}")
+
         # Reset stall detector for fresh rider tracking on this trade
         self._stall_detector.reset()
         self._rider_active = False
@@ -3073,10 +3118,43 @@ class BaseBot:
         self._rider_active = False
         pos.rider_mode = False if self.positions.position else False
 
+        # B70: capture pre-close conflict state so we can emit a
+        # conflict_closed event if this exit resolves a conflict pair.
+        _pre_close_conflicts: list[dict] = []
+        _closing_pos_snapshot = None
+        try:
+            from core.strategy_risk_registry import StrategyRiskRegistry
+            _reg = getattr(self, "_conflict_reg", None)
+            if _reg is None:
+                _reg = StrategyRiskRegistry()
+                self._conflict_reg = _reg
+            _pre_close_conflicts = _reg.detect_directional_conflicts(self.positions)
+            _closing_pos_snapshot = self.positions.get_position(tid)
+        except Exception:
+            pass
+
         # Phase C: pass trade_id explicitly so multi-position close operates
         # on the right slot (no-op for single-position since _resolve_trade_id
         # will pick the sole active).
         trade = self.positions.close_position(price, reason, trade_id=tid)
+
+        # B70: if the closing trade was in any conflict pair, log it.
+        try:
+            if _pre_close_conflicts and _closing_pos_snapshot is not None:
+                was_involved = any(
+                    tid in (c["trade_id_a"], c["trade_id_b"])
+                    for c in _pre_close_conflicts
+                )
+                if was_involved:
+                    from core import conflict_logger as _cflog
+                    _reg = self._conflict_reg
+                    remaining = _reg.detect_directional_conflicts(self.positions)
+                    exposure = _reg.exposure_snapshot(self.positions)
+                    _cflog.log_conflict_closed(
+                        _closing_pos_snapshot, remaining, exposure,
+                    )
+        except Exception as _e:
+            logger.warning(f"[CONFLICT] post-close logging failed: {_e}")
         if trade:
             self.risk.record_trade(trade["pnl_dollars"])
             self.trade_memory.record(trade, bot_id=self.bot_name)
