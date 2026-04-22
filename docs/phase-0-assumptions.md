@@ -102,7 +102,59 @@ verified the author.
 _(to be filled in by S4)_
 
 ## P0.4 Mandatory OIF Verification
-_(to be filled in by S3)_
+
+**New `OIFStuckError(RuntimeError)`** with `trade_id` / `stuck_paths` /
+`timeout_s` attributes. Subclass of `RuntimeError` so existing
+`except RuntimeError:` catches still work — but callers SHOULD
+`except OIFStuckError:` explicitly so a stuck OIF can't be silently
+buried inside a broad exception handler.
+
+**`_verify_consumed` now logs `CRITICAL` (was `ERROR`).** This is an
+execution-layer integrity failure, not a recoverable per-trade glitch —
+log severity matches.
+
+**`raise_on_stuck: bool = False` kwarg** on `_verify_consumed`. Default
+False for back-compat with any ad-hoc / diagnostic callers; every
+PLACE/EXIT entry point inside `oif_writer.py` now passes True:
+- `write_bracket_order` — was already verifying, escalated to raise
+- `write_modify_stop` — **was missing** the check; added + raise
+- `write_oif` (legacy) — **was missing** the check; added + raise
+- `write_protection_oco` — already had bespoke retry-and-verify; locked
+  in as "must surface stuck" via the test
+
+**Timeout raised from 1.0s → 2.0s** on the new mandatory calls. 1s was
+tuned for happy-path NT8; 2s gives the ATI parser a more realistic
+budget under load before we declare stuck.
+
+**Test-only bypass via `_PYTEST_BYPASS_CONSUME_CHECK` flag.** 30+
+existing tests write OIFs to a tmp dir with no simulated NT8 consumer;
+they would all trip the new raise. Rather than rewrite 30 tests to
+simulate consumption, the autouse conftest fixture sets the flag True
+so the check becomes a no-op. `test_verify_consumed_mandatory.py` flips
+it back to False inside its own autouse fixture — the only test module
+that actually exercises the check semantics.
+
+Alternative considered + rejected: monkeypatching `_commit_staged` to
+delete files immediately would have simulated NT8 consumption in tests.
+Rejected because some tests assert on file existence post-write
+(`test_p1_legacy_atomic.py` in particular). The bypass flag is more
+honest: these tests don't care about the consume-check, so bypass it
+explicitly.
+
+**Tests: 14 new.** Coverage:
+- `OIFStuckError` shape (3 tests): subclass, forensic attrs, message.
+- `_verify_consumed` core (4 tests): happy path / stuck-legacy-return /
+  stuck-raise / raise-but-nothing-stuck.
+- Every PLACE/EXIT entry point under a mocked stuck-filesystem: 6 tests
+  (bracket / modify_stop / exit / place_stop / cancel_single /
+  protection_oco).
+- Happy-path: NT8 simulated as consuming → no raise, write succeeds.
+
+**Caller responsibility (NOT in this patch):** base_bot's
+`_enter_trade` / exit / scale-out paths should treat OIFStuckError as
+either (a) alert + retry with bounded backoff or (b) emergency flatten.
+Catching-and-ignoring defeats the defence. This is in-scope for S4/S5/S6
+since those streams touch the caller sites.
 
 ## P0.5 Scale-Out Race Fix
 _(to be filled in by S5)_
