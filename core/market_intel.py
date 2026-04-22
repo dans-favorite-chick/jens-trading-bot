@@ -148,12 +148,16 @@ def _classify_headline(headline: str) -> int:
 # ---------------------------------------------------------------------------
 async def get_vix() -> dict:
     """
-    Fetch VIX with tiered fallback (B32 reordered 2026-04-21):
-      1. yfinance ^VIX (15-min delay, reliable, no auth)
-      2. Alpaca UVXY proxy (real-time, but requires paid data subscription —
-         free keys 401. Skipped after first auth failure via _alpaca_disabled.)
-      3. Cached value or 0
-    Cache: 60 seconds.
+    Fetch VIX by racing both sources in parallel (B32 rev2, 2026-04-21):
+      - yfinance ^VIX (actual VIX index, 15-min delay on free tier)
+      - Alpaca UVXY (proxy — leveraged short-vol ETN, real-time IEX)
+    First valid result wins; the slower source is logged for comparison.
+    Cache: 60 seconds. Falls back to cached (<1h) or 0 on total failure.
+
+    Accuracy note: ^VIX is the actual index; UVXY is a 1.5× short-vol
+    futures ETN that correlates directionally but doesn't report VIX
+    number. We only use UVXY when Alpaca is paid-tier; free-tier IEX
+    quotes are too sparse (≈2% of daily volume) to be reliable.
     """
     global _alpaca_disabled
 
@@ -162,61 +166,103 @@ async def get_vix() -> dict:
         cached["age_s"] = round(time.time() - _cache._store["vix"][0], 1)
         return cached
 
-    # Tier 1: yfinance (PRIMARY — B32)
-    try:
-        def _yf_vix():
+    loop = asyncio.get_event_loop()
+
+    async def _fetch_yf():
+        def _call():
             ticker = yf.Ticker("^VIX")
             hist = ticker.history(period="1d", interval="1m")
             if hist is not None and len(hist) > 0:
-                return float(hist["Close"].iloc[-1])
+                last_ts = hist.index[-1]
+                age_s = (time.time() - last_ts.timestamp()) if hasattr(last_ts, "timestamp") else -1
+                return float(hist["Close"].iloc[-1]), age_s
+            return None, -1
+        t0 = time.time()
+        val, age = await asyncio.wait_for(loop.run_in_executor(None, _call), timeout=5.0)
+        latency_ms = int((time.time() - t0) * 1000)
+        if val and val > 0:
+            return {
+                "vix": round(val, 2), "source": "yfinance",
+                "age_s": round(age, 1), "latency_ms": latency_ms,
+            }
+        return None
+
+    async def _fetch_alpaca():
+        if _alpaca_disabled:
             return None
-
-        vix_val = await asyncio.wait_for(
-            asyncio.get_event_loop().run_in_executor(None, _yf_vix),
-            timeout=5.0,
-        )
-        if vix_val and vix_val > 0:
-            result = {"vix": round(vix_val, 2), "source": "yfinance", "age_s": 0}
-            _cache.put("vix", result)
-            logger.info(f"VIX from yfinance: {vix_val}")
-            return result
-    except Exception as e:
-        logger.debug(f"yfinance VIX primary failed: {e}")
-
-    # Tier 2: Alpaca UVXY proxy (fallback — only if not latched off)
-    if not _alpaca_disabled:
+        api = _get_alpaca()
+        if not api:
+            return None
         try:
-            api = _get_alpaca()
-            if api:
-                quote = await asyncio.wait_for(
-                    asyncio.get_event_loop().run_in_executor(
-                        None, lambda: api.get_latest_quote("UVXY")
-                    ),
-                    timeout=5.0,
-                )
-                vix_proxy = float(quote.ap) if hasattr(quote, "ap") and quote.ap else 0
-                if vix_proxy > 0:
-                    result = {
-                        "vix_proxy": round(vix_proxy, 2),
-                        "source": "alpaca_UVXY",
-                        "age_s": 0,
-                    }
-                    _cache.put("vix", result)
-                    logger.info(f"VIX proxy (UVXY) from Alpaca: {vix_proxy}")
-                    return result
+            t0 = time.time()
+            quote = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: api.get_latest_quote("UVXY")),
+                timeout=5.0,
+            )
+            latency_ms = int((time.time() - t0) * 1000)
+            val = float(quote.ap) if hasattr(quote, "ap") and quote.ap else 0
+            if val > 0:
+                return {
+                    "vix_proxy": round(val, 2), "source": "alpaca_UVXY",
+                    "age_s": 0, "latency_ms": latency_ms,
+                }
+            return None
         except Exception as e:
             msg = str(e)
             if "401" in msg or "unauthorized" in msg.lower() or "forbidden" in msg.lower():
-                _alpaca_disabled = True
-                logger.warning(
-                    "Alpaca VIX fallback auth failed (401/403) — disabling "
-                    "Alpaca until next bot restart. yfinance remains primary."
-                )
-            else:
-                logger.debug(f"Alpaca VIX fallback failed: {e}")
+                globals()["_alpaca_disabled"] = True
+                logger.warning("Alpaca VIX auth failed (401/403) — latched off until restart")
+            return None
 
-    # Tier 3: cached or zero
-    stale = _cache.get("vix", 3600)  # accept up to 1 hour stale
+    # Race both concurrently; first valid result wins
+    tasks = [asyncio.create_task(_fetch_yf(), name="yf"),
+             asyncio.create_task(_fetch_alpaca(), name="alpaca")]
+    winner = None
+    other = None
+    try:
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED, timeout=6.0)
+        for t in done:
+            r = t.result()
+            if r and winner is None:
+                winner = r
+                winner["race"] = "won"
+            elif r:
+                other = r
+        # Wait briefly for the other to finish, log both
+        for t in pending:
+            try:
+                r = await asyncio.wait_for(t, timeout=2.0)
+                if r and winner is None:
+                    winner = r
+                    winner["race"] = "won"
+                elif r:
+                    other = r
+            except (asyncio.TimeoutError, Exception):
+                pass
+    except Exception as e:
+        logger.debug(f"VIX race error: {e}")
+
+    if winner:
+        _cache.put("vix", winner)
+        # Log winner + comparison if both present
+        if other:
+            w_val = winner.get("vix") or winner.get("vix_proxy")
+            o_val = other.get("vix") or other.get("vix_proxy")
+            logger.info(
+                f"VIX winner={winner['source']} @ {w_val} "
+                f"({winner['latency_ms']}ms) | other={other['source']} @ {o_val} "
+                f"({other['latency_ms']}ms)"
+            )
+        else:
+            logger.info(
+                f"VIX from {winner['source']}: "
+                f"{winner.get('vix') or winner.get('vix_proxy')} "
+                f"({winner['latency_ms']}ms)"
+            )
+        return winner
+
+    # No fresh data — try cache
+    stale = _cache.get("vix", 3600)
     if stale is not None:
         stale["source"] = "cache_stale"
         stale["age_s"] = round(time.time() - _cache._store["vix"][0], 1)
