@@ -26,9 +26,11 @@ def test_record_preserves_existing_bot_id_when_no_kwarg():
         assert data[0]["bot_id"] == "lab"
 
 
-def test_record_bot_id_none_when_absent():
+def test_record_bot_id_defaults_to_unknown_when_absent():
+    # B70: write-time guard — missing bot_id is coerced to "unknown" (not None)
+    # to prevent null-bot_id pollution of trade_memory.json.
     with tempfile.TemporaryDirectory() as td:
         path = os.path.join(td, "tm.json")
         tm = TradeMemory(filepath=path)
         tm.record({"result": "WIN", "pnl_dollars": 1.0})
-        assert tm.trades[0]["bot_id"] is None
+        assert tm.trades[0]["bot_id"] == "unknown"
