@@ -92,6 +92,13 @@ class BaseStrategy:
     name: str = "unnamed"
     enabled: bool = True
     validated: bool = False
+    # B21: When True, the `stop_ticks` a strategy reports is a *structural*
+    # disaster/anchor stop, not the real exit path. Position sizing must NOT
+    # use it verbatim — it would over-shrink contract counts. risk_manager
+    # substitutes a risk-reference stop (PER_STRATEGY_DAILY_LOSS_CAP-derived
+    # or ATR_STOP_MAX_TICKS) when this flag is set. Subclasses using
+    # managed exits (time-based, signal-flip, EoD-flat) should set True.
+    uses_managed_exit: bool = False
 
     def __init__(self, config: dict):
         """

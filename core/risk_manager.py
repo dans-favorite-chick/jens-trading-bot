@@ -25,7 +25,13 @@ from config.settings import (
     VIX_LOW, VIX_NORMAL, VIX_HIGH, VIX_EXTREME,
     RISK_TIER_A_PLUS, RISK_TIER_B, RISK_TIER_C,
     ATR_LOW, ATR_NORMAL, ATR_HIGH, TICK_SIZE,
+    ATR_STOP_MAX_TICKS,
 )
+
+try:
+    from config.settings import PER_STRATEGY_DAILY_LOSS_CAP
+except ImportError:
+    PER_STRATEGY_DAILY_LOSS_CAP = 200.0
 
 logger = logging.getLogger("RiskManager")
 
@@ -173,10 +179,38 @@ class RiskManager:
             return int(stop_ticks * 1.5)
         return stop_ticks
 
-    def calculate_contracts(self, risk_dollars: float, stop_ticks: int) -> int:
-        """Calculate number of contracts based on risk and stop distance."""
+    def calculate_contracts(self, risk_dollars: float, stop_ticks: int,
+                            strategy=None) -> int:
+        """
+        Calculate number of contracts based on risk and stop distance.
+
+        B21: If `strategy` is passed and has `uses_managed_exit=True`, the
+        reported stop_ticks is a structural/disaster anchor (noise_area
+        reports 150-600t) and must NOT be used as the per-contract risk
+        denominator — it would crush contract counts to 0/1. Substitute
+        ATR_STOP_MAX_TICKS as the risk-reference stop, which is the same
+        ceiling ATR-based strategies are clamped to. This keeps sizing
+        sane while preserving the structural stop for disaster protection
+        in the bracket order.
+
+        `strategy` is kept optional so all existing callers (tests,
+        backtester) that pass only (risk_dollars, stop_ticks) still work.
+        """
+        effective_stop = stop_ticks
+        if strategy is not None and getattr(strategy, "uses_managed_exit", False):
+            # Risk-reference stop: cap at ATR_STOP_MAX_TICKS — the same ceiling
+            # real ATR stops are clamped to. Never use the 150-600t structural stop.
+            risk_ref = min(int(stop_ticks), int(ATR_STOP_MAX_TICKS))
+            if risk_ref != stop_ticks:
+                logger.info(
+                    f"[SIZING] {getattr(strategy, 'name', '?')} uses managed exit — "
+                    f"using risk-reference stop {risk_ref}t for sizing "
+                    f"(structural stop {stop_ticks}t preserved for bracket)"
+                )
+            effective_stop = risk_ref
+
         dollar_per_tick = TICK_SIZE * 2  # MNQ = $0.50 per tick (0.25 tick size * $2 multiplier)
-        risk_per_contract = stop_ticks * dollar_per_tick
+        risk_per_contract = effective_stop * dollar_per_tick
         if risk_per_contract <= 0:
             return 0
         return max(1, int(risk_dollars / risk_per_contract))

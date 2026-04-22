@@ -43,6 +43,11 @@ class NoiseAreaMomentum(BaseStrategy):
     """Zarattini 2024 noise-cone intraday momentum."""
 
     name = "noise_area"
+    # B21: noise_area uses managed exits (signal-flip back inside cone,
+    # VWAP cross, EoD flat). The 150-600t stop_ticks reported to the
+    # risk_manager is a structural disaster anchor, not a real stop —
+    # sizing must not take it at face value or contracts collapse to 0.
+    uses_managed_exit = True
 
     def __init__(self, config: dict):
         super().__init__(config)

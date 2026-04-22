@@ -2312,7 +2312,15 @@ class BaseBot:
         except Exception:
             pass
 
-        contracts = self.risk.calculate_contracts(risk_dollars, stop_ticks)
+        # B21: pass strategy instance so managed-exit strategies (noise_area)
+        # get a risk-reference stop for sizing instead of the structural
+        # 150-600t disaster anchor they report.
+        _strat_obj = next(
+            (s for s in self.strategies if s.name == signal.strategy), None
+        )
+        contracts = self.risk.calculate_contracts(
+            risk_dollars, stop_ticks, strategy=_strat_obj
+        )
 
         # Phase 5: Position scaler — cap contracts by account equity and conditions
         max_contracts = self.position_scaler.get_max_contracts(
