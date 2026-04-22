@@ -307,7 +307,7 @@ class SimBot(BaseBot):
         logger.info(f"[SIM] Per-strategy: $2000 start / $200 daily cap / $1500 floor")
         logger.info(f"[SIM] Registry: {len(self.risk_registry.known_keys())} keys tracked "
                     f"({n_halted} halted from prior session)")
-        logger.info(f"[SIM] Daily flatten: 16:00 CT (CME globex pause)")
+        logger.info(f"[SIM] Daily flatten: 15:58 CT (2-min runway before 16:00 CME globex pause)")
 
     async def run(self):
         """Override to start the 4pm-CT daily flatten coroutine alongside the
@@ -331,7 +331,7 @@ class SimBot(BaseBot):
                 self._flattener.websocket_send_fn = self._get_ws_send_fn()
                 n = await self._flattener.check_and_flatten()
                 if n:
-                    logger.info(f"[DAILY_FLATTEN] closed {n} position(s) at 16:00 CT")
+                    logger.info(f"[DAILY_FLATTEN] closed {n} position(s) at 15:58 CT")
 
                 # [AI-DEBRIEF-HOOK] S7 4C: fire post-flatten debrief once per
                 # day after the 16:00 CT flatten, pre-17:00 globex reopen.
@@ -507,7 +507,7 @@ class SimBot(BaseBot):
 
         import json
 
-        async def _send(trade_id: str, reason: str = "daily_flatten_16CT"):
+        async def _send(trade_id: str, reason: str = "daily_flatten_1558CT"):
             pos = self.positions.get_position(trade_id)
             if pos is None:
                 return

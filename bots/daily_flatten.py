@@ -1,7 +1,16 @@
 """Daily flatten helper for Phoenix Bot.
 
-Closes all open positions at 4:00 PM Central Time (CME globex pause start).
+Closes all open positions at 3:58 PM Central Time — two minutes before the
+CME globex 4:00 PM maintenance break. The 2-minute runway guarantees the
+EXIT MARKET order reaches NT8 and fills BEFORE the break closes the book
+at 16:00, so positions don't queue through the maintenance hour.
+
 Overnight holds are not allowed across the 4-5 PM CT globex pause.
+
+B83 (2026-04-22): moved from 16:00 → 15:58 after a SimSpring Setup LONG
+sat open at 15:59 because the 30-second poll loop hadn't yet crossed the
+old 16:00 fire gate. Firing at 15:58 gives up to 2 min of order-transit
+runway before the break.
 """
 from __future__ import annotations
 
@@ -15,13 +24,17 @@ CT = ZoneInfo("America/Chicago")
 def should_flatten_now(
     now_ct: datetime,
     last_flatten_date: Optional[date],
-    flatten_hour: int = 16,
-    flatten_minute: int = 0,
+    flatten_hour: int = 15,
+    flatten_minute: int = 58,
 ) -> bool:
     """Return True if a daily flatten should fire now.
 
     Fires when current CT time >= (flatten_hour, flatten_minute) AND we
     have not already flattened today.
+
+    Default 15:58 CT (B83) — two minutes before the CME globex 16:00
+    maintenance break, so EXIT MARKET orders have runway to transit and
+    fill before the book closes.
     """
     if now_ct.time() < time(flatten_hour, flatten_minute):
         return False
@@ -38,8 +51,8 @@ class DailyFlattener:
         positions_manager: Any,
         websocket_send_fn: Optional[Callable] = None,
         logger: Any = None,
-        flatten_hour: int = 16,
-        flatten_minute: int = 0,
+        flatten_hour: int = 15,
+        flatten_minute: int = 58,
     ):
         self.pm = positions_manager
         self.ws_send = websocket_send_fn
@@ -69,7 +82,7 @@ class DailyFlattener:
             return 0
 
         positions = self._iter_positions()
-        reason = "daily_flatten_16CT"
+        reason = "daily_flatten_1558CT"
         closed = 0
         for pos in positions:
             trade_id = getattr(pos, "trade_id", None) or (
