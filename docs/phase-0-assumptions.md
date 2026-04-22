@@ -41,7 +41,62 @@ are inserted as-is; downstream consumers pick what they need.
 happy path / monkeypatched path / schema preservation / IO error.
 
 ## P0.2 OIF Author Tag + OIFGuard
-_(to be filled in by S2)_
+
+**Author-tag format: `phoenix_<pid>_` prefix on every OIF filename.**
+
+Chosen over more elaborate schemes (HMAC signature of content, explicit
+manifest sidecar) because:
+- **O(1) filename-only check** on the NT8 guard side — the guard must beat
+  ATI's open+read+parse, and filename regex is the fastest possible check.
+- **Any pid accepted.** Multiple Phoenix processes (prod/sim/lab) write
+  concurrently — rejecting anything but "my pid" would drop legitimate
+  OIFs from sibling bots. The `_PHOENIX_PID` per-process stamp exists for
+  forensic attribution in logs, not for access control.
+- **Tamper-resistance is NOT a design goal.** The threat model is
+  pytest / accidental / benign misconfiguration — not a hostile attacker
+  with filesystem access. A crypto-strong author tag buys nothing against
+  that threat model and costs speed + C# complexity.
+
+**PhoenixOIFGuard deploys as an AddOn, not an Indicator.** AddOns run at
+NT8 platform startup regardless of chart state. Indicators only run when
+attached to a chart — unreliable for a guard that must always be active.
+
+**Race win vs ATI parser:** both FileSystemWatcher consumers receive
+Created events independently. The guard wins because (a) regex check is
+nanosecond-level, (b) File.Move within the same volume is an atomic
+rename — orders of magnitude faster than ATI's parse+execute cycle. Even
+under heavy load the guard completes before ATI finishes reading. If the
+guard loses a race (file vanishes before Move), that's logged as WARN
+and we carry on — ATI already processed it, nothing to do.
+
+**Filesystem layout:**
+- `.../NinjaTrader 8/incoming/` — watched folder (ATI's own target)
+- `.../NinjaTrader 8/quarantine/` — **NEW** — rogue files go here with
+  `<ts>__<original_name>` format so successive rogues don't clobber.
+- `.../NinjaTrader 8/log/PhoenixOIFGuard.log` — append-only event log.
+
+**No .tmp→.txt atomic staging required on the Python side any more:**
+earlier `_stage_oif` variants wrote a `.tmp` then renamed. Current
+implementation writes directly to the final filename. The author-tag
+defense makes the old atomic-rename dance unnecessary — NT8 can safely
+pick up the file as soon as it appears because the guard has already
+verified the author.
+
+**Tests: 14 new.** Breakdown:
+- 9 tests cover `write_oif` / `write_bracket_order` / `write_partial_exit`
+  / `write_be_stop` — every public entrypoint emits tagged filenames.
+- 5 tests lock the naming convention into a Python-side regex mirror so
+  any future change to the prefix shape breaks the tests (and therefore
+  must be consciously coordinated with the C# regex in OIFGuard).
+
+**Manual deployment by Jennifer (one-time):**
+1. Copy `ninjatrader/PhoenixOIFGuard.cs` into
+   `%USERPROFILE%\Documents\NinjaTrader 8\bin\Custom\AddOns\`
+2. Open it in NT8 NinjaScript Editor → F5 to compile
+3. Restart NT8 (AddOns load at platform startup only)
+4. Confirm NT8 Output shows `[PhoenixOIFGuard] Watching <path>`
+5. Optional smoke test: drop a `rogue_test.txt` PLACE command into
+   incoming/ — should appear in quarantine/, not execute on chart.
 
 ## P0.3 Runtime Reconciliation
 _(to be filled in by S4)_

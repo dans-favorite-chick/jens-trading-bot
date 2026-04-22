@@ -28,6 +28,18 @@ logger = logging.getLogger("OIF")
 import uuid as _uuid
 _oif_counter = int(time.time() * 1000) % 1000000  # Start from timestamp to avoid restart collisions
 
+# P0.2 (D8): Author-tag every OIF filename Phoenix emits with the process id.
+# NT8's ATI consumes anything in incoming/ regardless of origin. On
+# 2026-04-22 pytest leaked test-literal stop prices (100.00 then 21000.00)
+# into real OIFs that NT8 placed on Jennifer's live chart. The B81 conftest
+# fixture stopped pytest leaks globally, but any rogue process (another
+# bot, manual script, corrupt tool) could still inject. The NT8-side
+# PhoenixOIFGuard AddOn quarantines any file in incoming/ whose name does
+# NOT start with `phoenix_<pid>_` — so tagging here is the other half of
+# that defence. Captured once at module load so every OIF this process
+# writes carries the same author stamp.
+_PHOENIX_PID = os.getpid()
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Low-level OIF line builders
@@ -273,7 +285,9 @@ def _stage_oif(cmd: str, trade_id: str, suffix: str = "") -> tuple[str, str]:
     os.makedirs(OIF_INCOMING, exist_ok=True)
     tag = f"_{trade_id}" if trade_id else ""
     sfx = f"_{suffix}" if suffix else ""
-    fname = f"oif{_oif_counter}{tag}{sfx}.txt"
+    # P0.2 (D8): `phoenix_<pid>_` prefix — PhoenixOIFGuard AddOn on the NT8
+    # side quarantines anything in incoming/ without this prefix.
+    fname = f"phoenix_{_PHOENIX_PID}_oif{_oif_counter}{tag}{sfx}.txt"
     final_path = os.path.join(OIF_INCOMING, fname)
     # Return same path for both — _commit_staged becomes a no-op for the
     # "rename" step; file is already at its final location.
