@@ -20,7 +20,8 @@ MNQ adaptations from published SPY spec:
 - No dividend adjustment (futures don't pay)
 - "Open" = 9:30 ET cash open (minute_of_day == 0)
 - VWAP is session-anchored (Phoenix market['vwap'] already resets at session open)
-- Prod mode uses 10:55 ET EoD flat; lab mode uses 15:55 ET (full-day Zarattini)
+- Prod mode uses 10:55 ET EoD flat; lab/sim mode uses 16:54 ET (= 15:54 CT,
+  matches B84 bot-level flatten — aligned with NT8 Auto Close at 15:55 CT)
 """
 
 from datetime import datetime
@@ -120,7 +121,7 @@ class NoiseAreaMomentum(BaseStrategy):
         min_history = int(self.config.get("min_noise_history_days", 10))
         eod_time_et = self.config.get(
             "prod_eod_flat_time_et" if self.is_prod_bot else "eod_flat_time_et",
-            "10:55" if self.is_prod_bot else "15:55",
+            "10:55" if self.is_prod_bot else "16:54",   # B84: lab/sim = 15:54 CT
         )
 
         # ── Resolve current time (bars hold Unix epoch; interpret in ET) ─
@@ -297,7 +298,7 @@ class NoiseAreaMomentum(BaseStrategy):
         # 1. EoD flat
         eod_time_et = self.config.get(
             "prod_eod_flat_time_et" if self.is_prod_bot else "eod_flat_time_et",
-            "10:55" if self.is_prod_bot else "15:55",
+            "10:55" if self.is_prod_bot else "16:54",   # B84: lab/sim = 15:54 CT
         )
         if bar_dt_et.strftime("%H:%M") >= eod_time_et:
             return (True, "eod_flat")

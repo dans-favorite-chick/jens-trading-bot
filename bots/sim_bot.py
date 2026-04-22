@@ -12,7 +12,8 @@ This replaces the prior lab_bot.py paper-only flow:
   - `_paper_enter` / `_paper_exit` → base_bot's live _enter_trade /
     _exit_trade (WS → bridge → oif_writer with per-strategy account).
   - Bot-level RiskManager → StrategyRiskRegistry (16 isolated RMs).
-  - 4:00 PM CT daily flatten coroutine (CME globex pause).
+  - 15:54 CT daily flatten (inherited from BaseBot, B84) with a 15:53
+    CT no-new-entries gate and 15:54:45 CT fill-confirmation watcher.
   - Overnight holds allowed during 5 PM – 4 PM next-day globex session.
 
 Opening-session sub-strategies self-gate via is_in_window() — no
@@ -244,13 +245,10 @@ class SimBot(BaseBot):
         # reads from it; sim_bot overrides eval and close paths to
         # consult the registry instead.
         self.risk_registry = StrategyRiskRegistry()
-        # DailyFlattener uses the PositionManager directly; we plumb in
-        # the ws sender at run() time once the connection is established.
-        self._flattener = DailyFlattener(
-            positions_manager=self.positions,
-            websocket_send_fn=None,   # set in run() when ws is live
-            logger=logger,
-        )
+        # B84: self._flattener is provided by BaseBot.__init__ (shared
+        # infra so prod and sim both get the 15:54 CT flatten). sim_bot
+        # only adds post-flatten hooks (debrief + recap) by overriding
+        # _daily_flatten_loop below.
         # [COUNCIL-AUTO] S5 4A CouncilGate auto-trigger state.
         # Session-open 08:30 CT trigger dropped per Jennifer 2026-04-21;
         # regime-shift is the only auto-trigger that ships.
@@ -307,13 +305,15 @@ class SimBot(BaseBot):
         logger.info(f"[SIM] Per-strategy: $2000 start / $200 daily cap / $1500 floor")
         logger.info(f"[SIM] Registry: {len(self.risk_registry.known_keys())} keys tracked "
                     f"({n_halted} halted from prior session)")
-        logger.info(f"[SIM] Daily flatten: 16:00 CT (CME globex pause)")
+        logger.info(
+            f"[SIM] Daily flatten: 15:54 CT (Phoenix PRIMARY); "
+            f"15:55 CT (NT8 Auto Close safety net); no new entries after 15:53 CT"
+        )
 
     async def run(self):
-        """Override to start the 4pm-CT daily flatten coroutine alongside the
-        standard base_bot async tasks."""
-        # Launch daily flatten poller (30s cadence, mirrors base pattern).
-        asyncio.ensure_future(self._daily_flatten_loop())
+        """Sim-specific extras over BaseBot.run(): schedule the council
+        regime-shift poller. DailyFlattener is now scheduled by BaseBot
+        (B84)."""
         # [COUNCIL-AUTO] Launch council regime-shift auto-trigger poller.
         # Same 30s cadence as the flatten poller, same safe-by-default
         # semantics. (Session-open 08:30 CT trigger dropped 2026-04-21.)
@@ -321,20 +321,39 @@ class SimBot(BaseBot):
         await super().run()
 
     async def _daily_flatten_loop(self):
-        """Poll every 30s; flatten at 16:00 CT if not yet flattened today."""
+        """B84: override of BaseBot._daily_flatten_loop. Runs the same
+        15:54 CT flatten + grace-window watcher the parent provides,
+        then adds the sim-specific post-flatten debrief + 17:00 daily
+        recap hooks. Polls every 30s."""
+        from datetime import datetime as _dt, date as _date  # noqa: F401
+        from zoneinfo import ZoneInfo as _ZI
+        ct = _ZI("America/Chicago")
+        try:
+            from config.settings import FILL_CONFIRMATION_GRACE_SECONDS as _GRACE_S
+        except Exception:
+            _GRACE_S = 45
+
         self._debrief_fired_for: Optional["date"] = None  # type: ignore[name-defined]
         self._recap_fired_for: Optional["date"] = None  # type: ignore[name-defined]
         while True:
             try:
                 # Hook the ws sender lazily — _ws is set by the base's
                 # _connect_and_listen and may rotate on reconnect.
-                self._flattener.websocket_send_fn = self._get_ws_send_fn()
-                n = await self._flattener.check_and_flatten()
+                self._flattener.ws_send = self._get_ws_send_fn()
+                now_ct = _dt.now(ct)
+                n = await self._flattener.check_and_flatten(now_ct)
                 if n:
-                    logger.info(f"[DAILY_FLATTEN] closed {n} position(s) at 16:00 CT")
+                    logger.info(
+                        f"[DAILY_FLATTEN] closed {n} position(s) at "
+                        f"{self._flattener.flatten_hour:02d}:"
+                        f"{self._flattener.flatten_minute:02d} CT"
+                    )
+                    await self._log_session_close_event(now_ct, n)
+
+                await self._watch_flatten_grace_window(now_ct, _GRACE_S)
 
                 # [AI-DEBRIEF-HOOK] S7 4C: fire post-flatten debrief once per
-                # day after the 16:00 CT flatten, pre-17:00 globex reopen.
+                # day after the 15:54 CT flatten, pre-17:00 globex reopen.
                 await self._maybe_run_debrief()
 
                 # B54 daily recap: fire a concise Telegram summary once
@@ -400,14 +419,22 @@ class SimBot(BaseBot):
 
     async def _maybe_run_debrief(self):
         """[AI-DEBRIEF-HOOK] Run the S7 session debriefer once per day,
-        post-flatten. Safe-by-default — never raises into the poll loop."""
+        post-flatten. Safe-by-default — never raises into the poll loop.
+
+        B84: fire after the 15:54 CT flatten (was 16:00 CT pre-B84).
+        Gate reads the flatten time from the live DailyFlattener so the
+        debrief window auto-tracks any future reschedule.
+        """
         try:
-            from datetime import datetime as _dt, date as _date
+            from datetime import datetime as _dt, date as _date, time as _time
             from zoneinfo import ZoneInfo as _ZI
             now_ct = _dt.now(_ZI("America/Chicago"))
             today_ct = now_ct.date()
-            # Only after 16:00 CT, and only once per day.
-            if now_ct.hour < 16:
+            # Only after the daily flatten has fired, and only once per day.
+            flatten_cutoff = _time(
+                self._flattener.flatten_hour, self._flattener.flatten_minute,
+            )
+            if now_ct.time() < flatten_cutoff:
                 return
             if getattr(self, "_debrief_fired_for", None) == today_ct:
                 return
@@ -507,7 +534,7 @@ class SimBot(BaseBot):
 
         import json
 
-        async def _send(trade_id: str, reason: str = "daily_flatten_16CT"):
+        async def _send(trade_id: str, reason: str = "daily_flatten_1554CT"):
             pos = self.positions.get_position(trade_id)
             if pos is None:
                 return

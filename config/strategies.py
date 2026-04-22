@@ -202,7 +202,7 @@ STRATEGIES = {
         "trade_freq_minutes": 30,
         "require_vwap_confluence": True,
         "min_noise_history_days": 10,
-        "eod_flat_time_et": "15:55",       # Lab full session
+        "eod_flat_time_et": "16:54",       # B84: 15:54 CT = 16:54 ET (matches bot-level flatten)
         "prod_eod_flat_time_et": "10:55",  # Prod 90-min window
     },
 

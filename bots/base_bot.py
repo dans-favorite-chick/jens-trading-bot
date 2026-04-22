@@ -318,6 +318,19 @@ class BaseBot:
         self.tracker = StrategyTracker()
         self.strategies: list[BaseStrategy] = []
 
+        # B84: DailyFlattener is shared infrastructure (was sim-only pre-B84).
+        # Prod now inherits the 15:54 CT flatten too. ws_send is plumbed in
+        # lazily once the WS connection comes up — see _daily_flatten_loop.
+        from bots.daily_flatten import DailyFlattener as _DailyFlattener
+        self._flattener = _DailyFlattener(
+            positions_manager=self.positions,
+            websocket_send_fn=None,
+            logger=logger,
+        )
+        # B84 grace-window bookkeeping: flip to True once a flatten has fired
+        # today; the post-flatten watcher (15:54 → 15:54:45) reads this.
+        self._flatten_grace_logged_for: Optional["date"] = None  # type: ignore[name-defined]
+
         # Phase 5: Cockpit, Equity, Clustering, Telegram Commands, Scaler
         self.cockpit = Cockpit()
         self.equity_tracker = EquityTracker()
@@ -783,6 +796,12 @@ class BaseBot:
         # Phase 4B: session-levels prior-day refresh at 00:01 CT daily
         asyncio.ensure_future(self._session_levels_refresh_task())
 
+        # B84: 15:54 CT daily flatten + 15:54:45 fill-confirmation watcher.
+        # Subclasses that need post-flatten hooks (e.g. sim_bot's debrief +
+        # recap) override _daily_flatten_loop rather than scheduling their
+        # own parallel loop.
+        asyncio.ensure_future(self._daily_flatten_loop())
+
         while True:
             try:
                 await self._connect_and_listen()
@@ -952,6 +971,185 @@ class BaseBot:
             except Exception as e:
                 logger.error(f"[SESSION_LEVELS] refresh task error: {e!r}")
                 await asyncio.sleep(3600)  # retry in 1h rather than tight-loop
+
+    # ─── B84: daily flatten + grace window + no-new-entries gate ──────
+    def _is_no_new_entries_window(self, now_ct: Optional["datetime"] = None) -> bool:
+        """B84: True between NO_NEW_ENTRIES_HOUR/MINUTE_CT (default 15:53)
+        and the start of the next globex session (17:00 CT). Used by
+        _enter_trade to refuse new positions in the final runway before
+        the 15:54 daily flatten."""
+        from datetime import datetime as _dt, time as _t
+        from zoneinfo import ZoneInfo as _ZI
+        try:
+            from config.settings import (
+                NO_NEW_ENTRIES_HOUR_CT, NO_NEW_ENTRIES_MINUTE_CT,
+            )
+        except Exception:
+            NO_NEW_ENTRIES_HOUR_CT, NO_NEW_ENTRIES_MINUTE_CT = 15, 53
+        ct = _ZI("America/Chicago")
+        n = now_ct if now_ct is not None else _dt.now(ct)
+        # Cutoff window: 15:53:00 CT → 17:00:00 CT (globex reopen).
+        # After 17:00 a new session starts and entries are allowed again.
+        cutoff = _t(NO_NEW_ENTRIES_HOUR_CT, NO_NEW_ENTRIES_MINUTE_CT)
+        session_open = _t(17, 0)
+        t = n.time()
+        return cutoff <= t < session_open
+
+    async def _daily_flatten_loop(self) -> None:
+        """B84: poll every 30s — fire DailyFlattener at 15:54 CT, then
+        watch the 45-second fill-confirmation grace window. Subclasses
+        override this to bolt on post-flatten hooks (sim_bot adds the
+        AI debrief + 17:00 daily recap)."""
+        from datetime import datetime as _dt, date as _date
+        from zoneinfo import ZoneInfo as _ZI
+        ct = _ZI("America/Chicago")
+        try:
+            from config.settings import FILL_CONFIRMATION_GRACE_SECONDS as _GRACE_S
+        except Exception:
+            _GRACE_S = 45
+
+        while True:
+            try:
+                # Hook the ws sender lazily — _ws is set by the base's
+                # _connect_and_listen and may rotate on reconnect.
+                self._flattener.ws_send = self._get_ws_send_fn()
+                now_ct = _dt.now(ct)
+                n = await self._flattener.check_and_flatten(now_ct)
+                if n:
+                    logger.info(
+                        f"[DAILY_FLATTEN] closed {n} position(s) at "
+                        f"{self._flattener.flatten_hour:02d}:"
+                        f"{self._flattener.flatten_minute:02d} CT"
+                    )
+                    # B84: log the session_close_event immediately so the
+                    # forensic trail captures pre-grace state.
+                    await self._log_session_close_event(now_ct, n)
+
+                # B84 grace window: between flatten fire and +GRACE_S,
+                # log AWAITING_FILL_CONFIRMATION. At end of grace, if
+                # any position is still open, WARN that NT8 Auto Close
+                # will catch it.
+                await self._watch_flatten_grace_window(now_ct, _GRACE_S)
+            except Exception as e:
+                logger.warning(f"[DAILY_FLATTEN] poll error: {e!r}")
+            await asyncio.sleep(30)
+
+    async def _watch_flatten_grace_window(self, now_ct, grace_s: int) -> None:
+        """B84: after DailyFlattener fires, watch open positions for
+        grace_s seconds. Log AWAITING_FILL_CONFIRMATION on entry, WARN
+        if anything is still open at the end of the window."""
+        fired_at = getattr(self._flattener, "last_flatten_fired_at_ct", None)
+        if fired_at is None:
+            return
+        # Only run the grace-window hook once per day.
+        if self._flatten_grace_logged_for == fired_at.date():
+            return
+        # Only enter the grace window if we're within it.
+        elapsed = (now_ct - fired_at).total_seconds()
+        if elapsed < 0 or elapsed > grace_s:
+            # If we're past grace, check for lingering positions exactly once.
+            if elapsed > grace_s and self._flatten_grace_logged_for != fired_at.date():
+                self._emit_grace_end_warn_if_open(fired_at)
+                self._flatten_grace_logged_for = fired_at.date()
+            return
+        open_count = len(self.positions.active_positions)
+        logger.info(
+            f"[AWAITING_FILL_CONFIRMATION] {open_count} position(s) still "
+            f"open {elapsed:.0f}s after flatten fire at "
+            f"{fired_at.strftime('%H:%M:%S')} CT — NT8 safety net at "
+            f"15:55 CT will catch any remaining"
+        )
+
+    def _emit_grace_end_warn_if_open(self, fired_at) -> None:
+        """B84: called once when the grace window ends. If positions
+        are still open, they've effectively been handed off to the NT8
+        Auto Close safety net; log WARN so the operator sees it."""
+        still_open = list(self.positions.active_positions)
+        if not still_open:
+            logger.info(
+                f"[FILL_CONFIRMED] all flatten exits confirmed closed "
+                f"within grace window (fired {fired_at.strftime('%H:%M:%S')} CT)"
+            )
+            return
+        ids = [getattr(p, "trade_id", "?") for p in still_open]
+        logger.warning(
+            f"[FLATTEN_INCOMPLETE] {len(still_open)} position(s) STILL OPEN "
+            f"{fired_at.strftime('%H:%M:%S')} CT + grace: {ids} — NT8 "
+            f"Auto Close (15:55 CT) will close these as safety net"
+        )
+
+    async def _log_session_close_event(self, now_ct, flattened_count: int) -> None:
+        """B84: emit a single structured session_close_event to the
+        history log. Captures which positions the bot flattened vs.
+        which remain open for the NT8 safety net to catch."""
+        try:
+            flattened_ids = list(
+                getattr(self._flattener, "last_flatten_trade_ids", []) or []
+            )
+            still_open = [
+                getattr(p, "trade_id", "?")
+                for p in self.positions.active_positions
+            ]
+            # Session P&L — best-effort from today's trade_history. B13
+            # commission math correction is independent; if B13 hasn't
+            # shipped, session_pnl is best-effort gross.
+            session_pnl = 0.0
+            b13_applied = False
+            try:
+                today = now_ct.date()
+                for t in self.positions.trade_history:
+                    exit_ts = t.get("exit_time") or 0
+                    if not exit_ts:
+                        continue
+                    from datetime import datetime as _dt2
+                    dt = _dt2.fromtimestamp(float(exit_ts), tz=now_ct.tzinfo)
+                    if dt.date() != today:
+                        continue
+                    session_pnl += float(t.get("pnl_dollars") or 0.0)
+                # If B13 landed, pnl_dollars already carries the fix.
+                try:
+                    from config.settings import B13_COMMISSION_APPLIED  # noqa: F401
+                    b13_applied = True
+                except Exception:
+                    b13_applied = False
+            except Exception:
+                pass
+
+            if hasattr(self.history, "log_session_close_event"):
+                self.history.log_session_close_event(
+                    now_ct=now_ct,
+                    flattened_trade_ids=flattened_ids,
+                    still_open_trade_ids=still_open,
+                    session_pnl=session_pnl,
+                    b13_applied=b13_applied,
+                )
+        except Exception as e:
+            logger.warning(f"[SESSION_CLOSE_EVENT] log failed: {e!r}")
+
+    def _get_ws_send_fn(self):
+        """Default WS EXIT sender for the DailyFlattener. sim_bot
+        overrides this to include per-strategy account routing."""
+        ws = getattr(self, "_ws", None)
+        if ws is None:
+            return None
+
+        async def _send(trade_id: str, reason: str = "daily_flatten_1554CT"):
+            pos = self.positions.get_position(trade_id) if hasattr(
+                self.positions, "get_position"
+            ) else None
+            if pos is None:
+                return
+            try:
+                await ws.send(json.dumps({
+                    "type": "trade", "trade_id": trade_id,
+                    "action": "EXIT", "qty": pos.contracts,
+                    "reason": reason,
+                    "account": getattr(pos, "account", None),
+                    "sub_strategy": getattr(pos, "sub_strategy", None),
+                }))
+            except Exception as e:
+                logger.error(f"[DAILY_FLATTEN] WS EXIT send failed for {trade_id}: {e}")
+        return _send
 
     async def _heartbeat_loop(self):
         """Send periodic heartbeat to bridge so it can detect hung bots."""
@@ -2475,6 +2673,19 @@ class BaseBot:
     # ─── Trade Execution ────────────────────────────────────────────
     async def _enter_trade(self, ws, signal: Signal):
         """Execute entry via bridge → OIF with fill confirmation."""
+        # B84 no-new-entries gate. From 15:53 CT until the next globex
+        # session opens at 17:00 CT, the bot refuses new positions so
+        # we don't take a trade that would immediately be unwound by
+        # the 15:54 flatten (or race the NT8 Auto Close at 15:55).
+        if self._is_no_new_entries_window():
+            logger.info(
+                f"[NO_NEW_ENTRIES:{signal.trade_id}] {signal.strategy} "
+                f"{signal.direction} @ signal — rejected (within the "
+                f"15:53→17:00 CT pre-flatten window)"
+            )
+            self.last_rejection = "Within 15:53-17:00 CT no-new-entries window"
+            return
+
         market = self.aggregator.snapshot()
         price = market.get("price", 0)
         atr_5m = market.get("atr_5m", 0)

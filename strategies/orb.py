@@ -16,7 +16,7 @@ Mechanics:
 - Skip: OR < 10 points (low-vol day) or > 60 points (news-gap day)
 - Max: 1 trade per day
 - Entry cutoff: 60 min after session open (10:30 ET / 9:30 CST)
-- EoD flat: 15:55 ET (lab) / 10:55 ET (prod 90-min window)
+- EoD flat: 16:54 ET (lab/sim = 15:54 CT, B84) / 10:55 ET (prod 90-min)
 """
 
 from datetime import datetime
@@ -195,7 +195,7 @@ class OpeningRangeBreakout(BaseStrategy):
                 confluences.append(f"Narrow OR ({or_atr_ratio:.2f}x ATR)")
             confluences.append(f"ATR_5m: {atr_5m:.2f}")
 
-        eod_time = "10:55" if self.is_prod_bot else "15:55"
+        eod_time = "10:55" if self.is_prod_bot else "16:54"   # B84: lab/sim = 15:54 CT
 
         logger.info(f"[EVAL] {self.name}: SIGNAL {direction} entry={entry_price:.2f}")
         return Signal(
