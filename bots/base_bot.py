@@ -212,6 +212,18 @@ class BaseBot:
 
     def __init__(self):
         _validate_nt8_paths()
+        # B59: one-time startup banner documenting the live-account hard-guard.
+        _live_guard = os.environ.get("LIVE_ACCOUNT", "").strip()
+        if _live_guard:
+            logger.critical(
+                f"[LIVE_GUARD] armed — any order routed to account "
+                f"'{_live_guard}' will hard-fail (B59 defensive guard)."
+            )
+        else:
+            logger.warning(
+                "[LIVE_GUARD] DISARMED — LIVE_ACCOUNT not set in .env. "
+                "Bot will NOT reject orders targeting any account."
+            )
         self.aggregator = TickAggregator(bot_name=self.bot_name)
         # Restore aggregator state from disk (survive restarts — no warmup needed)
         self._aggregator_state_path = os.path.join(
@@ -2428,6 +2440,29 @@ class BaseBot:
                          f"(strategy={signal.strategy}, sub={_sub_strategy})")
         else:
             _account = get_account_for_signal(signal.strategy, _sub_strategy)
+
+        # B59 hard-guard: never route to the live account. If a future
+        # routing bug or config error tries to, abort the signal loudly
+        # instead of submitting a real-money trade.
+        _live = os.environ.get("LIVE_ACCOUNT", "").strip()
+        if _live and str(_account).strip() == _live:
+            logger.critical(
+                f"[LIVE_GUARD] {self.bot_name} BLOCKED {signal.strategy} "
+                f"{signal.direction} signal — resolved to live account "
+                f"'{_account}'. Entry aborted. Check FORCE_ACCOUNT and "
+                f"config/account_routing.py."
+            )
+            self.last_rejection = f"LIVE_GUARD: refused to route to {_account}"
+            try:
+                from core.telegram_notifier import send_sync
+                send_sync(
+                    f"🛑 [LIVE_GUARD] {self.bot_name} BLOCKED {signal.strategy} "
+                    f"routed to LIVE account '{_account}'. Entry aborted.",
+                    dedup_key=f"live_guard:{self.bot_name}:{signal.strategy}",
+                )
+            except Exception:
+                pass
+            return
 
         # B50: pre-entry position-reconcile guard (inverse phantom).
         # If NT8 already reports a position on this account (e.g. Python

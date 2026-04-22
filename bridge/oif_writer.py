@@ -33,11 +33,35 @@ _oif_counter = int(time.time() * 1000) % 1000000  # Start from timestamp to avoi
 # Low-level OIF line builders
 # ═══════════════════════════════════════════════════════════════════════
 
+def _reject_live_account(account: str, caller: str) -> None:
+    """
+    B59 hard-guard: Phoenix must never route any order to the live account.
+    Reads LIVE_ACCOUNT from env (populated from .env on bot startup via
+    load_dotenv(override=True)). Raises RuntimeError on any match — caller
+    is NOT expected to catch this; it's a fatal belt-and-suspenders check
+    paired with disabling ATI on the live account in NT8 Control Center.
+
+    To override (manual testing only), unset LIVE_ACCOUNT in the env before
+    launching the bot.
+    """
+    live = os.environ.get("LIVE_ACCOUNT", "").strip()
+    if live and str(account).strip() == live:
+        raise RuntimeError(
+            f"[LIVE_GUARD] {caller}: BLOCKED attempt to write order to "
+            f"live account '{account}'. Phoenix must NEVER trade the live "
+            f"account via OIF. If this was intentional manual testing, "
+            f"unset LIVE_ACCOUNT in .env. Otherwise this is a routing bug."
+        )
+
+
 def _require_account(account: str | None, caller: str) -> str:
     """
     Phase 4C: PLACE/EXIT paths must carry an explicit NT8 account. A silent
     fallback to the module-level ACCOUNT masked routing bugs — every trade
     landed on Sim101 regardless of strategy. Raise loudly instead.
+
+    B59: also blocks the live account (LIVE_ACCOUNT env var) at the
+    narrowest choke-point so every PLACE/EXIT path is guarded in one place.
     """
     if account is None or not str(account).strip():
         raise ValueError(
@@ -45,6 +69,7 @@ def _require_account(account: str | None, caller: str) -> str:
             f"Callers must resolve via config.account_routing."
             f"get_account_for_signal() and pass account=<SimFoo>."
         )
+    _reject_live_account(account, caller)
     return account
 
 
@@ -143,6 +168,8 @@ def cancel_all_orders_line(account: str = None) -> str:
             "The no-args form cancels across ALL NT8-connected accounts "
             "(including live brokerage) and is never an acceptable default."
         )
+    # B59: block any cancel targeting the live account.
+    _reject_live_account(account, "cancel_all_orders_line")
     # B44 fix: NT8 ATI rejected `CANCELALLORDERS;Sim101;;;;;;;;;;;;` with
     # "invalid # of parameters, should be 13 but is 14". NT8 wants 13
     # fields = 12 semicolons total (1 after CANCELALLORDERS + 11 trailing).
@@ -273,6 +300,9 @@ def write_bracket_order(
     if qty < 1:
         logger.error(f"[OIF:{trade_id}] refusing bracket with qty={qty}")
         return []
+    # B59 hard-guard at the top-level entrypoint — fails before any fs IO.
+    if account:
+        _reject_live_account(account, f"write_bracket_order[{trade_id}]")
     # 4C: surface missing account before any file IO.
     _require_account(account, "write_bracket_order")
 
@@ -430,6 +460,8 @@ def write_protection_oco(direction: str, qty: int, stop_price: float,
     if direction not in ("LONG", "SHORT"):
         logger.error(f"[PROTECT:{trade_id}] invalid direction: {direction}")
         return []
+    # B59 hard-guard — fail before staging any protection files.
+    _reject_live_account(account, f"write_protection_oco[{trade_id}]")
     exit_side = "SELL" if direction == "LONG" else "BUY"
     oco_id = f"OCO_{trade_id.split('_')[0]}"  # strip "_protect" suffix
 
@@ -492,6 +524,9 @@ def write_oif(action: str, qty: int = 1, stop_price: float = None,
     global _oif_counter
     action = action.upper().strip()
     qty = int(qty)
+    # B59 hard-guard at the legacy write_oif() entrypoint.
+    if account:
+        _reject_live_account(account, f"write_oif[{action}:{trade_id}]")
     if qty < 1 and action not in ("CANCEL_ALL", "CANCELALLORDERS", "EXIT",
                                    "EXIT_ALL", "CLOSE", "CLOSEPOSITION"):
         logger.error(f"[OIF:{trade_id or 'N/A'}] Refusing to write entry with qty={qty}")
