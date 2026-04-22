@@ -20,11 +20,22 @@ import pytest
 @pytest.fixture(autouse=True)
 def _isolate_oif_incoming(monkeypatch):
     """Every test gets a clean tempdir for OIF_INCOMING. No test shall
-    ever write to the real NT8 incoming folder."""
+    ever write to the real NT8 incoming folder.
+
+    P0.4 addition: also flip _PYTEST_BYPASS_CONSUME_CHECK = True so the
+    mandatory post-write consume-check (which would raise OIFStuckError
+    because no simulated NT8 consumer deletes the tmp files) becomes a
+    no-op for the default test. Tests that specifically exercise the
+    stuck-raise behaviour (tests/test_verify_consumed_mandatory.py)
+    monkeypatch it back to False inside their own fixture scope.
+    """
     tmp = tempfile.mkdtemp(prefix="phoenix_oif_test_")
     try:
         import bridge.oif_writer as _oif
         monkeypatch.setattr(_oif, "OIF_INCOMING", tmp, raising=False)
+        monkeypatch.setattr(
+            _oif, "_PYTEST_BYPASS_CONSUME_CHECK", True, raising=False,
+        )
     except Exception:
         # oif_writer may not be importable in ultra-minimal test envs
         pass

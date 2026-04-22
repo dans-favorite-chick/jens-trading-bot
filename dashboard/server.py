@@ -47,6 +47,102 @@ def safe_jsonify(data):
         mimetype="application/json",
     )
 
+
+# ─── B82: CME-session-scoped durable trade history ─────────────────
+# The in-memory _state["sim"]["trades"] is populated by the bot's
+# state-push and is capped + volatile (reset on dashboard restart,
+# truncated to recent-N). The browser-facing dashboard must show ALL
+# trades from the current CME globex session, durably across dashboard
+# and bot restarts. Pull from logs/trade_memory.json directly — that's
+# the durable source of truth, already written on every trade close
+# and hydrated at bot boot by P0.1 (load_history=True).
+#
+# Globex session semantics: opens 17:00 CT daily. The "current session"
+# for display is the window [most-recent 17:00 CT, now]. That naturally
+# spans the 16:00-17:00 daily-flatten dead zone (trades from the
+# afternoon remain visible) and flips over when the next session
+# opens at 17:00 CT the following day.
+
+def _session_start_ct_epoch(now_ct=None) -> float:
+    """Unix epoch seconds for the start of the current CME globex session.
+
+    Returns the timestamp of the most recent 17:00 America/Chicago.
+    If now is 16:00 CT Thursday, session_start is 17:00 CT Wednesday.
+    If now is 17:01 CT Thursday, session_start is 17:00 CT Thursday.
+
+    `now_ct` is an optional CT-aware datetime for testability. Production
+    callers pass nothing; tests freeze "now" to verify boundary edges.
+    """
+    from datetime import datetime, timedelta
+    try:
+        from zoneinfo import ZoneInfo
+        ct = ZoneInfo("America/Chicago")
+    except Exception:
+        # Fallback: UTC-5 (not DST-aware but better than crashing).
+        from datetime import timezone
+        ct = timezone(timedelta(hours=-5))
+
+    if now_ct is None:
+        now_ct = datetime.now(ct)
+    if now_ct.hour >= 17:
+        session_start = now_ct.replace(
+            hour=17, minute=0, second=0, microsecond=0,
+        )
+    else:
+        session_start = (now_ct - timedelta(days=1)).replace(
+            hour=17, minute=0, second=0, microsecond=0,
+        )
+    return session_start.timestamp()
+
+
+def _load_session_trades_by_bot() -> dict[str, list[dict]]:
+    """Read logs/trade_memory.json and bucket current-session trades by
+    bot_id. Returns {"prod": [...], "sim": [...], "lab": [...]}.
+
+    Each bucket is sorted newest-first by exit_time. Trades without a
+    recognized bot_id land under "unknown" so nothing is silently dropped.
+
+    Graceful failure: missing / corrupt / non-list file → empty buckets.
+    """
+    tm_path = os.path.join(PROJECT_ROOT, "logs", "trade_memory.json")
+    try:
+        with open(tm_path, encoding="utf-8") as f:
+            rows = json.load(f)
+    except Exception as e:
+        logger.warning(f"[SESSION_TRADES] trade_memory.json read failed: {e!r}")
+        return {}
+    if not isinstance(rows, list):
+        logger.warning(
+            f"[SESSION_TRADES] trade_memory.json wrong shape "
+            f"(got {type(rows).__name__}) — treating as empty"
+        )
+        return {}
+
+    session_start = _session_start_ct_epoch()
+    buckets: dict[str, list[dict]] = {}
+    for t in rows:
+        exit_ts = t.get("exit_time")
+        if exit_ts is None:
+            continue
+        try:
+            ts = float(exit_ts)
+        except (TypeError, ValueError):
+            continue
+        if ts < session_start:
+            continue
+        bot_id = t.get("bot_id") or "unknown"
+        buckets.setdefault(bot_id, []).append(t)
+
+    # Preserve append-order (oldest-first). The dashboard template
+    # (dashboard.html renderTrades) calls `.reverse()` so it expects
+    # oldest-first from the server; sorting newest-first here would
+    # double-reverse and put oldest at the top of the UI table.
+    # Still, file contents may not be perfectly chronological — enforce
+    # oldest-first explicitly so the template contract holds.
+    for b in buckets.values():
+        b.sort(key=lambda t: float(t.get("exit_time") or 0))
+    return buckets
+
 # ─── Bot Process Manager ───────────────────────────────────────────
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 _bot_processes: dict[str, subprocess.Popen] = {}
@@ -253,17 +349,32 @@ def index():
 @app.route("/api/status")
 def api_status():
     with _state_lock:
-        return safe_jsonify({
-            "prod": _state["prod"],
-            "sim": _state.get("sim", {}),
-            "bridge": _state["bridge_health"],
-            "bot_processes": {
-                "prod": _bot_status("prod"),
-                "sim": _bot_status("sim"),
-            },
-            "connection_log": _state["connection_log"][-200:],
-            "ts": time.time(),
-        })
+        prod_bucket = dict(_state.get("prod") or {})
+        sim_bucket = dict(_state.get("sim") or {})
+        bridge = _state["bridge_health"]
+        conn_log = _state["connection_log"][-200:]
+
+    # B82: overlay session-scoped trades from trade_memory.json. This
+    # survives both dashboard restart (in-memory _state resets) and bot
+    # restart (bot's push-buffer resets) because the file is updated on
+    # every trade close. The browser-visible trade table is durable until
+    # the next CME session open at 17:00 CT.
+    session_trades = _load_session_trades_by_bot()
+    prod_bucket["trades"] = session_trades.get("prod", [])
+    sim_bucket["trades"] = session_trades.get("sim", [])
+
+    return safe_jsonify({
+        "prod": prod_bucket,
+        "sim": sim_bucket,
+        "bridge": bridge,
+        "bot_processes": {
+            "prod": _bot_status("prod"),
+            "sim": _bot_status("sim"),
+        },
+        "connection_log": conn_log,
+        "session_start_ts": _session_start_ct_epoch(),
+        "ts": time.time(),
+    })
 
 
 @app.route("/api/council")
@@ -334,10 +445,21 @@ def api_connection_log():
 
 @app.route("/api/trades")
 def api_trades():
-    with _state_lock:
-        prod_trades = _state.get("prod", {}).get("trades", [])
-        lab_trades = _state.get("lab", {}).get("trades", [])
-    return jsonify({"prod": prod_trades, "lab": lab_trades})
+    """B82: all current-session trades, bucketed by bot_id, sourced from
+    the durable trade_memory.json so the response survives dashboard and
+    bot restarts. Session = most-recent 17:00 CT → now.
+
+    Response shape is the legacy {prod, lab} plus a new sim bucket.
+    lab is preserved for back-compat with any consumers still reading it
+    (lab was decommissioned 2026-04-21 but the key stays for old UIs).
+    """
+    session_trades = _load_session_trades_by_bot()
+    return safe_jsonify({
+        "prod": session_trades.get("prod", []),
+        "sim": session_trades.get("sim", []),
+        "lab": session_trades.get("lab", []),
+        "session_start_ts": _session_start_ct_epoch(),
+    })
 
 
 @app.route("/api/strategy-risk")
@@ -355,48 +477,47 @@ def api_strategy_risk():
 
 @app.route("/api/today-pnl")
 def api_today_pnl():
-    """B79: compute today's P&L from trade_memory.json — the durable
-    source of truth that survives bot and dashboard restarts.
+    """B79 + B82: compute current CME-session P&L from trade_memory.json
+    — the durable source of truth that survives bot and dashboard restarts.
 
-    Returns per-bot and per-strategy P&L for trades that closed today
-    in CT (America/Chicago). Uses exit_time (unix seconds) to filter.
+    B82 change: "today" now means "current globex session" (most-recent
+    17:00 CT → now), not "calendar day CT". This keeps the dashboard P&L
+    coherent across the 16:00-17:00 daily-flatten dead zone and matches
+    the session boundary used by /api/status and /api/trades.
+
+    Returns per-bot and per-strategy P&L.
     """
-    from datetime import datetime, timezone
-    try:
-        from zoneinfo import ZoneInfo
-        ct = ZoneInfo("America/Chicago")
-    except Exception:
-        ct = timezone.utc
-
-    today_ct = datetime.now(ct).date()
-
     tm_path = os.path.join(PROJECT_ROOT, "logs", "trade_memory.json")
     try:
         with open(tm_path, encoding="utf-8") as f:
             rows = json.load(f)
     except Exception as e:
-        return safe_jsonify({"error": f"trade_memory read: {e}",
-                             "per_bot": {}, "per_strategy": {}})
+        return safe_jsonify({
+            "error": f"trade_memory read: {e}",
+            "per_bot": {}, "per_strategy": {}, "trade_count": 0,
+        })
+    if not isinstance(rows, list):
+        return safe_jsonify({
+            "error": "trade_memory.json shape != list",
+            "per_bot": {}, "per_strategy": {}, "trade_count": 0,
+        })
 
+    session_start = _session_start_ct_epoch()
     per_bot: dict = {}
     per_strategy: dict = {}
-    today_rows = []
+    session_rows = []
     for t in rows:
         exit_ts = t.get("exit_time") or t.get("ts_exit")
-        if not exit_ts:
+        if exit_ts is None:
             continue
         try:
-            # Convert unix seconds → CT date
-            if isinstance(exit_ts, (int, float)):
-                dt = datetime.fromtimestamp(float(exit_ts), tz=ct)
-            else:
-                # Fallback: ISO string
-                dt = datetime.fromisoformat(str(exit_ts)).astimezone(ct)
+            ts = float(exit_ts) if isinstance(exit_ts, (int, float)) \
+                else _iso_to_epoch(str(exit_ts))
         except Exception:
             continue
-        if dt.date() != today_ct:
+        if ts is None or ts < session_start:
             continue
-        today_rows.append(t)
+        session_rows.append(t)
         bot = t.get("bot_id") or "unknown"
         strat = t.get("strategy") or "unknown"
         pnl = float(t.get("pnl_dollars") or 0.0)
@@ -425,12 +546,21 @@ def api_today_pnl():
         s["win_rate"] = round(100 * s["wins"] / s["trades"], 1) if s["trades"] else 0.0
 
     return safe_jsonify({
-        "today_ct": str(today_ct),
+        "session_start_ts": session_start,
         "per_bot": per_bot,
         "per_strategy": per_strategy,
-        "trade_count": len(today_rows),
+        "trade_count": len(session_rows),
         "ts": time.time(),
     })
+
+
+def _iso_to_epoch(s: str) -> float | None:
+    """Best-effort ISO-8601 → epoch seconds. Returns None on parse failure."""
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(s).timestamp()
+    except Exception:
+        return None
 
 
 @app.route("/api/working-orders")

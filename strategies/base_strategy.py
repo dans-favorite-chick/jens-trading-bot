@@ -42,7 +42,7 @@ class Signal:
     # relying solely on bracketed stop/target.
     exit_trigger: Optional[str] = None   # e.g. "price_returns_inside_noise_area"
                                          #      "chandelier_trail_3atr" (ORB)
-    eod_flat_time_et: Optional[str] = None  # e.g. "15:55" or "10:55"
+    eod_flat_time_et: Optional[str] = None  # e.g. "16:54" (lab/sim = 15:54 CT, B84) or "10:55" (prod 90-min)
 
     # ─── Per-signal scale-out override ─────────────────────────────────
     # Strategies with a research-backed partial-exit multiple that

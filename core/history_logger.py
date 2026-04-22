@@ -250,6 +250,40 @@ class HistoryLogger:
             "recovery_mode": risk_dict.get("recovery_mode", False),
         })
 
+    def log_session_close_event(
+        self,
+        now_ct,
+        flattened_trade_ids: list,
+        still_open_trade_ids: list,
+        session_pnl: float,
+        b13_applied: bool = False,
+    ):
+        """B84: structured session_close event emitted at 15:54 CT flatten.
+
+        Captures (a) positions Phoenix closed itself, (b) positions it
+        left open for the NT8 Auto Close safety net to catch at 15:55 CT,
+        and (c) session P&L. If B13 commission math hasn't shipped yet,
+        session_pnl is best-effort gross and the note field flags it.
+
+        now_ct must be a timezone-aware CT datetime.
+        """
+        note = None
+        if not b13_applied:
+            note = "B13 commission math pending — session_pnl is best-effort"
+        self._write({
+            "event":                   "session_close",
+            "ts":                      now_ct.isoformat(),
+            "bot":                     self.bot_name,
+            "date":                    str(now_ct.date()),
+            "flattened_trade_ids":     list(flattened_trade_ids or []),
+            "still_open_trade_ids":    list(still_open_trade_ids or []),
+            "flattened_count":         len(flattened_trade_ids or []),
+            "still_open_count":        len(still_open_trade_ids or []),
+            "session_pnl":             round(float(session_pnl or 0), 2),
+            "b13_commission_applied":  bool(b13_applied),
+            "note":                    note,
+        })
+
     def close(self):
         if self._file:
             self._file.close()

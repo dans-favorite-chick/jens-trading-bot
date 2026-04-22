@@ -208,11 +208,21 @@ STRATEGY_HALT_STATE_FILE = os.path.join(
     os.path.dirname(__file__), "..", "logs", "strategy_halts.json"
 )
 
-# Daily flatten — CME globex pause is 4:00–5:00 PM CT. All positions
-# across all strategies flatten at this time. Overnight holds are
-# allowed during the globex session (5 PM – 4 PM next day).
-DAILY_FLATTEN_HOUR_CT = 16
-DAILY_FLATTEN_MINUTE_CT = 0
+# Daily flatten (B84, 2026-04-22) — defense-in-depth schedule, all CT:
+#   15:53  Phoenix stops accepting NEW ENTRIES (NO_NEW_ENTRIES gate)
+#   15:54  Phoenix DailyFlattener fires (PRIMARY — closes all positions)
+#   15:54:45  Phoenix logs WARN if any position is still open
+#   15:55  NT8 Auto Close Position (SAFETY NET, configured in NT8 GUI)
+#   16:00  CME globex 1-hour maintenance break (HARD FLOOR)
+#
+# Overnight holds allowed during the globex session (17:00 → 16:00 next day).
+# Was 16:00 pre-B83 (orders queued past the maintenance break); B83's 15:58
+# interim superseded by B84 once Jennifer wired NT8 Auto Close at 15:55.
+DAILY_FLATTEN_HOUR_CT = 15
+DAILY_FLATTEN_MINUTE_CT = 54
+NO_NEW_ENTRIES_HOUR_CT = 15
+NO_NEW_ENTRIES_MINUTE_CT = 53
+FILL_CONFIRMATION_GRACE_SECONDS = 45   # 15:54 → 15:54:45 → WARN if still open
 
 # ─── Phase C per-strategy Telegram routing (optional) ──────────────
 # Map strategy key → chat_id override. Missing keys fall through to

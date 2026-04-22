@@ -5,6 +5,30 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+### 2026-04-22 14:25 Central Daylight Time — Session changes: 3 files modified
+
+**Files changed:**
+- `bots/base_bot.py`
+- `bridge/oif_writer.py`
+- `core/position_manager.py`
+
+---
+### 2026-04-22 14:22 Central Daylight Time — Session changes: 3 files modified
+
+**Files changed:**
+- `bots/base_bot.py`
+- `bridge/oif_writer.py`
+- `core/position_manager.py`
+
+---
+### 2026-04-22 14:22 Central Daylight Time — Session changes: 3 files modified
+
+**Files changed:**
+- `bots/base_bot.py`
+- `bridge/oif_writer.py`
+- `core/position_manager.py`
+
+---
 ## 2026-04-21 late evening — B41 TIF fix + B40 diagnosis + dashboard cleanup
 
 **Critical production bug discovered during first sim_bot live trading:**

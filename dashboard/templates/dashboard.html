@@ -679,6 +679,16 @@ function renderTrades(trades) {
     const snap = t.market_snapshot
       ? `<br><span style="color:var(--text-dim)">@ entry: price=${t.market_snapshot.price?.toFixed(2)} ATR=${t.market_snapshot.atr_5m?.toFixed(1)} VWAP=${t.market_snapshot.vwap?.toFixed(2)} CVD=${t.market_snapshot.cvd?.toFixed(0)} regime=${esc(t.market_snapshot.regime||'?')}</span>`
       : '';
+    // B82: surface the NT8 account below the strategy so 4C-routed
+    // sim trades are visibly tagged with their destination account.
+    // The "Sim101 (default)" fallback distinguishes un-routed trades
+    // from explicit routing targets (e.g. "SimSpring Setup").
+    const acctLabel = t.account && t.account !== 'Sim101'
+      ? `<br><span style="color:var(--text-dim); font-size:0.85em">${esc(t.account)}</span>`
+      : '';
+    const subLabel = t.sub_strategy
+      ? ` / ${esc(t.sub_strategy)}`
+      : '';
     return `<tr>
       <td>${trades.length - i}</td>
       <td>${esc(t.direction)}</td>
@@ -686,10 +696,10 @@ function renderTrades(trades) {
       <td>${t.exit_price?.toFixed(2) || '--'}</td>
       <td class="${cls}">$${t.pnl_dollars?.toFixed(2)}</td>
       <td class="${cls}">${esc(t.result)}</td>
-      <td>${esc(t.strategy)}</td>
+      <td>${esc(t.strategy)}${subLabel}${acctLabel}</td>
       <td><span class="trade-reason" onclick="toggleReason('${id}')">Why?</span>
         <div class="reason-detail" id="${id}">
-          <b>${esc(t.strategy)}</b>: ${esc(t.entry_reason)}
+          <b>${esc(t.strategy)}${subLabel}</b> → <i>${esc(t.account || 'Sim101')}</i>: ${esc(t.entry_reason)}
           ${confluences}${snap}
         </div>
       </td>

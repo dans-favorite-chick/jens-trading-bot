@@ -1373,6 +1373,26 @@ If you encounter a critical decision not covered here, default to:
 
 ---
 
+---
+
+## Addendum: B84 — Daily-flatten alignment with NT8 Auto Close (2026-04-22)
+
+Phoenix now flattens at **15:54 CT** (was 16:00 pre-B83, 15:58 under B83
+interim). The full defense-in-depth schedule — including the new
+15:53 CT no-new-entries gate and 15:54:45 CT fill-confirmation WARN —
+is documented in `PHOENIX_PROJECT_PROMPT.md`.
+
+NT8 GUI safety net: **Tools → Options → Trading → Auto Close Position
+= 03:55:00 PM, All Instruments**, Central-Time platform clock.
+
+Tests: `tests/test_daily_flatten.py` + `tests/test_flatten_alignment_b84.py`
+(34 total, all green).
+
+Source-of-truth constants in `config/settings.py`. Do not hard-code
+flatten times elsewhere in the code.
+
+---
+
 **END OF BUILD MAP**
 
 Document version 1.0

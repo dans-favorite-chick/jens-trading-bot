@@ -310,11 +310,26 @@ class BaseBot:
             logger.info(f"[WARMUP] Aggregator state restored — indicators pre-loaded")
         self.risk = RiskManager()
         self.session = SessionManager(bot_name=self.bot_name)
-        self.positions = PositionManager()
+        # P0.1 (D13): load durable trade history so dashboard P&L and any
+        # in-process consumer of trade_history survive bot restart.
+        self.positions = PositionManager(load_history=True)
         self.trade_memory = TradeMemory()
         self.history = HistoryLogger(bot_name=self.bot_name)
         self.tracker = StrategyTracker()
         self.strategies: list[BaseStrategy] = []
+
+        # B84: DailyFlattener is shared infrastructure (was sim-only pre-B84).
+        # Prod now inherits the 15:54 CT flatten too. ws_send is plumbed in
+        # lazily once the WS connection comes up — see _daily_flatten_loop.
+        from bots.daily_flatten import DailyFlattener as _DailyFlattener
+        self._flattener = _DailyFlattener(
+            positions_manager=self.positions,
+            websocket_send_fn=None,
+            logger=logger,
+        )
+        # B84 grace-window bookkeeping: flip to True once a flatten has fired
+        # today; the post-flatten watcher (15:54 → 15:54:45) reads this.
+        self._flatten_grace_logged_for: Optional["date"] = None  # type: ignore[name-defined]
 
         # Phase 5: Cockpit, Equity, Clustering, Telegram Commands, Scaler
         self.cockpit = Cockpit()
@@ -482,12 +497,16 @@ class BaseBot:
         self.aggregator.on_bar(self._on_bar)
 
     def _reconcile_positions_from_nt8(self) -> list[dict]:
-        """B77: scan NT8 outgoing/ for non-FLAT positions and adopt them.
+        """B77 + P0.3: scan NT8 outgoing/ for non-FLAT positions and adopt
+        them.
 
-        Called once at the start of run(), before the bot accepts any new
-        signals. Adopted positions get a wide safety-net OCO and are
-        flagged Position.reconciled=True so strategy-side exit triggers
-        skip them (they have no entry-signal context).
+        Called at startup AND periodically during the session (every
+        RUNTIME_RECON_INTERVAL_S seconds via _runtime_reconciliation_loop)
+        so a mid-session orphan can't drift unnoticed until next restart.
+
+        The underlying reconcile_positions_from_nt8 is idempotent: it
+        skips any account with an already-tracked Position in the
+        PositionManager, so re-calling every 30s never creates phantoms.
         """
         from core.startup_reconciliation import reconcile_positions_from_nt8
         from config.settings import OIF_OUTGOING, INSTRUMENT
@@ -505,6 +524,143 @@ class BaseBot:
             instrument=INSTRUMENT,
             telegram_notify=telegram_notify,
         )
+
+    # P0.3 (D12) runtime reconciliation interval. 30s is the interim
+    # polling cadence — Phase 1's broker-event stream will replace the
+    # timer with sub-second reaction later. Module-level constant so
+    # tests can monkeypatch (via bots.base_bot.RUNTIME_RECON_INTERVAL_S).
+    RUNTIME_RECON_INTERVAL_S: float = 30.0
+
+    # P0.6 (D7) exit_pending timeout. If a position sits in exit_pending
+    # state for longer than this, the CLOSEPOSITION OIF probably never
+    # filled at NT8 — fire CRITICAL + halt the strategy so a "Python
+    # thinks flat but NT8 isn't" divergence doesn't bleed silently.
+    EXIT_PENDING_TIMEOUT_S: float = 60.0
+
+    async def _runtime_reconciliation_loop(self) -> None:
+        """P0.3 + P0.6: periodic NT8-ledger reconciliation during the
+        session.
+
+        Each cycle:
+          1. Run `_reconcile_positions_from_nt8` to adopt any orphan NT8
+             position not tracked in PositionManager (P0.3).
+          2. Walk every `exit_pending` position: if NT8 shows FLAT for
+             its account+instrument, call `finalize_exit_pending` to
+             promote it to a closed trade. If a position has been
+             exit_pending longer than EXIT_PENDING_TIMEOUT_S, fire a
+             CRITICAL alert so the operator can investigate.
+
+        A clean-shutdown flag (`self._shutdown_reconciliation`) lets
+        run() stop the loop gracefully without hanging on sleep.
+
+        Exceptions are caught + logged so one bad cycle doesn't kill the
+        loop — the next tick keeps trying.
+        """
+        while not getattr(self, "_shutdown_reconciliation", False):
+            try:
+                await asyncio.sleep(self.RUNTIME_RECON_INTERVAL_S)
+                if getattr(self, "_shutdown_reconciliation", False):
+                    break
+                # P0.3: orphan adoption.
+                adopted = self._reconcile_positions_from_nt8()
+                if adopted:
+                    logger.info(
+                        f"[RUNTIME_RECON] adopted {len(adopted)} orphan "
+                        f"position(s) mid-session (accounts: "
+                        f"{[a['account'] for a in adopted]})"
+                    )
+                # P0.6: exit_pending resolution.
+                self._resolve_exit_pending_positions()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(
+                    f"[RUNTIME_RECON] cycle failed (will retry next interval): {e!r}"
+                )
+
+    def _resolve_exit_pending_positions(self) -> None:
+        """P0.6 (D7): finalize exit_pending positions when NT8 confirms
+        FLAT, or escalate when the pending window exceeds
+        EXIT_PENDING_TIMEOUT_S.
+
+        NT8's position file shape: `<instrument> Globex_<account>_position.txt`
+        containing `LONG;qty;price` / `SHORT;qty;price` / `FLAT;0;0`.
+        `FLAT` (or file missing) means the account+instrument has no
+        open position — safe to finalize our pending exit.
+        """
+        pending = self.positions.exit_pending_positions()
+        if not pending:
+            return
+
+        from config.settings import OIF_OUTGOING, INSTRUMENT
+        from core.startup_reconciliation import _read_position_file
+
+        now = time.time()
+        for pos in pending:
+            nt8_state = _read_position_file(OIF_OUTGOING, INSTRUMENT, pos.account)
+            if nt8_state is None:
+                # FLAT or unreadable → treat as confirmed-closed; finalize.
+                trade = self.positions.finalize_exit_pending(pos.trade_id)
+                logger.info(
+                    f"[EXIT_FINALIZED:{pos.trade_id}] NT8 confirmed FLAT "
+                    f"on {pos.account} — closed {pos.direction} @ "
+                    f"{pos.pending_exit_price:.2f} "
+                    f"reason={pos.pending_exit_reason}"
+                )
+                # Propagate to risk / tracker / trade_memory / circuit
+                # breakers — same post-close hooks that _exit_trade used
+                # to fire synchronously before P0.6 moved the finalize
+                # out here.
+                if trade:
+                    try:
+                        self.risk.record_trade(trade["pnl_dollars"])
+                    except Exception as _e:
+                        logger.error(f"[EXIT_FINALIZE] risk.record_trade failed: {_e!r}")
+                    try:
+                        self.trade_memory.record(trade, bot_id=self.bot_name)
+                    except Exception as _e:
+                        logger.error(f"[EXIT_FINALIZE] trade_memory.record failed: {_e!r}")
+                    try:
+                        self.tracker.record_trade(trade)
+                    except Exception as _e:
+                        logger.error(f"[EXIT_FINALIZE] tracker.record failed: {_e!r}")
+                    try:
+                        self._on_trade_closed(trade)
+                    except Exception as _e:
+                        logger.error(f"[EXIT_FINALIZE] _on_trade_closed failed: {_e!r}")
+                continue
+
+            # NT8 still shows a position on this account. Check timeout.
+            age_s = now - pos.exit_pending_since
+            if age_s > self.EXIT_PENDING_TIMEOUT_S:
+                msg = (
+                    f"[EXIT_PENDING_TIMEOUT:{pos.trade_id}] {pos.account} "
+                    f"still shows {nt8_state[0]} {nt8_state[1]}@{nt8_state[2]} "
+                    f"after {age_s:.0f}s — Python thinks flat but NT8 is not. "
+                    f"CLOSEPOSITION OIF likely never filled. Halting "
+                    f"strategy '{pos.strategy}' — operator flatten required."
+                )
+                logger.critical(msg)
+                try:
+                    from core.telegram_notifier import send_sync
+                    send_sync(
+                        f"🚨 [EXIT_TIMEOUT] {pos.account} stuck exit_pending "
+                        f"{age_s:.0f}s — {msg}",
+                        dedup_key=f"exit_pending_timeout:{pos.trade_id}",
+                    )
+                except Exception:
+                    pass
+                # Strategy halt hook — existing StrategyRiskRegistry has a
+                # halt_strategy method; best-effort.
+                try:
+                    from core.strategy_risk_registry import StrategyRiskRegistry
+                    reg = getattr(self, "_conflict_reg", None) or StrategyRiskRegistry()
+                    if hasattr(reg, "halt_strategy"):
+                        reg.halt_strategy(pos.strategy, reason="exit_pending_timeout")
+                except Exception as _e:
+                    logger.error(
+                        f"[EXIT_PENDING_TIMEOUT] halt_strategy failed: {_e!r}"
+                    )
 
     def load_strategies(self):
         """Load strategy instances from config. Override in subclass if needed."""
@@ -611,6 +767,13 @@ class BaseBot:
         except Exception as e:
             logger.error(f"[RECONCILE] startup reconciliation failed: {e!r}")
 
+        # P0.3 (D12) runtime reconciliation: schedule the async timer
+        # BEFORE the tick loop starts so mid-session orphans get caught
+        # within RUNTIME_RECON_INTERVAL_S of appearing. Clean-shutdown
+        # flag drives the loop's termination condition.
+        self._shutdown_reconciliation = False
+        asyncio.ensure_future(self._runtime_reconciliation_loop())
+
         # Phase 4C: one-shot [SESSION+GAMMA] regime log fires from inside
         # the tick loop once last_price > 0 and gamma_levels is loaded.
         self._startup_regime_logged = False
@@ -632,6 +795,12 @@ class BaseBot:
 
         # Phase 4B: session-levels prior-day refresh at 00:01 CT daily
         asyncio.ensure_future(self._session_levels_refresh_task())
+
+        # B84: 15:54 CT daily flatten + 15:54:45 fill-confirmation watcher.
+        # Subclasses that need post-flatten hooks (e.g. sim_bot's debrief +
+        # recap) override _daily_flatten_loop rather than scheduling their
+        # own parallel loop.
+        asyncio.ensure_future(self._daily_flatten_loop())
 
         while True:
             try:
@@ -802,6 +971,185 @@ class BaseBot:
             except Exception as e:
                 logger.error(f"[SESSION_LEVELS] refresh task error: {e!r}")
                 await asyncio.sleep(3600)  # retry in 1h rather than tight-loop
+
+    # ─── B84: daily flatten + grace window + no-new-entries gate ──────
+    def _is_no_new_entries_window(self, now_ct: Optional["datetime"] = None) -> bool:
+        """B84: True between NO_NEW_ENTRIES_HOUR/MINUTE_CT (default 15:53)
+        and the start of the next globex session (17:00 CT). Used by
+        _enter_trade to refuse new positions in the final runway before
+        the 15:54 daily flatten."""
+        from datetime import datetime as _dt, time as _t
+        from zoneinfo import ZoneInfo as _ZI
+        try:
+            from config.settings import (
+                NO_NEW_ENTRIES_HOUR_CT, NO_NEW_ENTRIES_MINUTE_CT,
+            )
+        except Exception:
+            NO_NEW_ENTRIES_HOUR_CT, NO_NEW_ENTRIES_MINUTE_CT = 15, 53
+        ct = _ZI("America/Chicago")
+        n = now_ct if now_ct is not None else _dt.now(ct)
+        # Cutoff window: 15:53:00 CT → 17:00:00 CT (globex reopen).
+        # After 17:00 a new session starts and entries are allowed again.
+        cutoff = _t(NO_NEW_ENTRIES_HOUR_CT, NO_NEW_ENTRIES_MINUTE_CT)
+        session_open = _t(17, 0)
+        t = n.time()
+        return cutoff <= t < session_open
+
+    async def _daily_flatten_loop(self) -> None:
+        """B84: poll every 30s — fire DailyFlattener at 15:54 CT, then
+        watch the 45-second fill-confirmation grace window. Subclasses
+        override this to bolt on post-flatten hooks (sim_bot adds the
+        AI debrief + 17:00 daily recap)."""
+        from datetime import datetime as _dt, date as _date
+        from zoneinfo import ZoneInfo as _ZI
+        ct = _ZI("America/Chicago")
+        try:
+            from config.settings import FILL_CONFIRMATION_GRACE_SECONDS as _GRACE_S
+        except Exception:
+            _GRACE_S = 45
+
+        while True:
+            try:
+                # Hook the ws sender lazily — _ws is set by the base's
+                # _connect_and_listen and may rotate on reconnect.
+                self._flattener.ws_send = self._get_ws_send_fn()
+                now_ct = _dt.now(ct)
+                n = await self._flattener.check_and_flatten(now_ct)
+                if n:
+                    logger.info(
+                        f"[DAILY_FLATTEN] closed {n} position(s) at "
+                        f"{self._flattener.flatten_hour:02d}:"
+                        f"{self._flattener.flatten_minute:02d} CT"
+                    )
+                    # B84: log the session_close_event immediately so the
+                    # forensic trail captures pre-grace state.
+                    await self._log_session_close_event(now_ct, n)
+
+                # B84 grace window: between flatten fire and +GRACE_S,
+                # log AWAITING_FILL_CONFIRMATION. At end of grace, if
+                # any position is still open, WARN that NT8 Auto Close
+                # will catch it.
+                await self._watch_flatten_grace_window(now_ct, _GRACE_S)
+            except Exception as e:
+                logger.warning(f"[DAILY_FLATTEN] poll error: {e!r}")
+            await asyncio.sleep(30)
+
+    async def _watch_flatten_grace_window(self, now_ct, grace_s: int) -> None:
+        """B84: after DailyFlattener fires, watch open positions for
+        grace_s seconds. Log AWAITING_FILL_CONFIRMATION on entry, WARN
+        if anything is still open at the end of the window."""
+        fired_at = getattr(self._flattener, "last_flatten_fired_at_ct", None)
+        if fired_at is None:
+            return
+        # Only run the grace-window hook once per day.
+        if self._flatten_grace_logged_for == fired_at.date():
+            return
+        # Only enter the grace window if we're within it.
+        elapsed = (now_ct - fired_at).total_seconds()
+        if elapsed < 0 or elapsed > grace_s:
+            # If we're past grace, check for lingering positions exactly once.
+            if elapsed > grace_s and self._flatten_grace_logged_for != fired_at.date():
+                self._emit_grace_end_warn_if_open(fired_at)
+                self._flatten_grace_logged_for = fired_at.date()
+            return
+        open_count = len(self.positions.active_positions)
+        logger.info(
+            f"[AWAITING_FILL_CONFIRMATION] {open_count} position(s) still "
+            f"open {elapsed:.0f}s after flatten fire at "
+            f"{fired_at.strftime('%H:%M:%S')} CT — NT8 safety net at "
+            f"15:55 CT will catch any remaining"
+        )
+
+    def _emit_grace_end_warn_if_open(self, fired_at) -> None:
+        """B84: called once when the grace window ends. If positions
+        are still open, they've effectively been handed off to the NT8
+        Auto Close safety net; log WARN so the operator sees it."""
+        still_open = list(self.positions.active_positions)
+        if not still_open:
+            logger.info(
+                f"[FILL_CONFIRMED] all flatten exits confirmed closed "
+                f"within grace window (fired {fired_at.strftime('%H:%M:%S')} CT)"
+            )
+            return
+        ids = [getattr(p, "trade_id", "?") for p in still_open]
+        logger.warning(
+            f"[FLATTEN_INCOMPLETE] {len(still_open)} position(s) STILL OPEN "
+            f"{fired_at.strftime('%H:%M:%S')} CT + grace: {ids} — NT8 "
+            f"Auto Close (15:55 CT) will close these as safety net"
+        )
+
+    async def _log_session_close_event(self, now_ct, flattened_count: int) -> None:
+        """B84: emit a single structured session_close_event to the
+        history log. Captures which positions the bot flattened vs.
+        which remain open for the NT8 safety net to catch."""
+        try:
+            flattened_ids = list(
+                getattr(self._flattener, "last_flatten_trade_ids", []) or []
+            )
+            still_open = [
+                getattr(p, "trade_id", "?")
+                for p in self.positions.active_positions
+            ]
+            # Session P&L — best-effort from today's trade_history. B13
+            # commission math correction is independent; if B13 hasn't
+            # shipped, session_pnl is best-effort gross.
+            session_pnl = 0.0
+            b13_applied = False
+            try:
+                today = now_ct.date()
+                for t in self.positions.trade_history:
+                    exit_ts = t.get("exit_time") or 0
+                    if not exit_ts:
+                        continue
+                    from datetime import datetime as _dt2
+                    dt = _dt2.fromtimestamp(float(exit_ts), tz=now_ct.tzinfo)
+                    if dt.date() != today:
+                        continue
+                    session_pnl += float(t.get("pnl_dollars") or 0.0)
+                # If B13 landed, pnl_dollars already carries the fix.
+                try:
+                    from config.settings import B13_COMMISSION_APPLIED  # noqa: F401
+                    b13_applied = True
+                except Exception:
+                    b13_applied = False
+            except Exception:
+                pass
+
+            if hasattr(self.history, "log_session_close_event"):
+                self.history.log_session_close_event(
+                    now_ct=now_ct,
+                    flattened_trade_ids=flattened_ids,
+                    still_open_trade_ids=still_open,
+                    session_pnl=session_pnl,
+                    b13_applied=b13_applied,
+                )
+        except Exception as e:
+            logger.warning(f"[SESSION_CLOSE_EVENT] log failed: {e!r}")
+
+    def _get_ws_send_fn(self):
+        """Default WS EXIT sender for the DailyFlattener. sim_bot
+        overrides this to include per-strategy account routing."""
+        ws = getattr(self, "_ws", None)
+        if ws is None:
+            return None
+
+        async def _send(trade_id: str, reason: str = "daily_flatten_1554CT"):
+            pos = self.positions.get_position(trade_id) if hasattr(
+                self.positions, "get_position"
+            ) else None
+            if pos is None:
+                return
+            try:
+                await ws.send(json.dumps({
+                    "type": "trade", "trade_id": trade_id,
+                    "action": "EXIT", "qty": pos.contracts,
+                    "reason": reason,
+                    "account": getattr(pos, "account", None),
+                    "sub_strategy": getattr(pos, "sub_strategy", None),
+                }))
+            except Exception as e:
+                logger.error(f"[DAILY_FLATTEN] WS EXIT send failed for {trade_id}: {e}")
+        return _send
 
     async def _heartbeat_loop(self):
         """Send periodic heartbeat to bridge so it can detect hung bots."""
@@ -2325,6 +2673,19 @@ class BaseBot:
     # ─── Trade Execution ────────────────────────────────────────────
     async def _enter_trade(self, ws, signal: Signal):
         """Execute entry via bridge → OIF with fill confirmation."""
+        # B84 no-new-entries gate. From 15:53 CT until the next globex
+        # session opens at 17:00 CT, the bot refuses new positions so
+        # we don't take a trade that would immediately be unwound by
+        # the 15:54 flatten (or race the NT8 Auto Close at 15:55).
+        if self._is_no_new_entries_window():
+            logger.info(
+                f"[NO_NEW_ENTRIES:{signal.trade_id}] {signal.strategy} "
+                f"{signal.direction} @ signal — rejected (within the "
+                f"15:53→17:00 CT pre-flatten window)"
+            )
+            self.last_rejection = "Within 15:53-17:00 CT no-new-entries window"
+            return
+
         market = self.aggregator.snapshot()
         price = market.get("price", 0)
         atr_5m = market.get("atr_5m", 0)
@@ -3115,18 +3476,26 @@ class BaseBot:
         be_price = pos.entry_price
         self.positions.move_stop_to_be(be_price)
 
-        # STEP 5: Place new BE stop order in NT8 for remaining contract
+        # STEP 5: Move the EXISTING OCO stop to break-even via the B76
+        # cancel+replace flow. Do NOT use write_be_stop (which only PLACES
+        # a new stop without cancelling the old one) — that leaves TWO
+        # stops on the account:
+        #   - the original OCO stop (auto-reduced by NT8 from qty=2 to
+        #     qty=1 after the partial-exit market order filled), still at
+        #     the original entry-stop_price
+        #   - the new BE stop at entry_price
+        # If the market moves adversely, the BE stop fires for qty=1,
+        # CLOSING the position. But the OCO stop is still working — if
+        # price bounces and hits IT, NT8 places a REVERSAL fill. That's
+        # the orphan-phantom-trade signature from the 2026-04-22 incident.
+        # P0.5 (D4) fix: use _move_nt8_stop → write_modify_stop, which
+        # stages PLACE-new-stop + CANCEL-old-stop atomically (PLACE first,
+        # CANCEL second — the safe ordering; see write_modify_stop docstring
+        # for the full hierarchy).
         try:
-            from bridge.oif_writer import write_be_stop
-            write_be_stop(
-                direction=pos.direction,
-                stop_price=be_price,
-                n_contracts=pos.contracts,  # After scale-out, remaining count
-                trade_id=f"{tid}_be",
-                account=pos.account,
-            )
+            _move_nt8_stop(pos, pos.entry_price, be_price)
         except Exception as e:
-            logger.warning(f"[SCALE_OUT:{tid}] BE stop OIF failed (non-blocking): {e}")
+            logger.warning(f"[SCALE_OUT:{tid}] BE stop-modify failed (non-blocking): {e}")
 
         # STEP 6: Activate rider mode — stall detector now owns the exit
         pos.rider_mode = True
@@ -3244,10 +3613,27 @@ class BaseBot:
         except Exception:
             pass
 
-        # Phase C: pass trade_id explicitly so multi-position close operates
-        # on the right slot (no-op for single-position since _resolve_trade_id
-        # will pick the sole active).
-        trade = self.positions.close_position(price, reason, trade_id=tid)
+        # P0.6 (D7): mark the position exit_pending and let runtime
+        # reconciliation finalize it only when NT8 confirms FLAT. Before
+        # P0.6, close_position was called unconditionally — Python
+        # thought the position was closed even if NT8 never filled the
+        # EXIT (e.g. ATI rejection, bridge crash post-send). That left
+        # dashboards showing flat while a bleeding position sat on NT8.
+        #
+        # Fallback: if exit WS-send failed AND OIF fallback also failed
+        # (exit_sent=False), we STILL close the Python position to avoid
+        # leaking a Position record nobody will ever close — but we log
+        # CRITICAL because this is the manual-exit-required scenario.
+        if exit_sent:
+            self.positions.mark_exit_pending(tid, price, reason)
+            trade = None  # finalized later by runtime reconciliation
+        else:
+            logger.critical(
+                f"[EXIT_FORCE_CLOSE:{tid}] NT8 exit send failed; force-"
+                f"closing Python state to avoid leaked Position record. "
+                f"Operator MUST verify NT8 is flat on {pos.account}."
+            )
+            trade = self.positions.close_position(price, reason, trade_id=tid)
 
         # B70: if the closing trade was in any conflict pair, log it.
         try:

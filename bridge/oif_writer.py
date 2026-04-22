@@ -28,6 +28,18 @@ logger = logging.getLogger("OIF")
 import uuid as _uuid
 _oif_counter = int(time.time() * 1000) % 1000000  # Start from timestamp to avoid restart collisions
 
+# P0.2 (D8): Author-tag every OIF filename Phoenix emits with the process id.
+# NT8's ATI consumes anything in incoming/ regardless of origin. On
+# 2026-04-22 pytest leaked test-literal stop prices (100.00 then 21000.00)
+# into real OIFs that NT8 placed on Jennifer's live chart. The B81 conftest
+# fixture stopped pytest leaks globally, but any rogue process (another
+# bot, manual script, corrupt tool) could still inject. The NT8-side
+# PhoenixOIFGuard AddOn quarantines any file in incoming/ whose name does
+# NOT start with `phoenix_<pid>_` — so tagging here is the other half of
+# that defence. Captured once at module load so every OIF this process
+# writes carries the same author stamp.
+_PHOENIX_PID = os.getpid()
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Low-level OIF line builders
@@ -273,7 +285,9 @@ def _stage_oif(cmd: str, trade_id: str, suffix: str = "") -> tuple[str, str]:
     os.makedirs(OIF_INCOMING, exist_ok=True)
     tag = f"_{trade_id}" if trade_id else ""
     sfx = f"_{suffix}" if suffix else ""
-    fname = f"oif{_oif_counter}{tag}{sfx}.txt"
+    # P0.2 (D8): `phoenix_<pid>_` prefix — PhoenixOIFGuard AddOn on the NT8
+    # side quarantines anything in incoming/ without this prefix.
+    fname = f"phoenix_{_PHOENIX_PID}_oif{_oif_counter}{tag}{sfx}.txt"
     final_path = os.path.join(OIF_INCOMING, fname)
     # Return same path for both — _commit_staged becomes a no-op for the
     # "rename" step; file is already at its final location.
@@ -403,11 +417,13 @@ def write_bracket_order(
                     f"entry={entry_type}@{entry_price:.2f} stop={stop_price:.2f} "
                     f"target={target_price if target_price else 'managed'} oco={oco_id}")
 
-    # B46: Post-submit incoming-folder clearance check. If NT8 ATI consumed
-    # the file, it disappears from incoming/ within milliseconds. If it's
-    # still there 1s later, NT8 rejected it (bad TIF, bad account, etc.)
-    # or the ATI server isn't running. Either way — red flag.
-    _verify_consumed(written, trade_id, timeout_s=1.0)
+    # B46 + P0.4 (D1): Post-submit incoming-folder clearance check. If
+    # NT8 ATI consumed the file, it disappears from incoming/ within
+    # milliseconds. If it's still there after the timeout, NT8 rejected
+    # it (bad TIF, bad account, etc.) or the ATI server isn't running.
+    # Raise OIFStuckError so _enter_trade can't silently commit to a
+    # trade NT8 never accepted.
+    _verify_consumed(written, trade_id, timeout_s=2.0, raise_on_stuck=True)
 
     # B76: capture NT8 order_ids (best-effort) for later cancel+replace.
     try:
@@ -428,13 +444,61 @@ def write_bracket_order(
     return written
 
 
-def _verify_consumed(paths: list[str], trade_id: str, timeout_s: float = 1.0) -> list[str]:
+class OIFStuckError(RuntimeError):
+    """
+    P0.4 (D1): raised by _verify_consumed(..., raise_on_stuck=True) when
+    NT8's ATI fails to consume a submitted OIF within the timeout window.
+
+    Carries the list of stuck file paths + the trade_id for forensics.
+    Callers at bots/base_bot.py (_enter_trade / exit paths) and
+    core/position_manager.py MUST NOT silently swallow this — either
+    surface to the operator (Telegram alert) or trigger an emergency
+    flatten. Catching-and-ignoring defeats the entire defence.
+    """
+    def __init__(self, trade_id: str, stuck_paths: list[str], timeout_s: float):
+        self.trade_id = trade_id
+        self.stuck_paths = list(stuck_paths)
+        self.timeout_s = timeout_s
+        names = ", ".join(os.path.basename(p) for p in stuck_paths)
+        super().__init__(
+            f"OIFStuckError[{trade_id}]: NT8 did not consume "
+            f"{len(stuck_paths)} OIF file(s) within {timeout_s}s: {names}"
+        )
+
+
+# P0.4 test-only escape hatch. Production code leaves this False so the
+# consume-check runs normally. tests/conftest.py flips it to True as an
+# autouse fixture so the 30+ existing tests that write OIFs to a tmp dir
+# (with no simulated NT8 consumer) don't trip the mandatory raise. Tests
+# that exercise _verify_consumed behaviour directly (see
+# tests/test_verify_consumed_mandatory.py) monkeypatch it back to False
+# for the scope they care about.
+_PYTEST_BYPASS_CONSUME_CHECK: bool = False
+
+
+def _verify_consumed(
+    paths: list[str],
+    trade_id: str,
+    timeout_s: float = 1.0,
+    raise_on_stuck: bool = False,
+) -> list[str]:
     """Check that NT8 consumed (deleted) the submitted OIF files within timeout.
 
     Returns a list of paths STILL PRESENT (i.e. NOT consumed — a red flag).
-    Logs an error + emits a Telegram warning if anything is stuck.
+    Logs CRITICAL + emits a Telegram warning if anything is stuck.
+
+    P0.4: `raise_on_stuck=True` escalates from "log + return stuck" to
+    `raise OIFStuckError`. Every PLACE/EXIT path now passes this flag so a
+    stuck OIF can never be silently shrugged off. Legacy callers that
+    don't pass the flag keep their old return-based behavior for
+    backwards-compat — they're expected to check the return value and
+    handle non-empty stuck lists themselves.
     """
     import time as _time
+    # Test-only bypass (see _PYTEST_BYPASS_CONSUME_CHECK docstring above).
+    # Resolved dynamically so conftest's monkeypatch takes effect.
+    if sys.modules[__name__]._PYTEST_BYPASS_CONSUME_CHECK:
+        return []
     deadline = _time.monotonic() + timeout_s
     while _time.monotonic() < deadline:
         remaining = [p for p in paths if os.path.exists(p)]
@@ -444,7 +508,9 @@ def _verify_consumed(paths: list[str], trade_id: str, timeout_s: float = 1.0) ->
     stuck = [p for p in paths if os.path.exists(p)]
     if stuck:
         names = ", ".join(os.path.basename(p) for p in stuck)
-        logger.error(
+        # CRITICAL (was ERROR) — this is an execution-layer integrity failure,
+        # not a recoverable per-trade glitch.
+        logger.critical(
             f"[OIF_STUCK:{trade_id}] NT8 did NOT consume {len(stuck)} "
             f"OIF file(s) within {timeout_s}s: {names}. "
             f"ATI likely rejected — check NT8 Log tab."
@@ -459,6 +525,8 @@ def _verify_consumed(paths: list[str], trade_id: str, timeout_s: float = 1.0) ->
             )
         except Exception:
             pass
+        if raise_on_stuck:
+            raise OIFStuckError(trade_id, stuck, timeout_s)
     return stuck
 
 
@@ -551,12 +619,24 @@ def scan_outgoing_for_order_id(account, expected_price, tolerance=0.01, timeout_
 
 
 def write_modify_stop(direction, new_stop_price, n_contracts, trade_id, account, old_stop_order_id):
-    """B76: cancel the existing STOPMARKET stop (by NT8 order_id) and
-    immediately submit a replacement at new_stop_price. Brief unprotected
-    window between cancel confirm and new-stop accepted is accepted.
+    """B76 + P0.5 (D4): replace an existing STOPMARKET stop with a new one
+    at new_stop_price.
 
-    Returns list of OIF file paths written (2 on success) or [] on
-    early-guard rejection.
+    Ordering (P0.5): PLACE new stop FIRST, verify it's working, THEN
+    CANCEL the old stop. The reverse order (CANCEL → PLACE) is FORBIDDEN
+    because it opens a brief no-stop window during which adverse price
+    movement is completely unprotected. Placing first opens a brief
+    two-stop window instead — worse case is that a sharp move hits the
+    LESS favourable stop first, which is recoverable; a no-stop gap is
+    a real loss.
+
+    Ordering hierarchy (spec § scale-out):
+      CHANGE in place > PLACE_NEW+CANCEL_OLD > CANCEL_OLD+PLACE_NEW (FORBIDDEN)
+    NT8 ATI doesn't expose a true CHANGE verb on OIF, so we use the
+    middle option. CHANGE upgrade is Phase-1 event-stream work.
+
+    Returns list of OIF file paths written (2 on success, in commit
+    order: [new_stop, cancel_old]) or [] on early-guard rejection.
     """
     _reject_live_account(account, f"write_modify_stop[{trade_id}]")
     if direction is None or direction.upper() not in ("LONG", "SHORT"):
@@ -575,10 +655,12 @@ def write_modify_stop(direction, new_stop_price, n_contracts, trade_id, account,
         side=exit_side, qty=n_contracts, stop_price=new_stop_price, account=account,
     )
 
+    # P0.5 ORDERING: stage new stop FIRST so it commits first (no-stop
+    # window would be catastrophic; two-stop window is merely inefficient).
     staged = []
     try:
-        staged.append(_stage_oif(cancel_line, trade_id, suffix="stop_cancel"))
         staged.append(_stage_oif(new_stop_line, trade_id, suffix="stop_replace"))
+        staged.append(_stage_oif(cancel_line, trade_id, suffix="stop_cancel"))
     except OSError as e:
         logger.error(f"[STOP_MODIFY:{trade_id}] stage failed: {e}")
         return []
@@ -593,6 +675,13 @@ def write_modify_stop(direction, new_stop_price, n_contracts, trade_id, account,
         logger.error(
             f"[STOP_MODIFY:{trade_id}] partial commit: {len(written)}/{len(staged)}"
         )
+
+    # P0.4 (D1): stop-modify was the biggest gap in the verify-consumed
+    # audit — a silent ATI rejection here leaves the caller thinking the
+    # stop moved when NT8 never accepted it. Must raise, not log-and-shrug.
+    if written:
+        _verify_consumed(written, trade_id, timeout_s=2.0, raise_on_stuck=True)
+
     return written
 
 
@@ -908,6 +997,14 @@ def write_oif(action: str, qty: int = 1, stop_price: float = None,
     else:
         for path, cmd in zip(written, cmds):
             logger.info(f"[OIF:{trade_id or 'N/A'}] {path} -> {cmd.strip()}")
+
+    # P0.4 (D1): mandatory consume-check on every PLACE/EXIT path. CANCEL
+    # and CANCEL_ALL use the legacy write_oif path too — but stuck cancels
+    # are just as dangerous as stuck places (think: can't remove a bad
+    # order). Verify the same way. Raises OIFStuckError on timeout.
+    if written:
+        _verify_consumed(written, trade_id, timeout_s=2.0, raise_on_stuck=True)
+
     return written
 
 
