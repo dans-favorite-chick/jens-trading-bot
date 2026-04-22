@@ -353,6 +353,46 @@ def api_strategy_risk():
     })
 
 
+@app.route("/api/working-orders")
+def api_working_orders():
+    """B74: unified view of every active position with its stop/target
+    across prod_bot AND sim_bot. Frontend can't install NT8 Chart
+    Trader, so we show NT8's working orders here.
+
+    Each row: account, strategy, direction, entry, stop, target,
+    contracts, hold_time_s, unrealized_pnl, bot.
+    """
+    rows = []
+    with _state_lock:
+        for bot in ("prod", "sim"):
+            s = _state.get(bot, {}) or {}
+            pos = s.get("position") or {}
+            active = pos.get("all_positions") or []
+            # Legacy single-position fallback if all_positions not present
+            if not active and pos.get("status") == "IN_TRADE":
+                active = [{
+                    "trade_id": "legacy",
+                    "strategy": pos.get("strategy"),
+                    "direction": pos.get("direction"),
+                    "entry_price": pos.get("entry_price"),
+                    "stop_price": pos.get("stop_price"),
+                    "target_price": pos.get("target_price"),
+                    "contracts": pos.get("contracts"),
+                    "account": pos.get("account") or "Sim101",
+                    "hold_time_s": pos.get("hold_time_s"),
+                    "unrealized_pnl": pos.get("unrealized_pnl"),
+                }]
+            for p in active:
+                p = dict(p)  # don't mutate state
+                p["bot"] = bot
+                rows.append(p)
+    return safe_jsonify({
+        "working_orders": rows,
+        "count": len(rows),
+        "ts": time.time(),
+    })
+
+
 @app.route("/api/strategies")
 def api_strategies():
     with _state_lock:

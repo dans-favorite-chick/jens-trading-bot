@@ -449,6 +449,14 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
   </div>
 </div>
 
+<!-- ===== SECTION: Working Orders (B74 — NT8 bracket visibility) ===== -->
+<div class="card" style="margin-top:12px;">
+  <h3>Working Orders — Live NT8 Brackets <span id="wo-count" style="color:var(--text-dim); font-weight:normal; font-size:12px;"></span></h3>
+  <div id="working-orders-body">
+    <div style="color:var(--text-dim); font-size:12px; padding:8px;">Loading…</div>
+  </div>
+</div>
+
 <!-- ===== SECTION: Strategy Risk (sim per-strategy registry) ===== -->
 <div class="card" style="margin-top:12px;">
   <h3>Strategy Risk (Sim — Per-Strategy Registry)</h3>
@@ -1243,6 +1251,72 @@ async function pollStrategyRisk() {
   } catch (e) {}
 }
 
+async function pollWorkingOrders() {
+  try {
+    const res = await fetch('/api/working-orders');
+    const data = await res.json();
+    renderWorkingOrders(data);
+  } catch (e) {}
+}
+
+function renderWorkingOrders(data) {
+  const host = el('working-orders-body');
+  const cnt = el('wo-count');
+  if (!host) return;
+  const rows = (data && data.working_orders) || [];
+  if (cnt) cnt.textContent = `(${rows.length} active)`;
+  if (!rows.length) {
+    host.innerHTML = '<div style="color:var(--text-dim); font-size:12px; padding:8px;">No active positions — all accounts FLAT</div>';
+    return;
+  }
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const fmt = (v, d = 2) => (v == null ? '—' : Number(v).toFixed(d));
+  const tickSize = 0.25;
+  const body = rows.map(r => {
+    const dir = r.direction || '';
+    const entry = r.entry_price;
+    const stop = r.stop_price;
+    const target = r.target_price;
+    const dirColor = dir === 'LONG' ? 'var(--green)' : (dir === 'SHORT' ? 'var(--red)' : 'var(--text-dim)');
+    // Distances in ticks
+    const stopTicks = (entry && stop) ? Math.abs(entry - stop) / tickSize : null;
+    const targetTicks = (entry && target) ? Math.abs(target - entry) / tickSize : null;
+    const rr = (stopTicks && targetTicks && stopTicks > 0) ? (targetTicks / stopTicks) : null;
+    const pnl = r.unrealized_pnl;
+    const pnlColor = (pnl || 0) > 0 ? 'var(--green)' : ((pnl || 0) < 0 ? 'var(--red)' : 'var(--text-dim)');
+    const pnlSign = (pnl || 0) >= 0 ? '+' : '−';
+    const holdMin = r.hold_time_s ? (r.hold_time_s / 60).toFixed(1) : '—';
+    const bot = r.bot || 'sim';
+    const acct = r.account || '—';
+    return `<tr>
+      <td style="padding:4px 8px;"><b>${esc(acct)}</b><br><span style="color:var(--text-dim); font-size:10px;">${esc(bot)} · ${esc(r.strategy || '')}</span></td>
+      <td style="padding:4px 8px; color:${dirColor}; font-weight:700;">${esc(dir)}</td>
+      <td style="padding:4px 8px; font-family:var(--mono);">${fmt(entry)}</td>
+      <td style="padding:4px 8px; font-family:var(--mono); color:var(--red);">${fmt(stop)}${stopTicks != null ? `<br><span style="color:var(--text-dim); font-size:10px;">−${stopTicks.toFixed(0)}t</span>` : ''}</td>
+      <td style="padding:4px 8px; font-family:var(--mono); color:var(--green);">${fmt(target)}${targetTicks != null ? `<br><span style="color:var(--text-dim); font-size:10px;">+${targetTicks.toFixed(0)}t</span>` : ''}</td>
+      <td style="padding:4px 8px; font-family:var(--mono);">${rr ? rr.toFixed(1) + ':1' : '—'}</td>
+      <td style="padding:4px 8px; font-family:var(--mono); color:${pnlColor};">${pnl == null ? '—' : (pnlSign + '$' + Math.abs(pnl).toFixed(2))}</td>
+      <td style="padding:4px 8px; font-family:var(--mono);">${esc(holdMin)}m</td>
+      <td style="padding:4px 8px; font-family:var(--mono);">${r.contracts || 1}</td>
+    </tr>`;
+  }).join('');
+  host.innerHTML = `
+    <table class="trade-table" style="width:100%;">
+      <thead><tr>
+        <th style="text-align:left;">Account / Strategy</th>
+        <th>Dir</th>
+        <th>Entry</th>
+        <th>Stop</th>
+        <th>Target</th>
+        <th>R:R</th>
+        <th>P&amp;L</th>
+        <th>Hold</th>
+        <th>Qty</th>
+      </tr></thead>
+      <tbody>${body}</tbody>
+    </table>`;
+}
+
 function renderStrategyRisk(data) {
   const host = el('strategy-risk-body');
   if (!host) return;
@@ -1296,6 +1370,8 @@ setInterval(pollMQStatus, 30000);
 pollMQStatus();
 setInterval(pollStrategyRisk, POLL_MS);
 pollStrategyRisk();
+setInterval(pollWorkingOrders, POLL_MS);
+pollWorkingOrders();
 </script>
 </body>
 </html>
