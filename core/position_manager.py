@@ -67,6 +67,14 @@ class Position:
     trail_config: Optional[dict] = None           # {"atr_mult": 3.0, ...}
     trail_state: object = None                    # ChandelierTrailState instance
 
+    # ── B77 startup reconciliation (2026-04-21) ─────────────────────────
+    # True for positions adopted from NT8 outgoing/*_position.txt at boot.
+    # Strategy-side exit triggers MUST NOT fire for reconciled positions —
+    # they have no strategy context (no entry signal, no market snapshot).
+    # They are managed only by the passive safety-net OCO attached at
+    # reconcile time + DailyFlattener. Operator closes them manually.
+    reconciled: bool = False
+
 
 class PositionManager:
     """Multi-position manager keyed by trade_id.
@@ -168,7 +176,8 @@ class PositionManager:
                       exit_trigger: str = None, eod_flat_time_et: str = None,
                       metadata: dict = None,
                       scale_out_rr: float = None, trail_config: dict = None,
-                      account: str = "Sim101", sub_strategy: str | None = None):
+                      account: str = "Sim101", sub_strategy: str | None = None,
+                      reconciled: bool = False):
         """Open a new position.
 
         Rejects if a position already exists with the same trade_id OR
@@ -219,6 +228,7 @@ class PositionManager:
             trail_state=trail_state,
             account=account,
             sub_strategy=sub_strategy,
+            reconciled=reconciled,
         )
         self._positions[trade_id] = pos
         self._open_order.append(trade_id)

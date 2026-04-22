@@ -440,6 +440,31 @@ class BaseBot:
         # Register bar callback
         self.aggregator.on_bar(self._on_bar)
 
+    def _reconcile_positions_from_nt8(self) -> list[dict]:
+        """B77: scan NT8 outgoing/ for non-FLAT positions and adopt them.
+
+        Called once at the start of run(), before the bot accepts any new
+        signals. Adopted positions get a wide safety-net OCO and are
+        flagged Position.reconciled=True so strategy-side exit triggers
+        skip them (they have no entry-signal context).
+        """
+        from core.startup_reconciliation import reconcile_positions_from_nt8
+        from config.settings import OIF_OUTGOING, INSTRUMENT
+
+        telegram_notify = None
+        try:
+            from core.telegram_notifier import send_sync as _tg_send
+            telegram_notify = _tg_send
+        except Exception:
+            pass
+
+        return reconcile_positions_from_nt8(
+            positions=self.positions,
+            outgoing_dir=OIF_OUTGOING,
+            instrument=INSTRUMENT,
+            telegram_notify=telegram_notify,
+        )
+
     def load_strategies(self):
         """Load strategy instances from config. Override in subclass if needed."""
         from strategies.bias_momentum import BiasMomentumFollow
@@ -535,6 +560,15 @@ class BaseBot:
             logger.info(f"[ACCOUNT_ROUTING] accounts: {', '.join(accounts)}")
         except Exception as e:
             logger.warning(f"[ACCOUNT_ROUTING] validate_account_map failed: {e!r}")
+
+        # B77 startup reconciliation (2026-04-21): adopt any orphan NT8
+        # positions left over from a crash / restart and attach safety-net
+        # OCOs. Must run BEFORE the tick loop accepts new signals so we
+        # don't route new trades on top of an unprotected orphan.
+        try:
+            self._reconcile_positions_from_nt8()
+        except Exception as e:
+            logger.error(f"[RECONCILE] startup reconciliation failed: {e!r}")
 
         # Phase 4C: one-shot [SESSION+GAMMA] regime log fires from inside
         # the tick loop once last_price > 0 and gamma_levels is loaded.
