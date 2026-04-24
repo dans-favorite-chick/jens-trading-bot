@@ -5,6 +5,22 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+### 2026-04-24 12:17 Central Daylight Time — Session changes: 11 files modified
+
+**Files changed:**
+- `bots/sim_bot.py`
+- `bridge/bridge_server.py`
+- `bridge/oif_writer.py`
+- `core/position_manager.py`
+- `core/startup_reconciliation.py`
+- `dashboard/templates/dashboard.html`
+- `launch_all.bat`
+- `ninjatrader/PhoenixOIFGuard.cs`
+- `strategies/bias_momentum.py`
+- `strategies/dom_pullback.py`
+- `tests/test_oif_filename_tagging.py`
+
+---
 ### 2026-04-24 05:56 Central Daylight Time — Session changes: 11 files modified
 
 **Files changed:**
