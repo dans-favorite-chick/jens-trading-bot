@@ -518,12 +518,51 @@ class BaseBot:
         except Exception:
             pass
 
+        # Fix C (2026-04-23): scope reconciliation to THIS bot's own accounts.
+        # Pre-fix: both prod_bot and sim_bot scanned all 17 routed accounts.
+        # Whichever bot's 30s timer fired first adopted any orphan — so prod
+        # was booking P&L on trades that belonged to sim's sub-accounts.
+        # Evidence: 2026-04-23 05:49 both bots adopted the same SimSpring
+        # Setup LONG 6 seconds apart and both booked exits on it.
+        #
+        # Resolution rule:
+        #   - FORCE_ACCOUNT set (prod_bot) → reconcile only that one account.
+        #   - FORCE_ACCOUNT None (sim_bot) → reconcile the bot's resolvable
+        #     account set (STRATEGY_ACCOUNT_MAP minus Sim101, which prod owns).
+        routed = self._resolve_reconciliation_scope()
         return reconcile_positions_from_nt8(
             positions=self.positions,
             outgoing_dir=OIF_OUTGOING,
             instrument=INSTRUMENT,
             telegram_notify=telegram_notify,
+            routed_accounts=routed,
         )
+
+    def _resolve_reconciliation_scope(self) -> list[str]:
+        """Per-bot reconciliation account scope (Fix C, 2026-04-23).
+
+        - If the bot class defines FORCE_ACCOUNT, return exactly that one
+          account — prod_bot must not adopt sim-account orphans.
+        - Otherwise return the 16 per-strategy sim accounts from the
+          routing map, excluding Sim101 (prod owns Sim101).
+        """
+        _force = getattr(self, "FORCE_ACCOUNT", None)
+        if _force:
+            return [_force]
+        try:
+            from config.account_routing import STRATEGY_ACCOUNT_MAP
+        except Exception:
+            return []
+        accounts: set[str] = set()
+        for key, value in STRATEGY_ACCOUNT_MAP.items():
+            if key == "_default":
+                continue  # _default = Sim101 fallback; prod owns it
+            if isinstance(value, str):
+                accounts.add(value)
+            elif isinstance(value, dict):
+                accounts.update(value.values())
+        accounts.discard("Sim101")  # prod-exclusive
+        return sorted(accounts)
 
     # P0.3 (D12) runtime reconciliation interval. 30s is the interim
     # polling cadence — Phase 1's broker-event stream will replace the
@@ -801,6 +840,9 @@ class BaseBot:
         # recap) override _daily_flatten_loop rather than scheduling their
         # own parallel loop.
         asyncio.ensure_future(self._daily_flatten_loop())
+
+        # Hourly decay health check + 15:10 CT daily summary Telegram push.
+        asyncio.ensure_future(self._decay_monitor_loop())
 
         while True:
             try:
@@ -1514,11 +1556,23 @@ class BaseBot:
                 # or we abandon it. This prevents the tick loop from ever freezing.
                 # Phase C: per-strategy flat check unlocks concurrent entries
                 # for different strategies (each on its own NT8 sub-account).
-                if hasattr(self, '_pending_signal') and self._pending_signal and \
+                signal = None
+                pending_signals = getattr(self, "_pending_signals", None)
+                if isinstance(pending_signals, list) and pending_signals:
+                    # Drop stale queued signals for strategies that already
+                    # have a live position; then process the next eligible one.
+                    while pending_signals:
+                        candidate = pending_signals.pop(0)
+                        if self.positions.is_flat_for(candidate.strategy):
+                            signal = candidate
+                            break
+                    self._pending_signals = pending_signals
+                elif hasattr(self, '_pending_signal') and self._pending_signal and \
                         self.positions.is_flat_for(self._pending_signal.strategy):
                     signal = self._pending_signal
                     self._pending_signal = None
 
+                if signal is not None:
                     try:
                         await asyncio.wait_for(
                             self._process_signal(ws, signal),
@@ -2958,6 +3012,31 @@ class BaseBot:
         else:
             _account = get_account_for_signal(signal.strategy, _sub_strategy)
 
+        # Fix A (2026-04-23): if there's a pending LIMIT entry still
+        # working on this account, do not fire another entry — NT8 would
+        # reject the second one as "Exceeds account's maximum position
+        # quantity". Reconciliation (running every 30s) will adopt the
+        # first entry once it fills. Pre-fix, this branch didn't exist:
+        # the ENTRY_PENDING branch discarded its own record, so every new
+        # spring_setup / vwap_pullback signal fired another entry that
+        # NT8 rejected.
+        try:
+            if self.positions.has_pending_entry(_account):
+                _pending = self.positions.get_pending_entry(_account)
+                _age = int(time.time() - _pending["submitted_at"]) if _pending else -1
+                logger.info(
+                    f"[ENTRY_GATE:{self.bot_name}] {signal.strategy} "
+                    f"{signal.direction} → {_account} SKIPPED: pending "
+                    f"LIMIT entry in flight (trade={_pending['trade_id']}, "
+                    f"age={_age}s). Waiting for fill or expiry."
+                )
+                self.last_rejection = (
+                    f"Pending entry in flight on {_account}"
+                )
+                return
+        except Exception as _e:
+            logger.debug(f"[ENTRY_GATE] pending-entry check failed: {_e!r}")
+
         # B59 hard-guard: never route to the live account. If a future
         # routing bug or config error tries to, abort the signal loudly
         # instead of submitting a real-money trade.
@@ -3097,6 +3176,23 @@ class BaseBot:
                 for p in orphans:
                     try: os.remove(p)
                     except OSError: pass
+                # Fix A (2026-04-23): record the pending limit so the next
+                # signal on this account sees it and skips. Pre-fix the bot
+                # would fire a second LIMIT BUY on the same account while
+                # the first was still working → NT8 rejected "Exceeds
+                # account's maximum position quantity". Reconciliation
+                # (Fix B + C) adopts the position when it actually fills.
+                try:
+                    self.positions.record_pending_entry(
+                        account=_account,
+                        trade_id=tid,
+                        strategy=signal.strategy,
+                        direction=signal.direction,
+                        limit_price=limit_price,
+                        qty=contracts,
+                    )
+                except Exception as _e:
+                    logger.debug(f"[PENDING_ENTRY:{tid}] record failed: {_e}")
                 logger.info(f"[ENTRY_PENDING:{tid}] NT8 accepted entry @ "
                              f"{limit_price:.2f} on {_account}, waiting for trigger. "
                              f"Skipping Python open (re-eval next tick). "
@@ -3249,6 +3345,13 @@ class BaseBot:
             account=_account,
             sub_strategy=_sub_strategy,
         )
+
+        # Fix A: entry actually filled (direct fill path) — clear any
+        # pending-entry record for this account.
+        try:
+            self.positions.clear_pending_entry(_account)
+        except Exception:
+            pass
 
         # B76: stash NT8-assigned order_ids on the freshly-opened Position
         # so subsequent stop-moves (trail / BE / chandelier) can cancel +
@@ -3785,6 +3888,102 @@ class BaseBot:
                          f"exit_sent={'OK' if exit_sent else 'FAILED'}")
 
         self.status = "SCANNING"
+
+    # ─── Decay Monitor Background Loop ────────────────────────────────
+
+    async def _decay_monitor_loop(self) -> None:
+        """Hourly decay check + 15:10 CT daily summary push.
+
+        - CRITICAL strategies → immediate Telegram alert (every hour)
+        - WARNING strategies → Telegram alert at most once per 4 hours
+        - 15:10 CT → daily summary: P&L, trades, top exit reason, degraded strats
+        """
+        from datetime import datetime as _dt
+        from zoneinfo import ZoneInfo as _ZI
+        import collections
+
+        ct_tz = _ZI("America/Chicago")
+        _last_warning_alert: float = 0.0       # epoch seconds
+        _daily_summary_fired_for: object = None  # date object
+
+        while True:
+            try:
+                now_ct = _dt.now(ct_tz)
+
+                # ── hourly decay check ─────────────────────────────────
+                try:
+                    summary = self.decay_monitor.summary()
+                    reports = summary.get("reports", {})
+                    criticals = [n for n, r in reports.items() if r.get("status") == "CRITICAL"]
+                    warnings  = [n for n, r in reports.items() if r.get("status") == "WARNING"]
+
+                    if criticals:
+                        await tg.notify_alert(
+                            "STRATEGY DECAY CRITICAL",
+                            f"Strategies: {criticals}\nCheck dashboard /api/risk-mgmt",
+                        )
+                    elif warnings:
+                        import time as _time
+                        if _time.monotonic() - _last_warning_alert > 4 * 3600:
+                            await tg.notify_alert(
+                                "STRATEGY DECAY WARNING",
+                                f"Strategies: {warnings}\nMonitoring — not yet critical.",
+                            )
+                            _last_warning_alert = _time.monotonic()
+                except Exception as _e:
+                    logger.debug(f"[DECAY_MONITOR] check error: {_e}")
+
+                # ── 15:10 CT daily summary ─────────────────────────────
+                if (now_ct.hour == 15 and now_ct.minute == 10
+                        and _daily_summary_fired_for != now_ct.date()):
+                    try:
+                        today_str = str(now_ct.date())
+                        all_trades = list(getattr(self.trade_memory, "trades", []))
+                        trades_today = [
+                            t for t in all_trades
+                            if str(t.get("exit_time") or t.get("ts") or "").startswith(today_str)
+                        ]
+                        wins   = sum(1 for t in trades_today if t.get("pnl_dollars", 0) > 0)
+                        losses = sum(1 for t in trades_today if t.get("pnl_dollars", 0) < 0)
+                        pnl    = sum(float(t.get("pnl_dollars", 0) or 0) for t in trades_today)
+                        n      = len(trades_today)
+                        wr     = (wins / n * 100) if n else 0.0
+
+                        # top exit reason
+                        reasons = [t.get("exit_reason", "unknown") for t in trades_today if t.get("exit_reason")]
+                        top_reason = collections.Counter(reasons).most_common(1)
+                        top_reason_str = top_reason[0][0] if top_reason else "n/a"
+
+                        # degraded strategies from decay monitor
+                        try:
+                            _sum = self.decay_monitor.summary()
+                            degraded = [
+                                n for n, r in _sum.get("reports", {}).items()
+                                if r.get("status") in ("WARNING", "CRITICAL")
+                            ]
+                        except Exception:
+                            degraded = []
+
+                        pnl_str = f"+${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
+                        degraded_str = ", ".join(degraded) if degraded else "none"
+                        msg = (
+                            f"\U0001F4CB <b>15:10 DAILY SUMMARY</b>\n"
+                            f"P&amp;L: <b>{pnl_str}</b>\n"
+                            f"Trades: {n} ({wins}W / {losses}L) WR={wr:.0f}%\n"
+                            f"Top exit: {top_reason_str}\n"
+                            f"Degraded: {degraded_str}"
+                        )
+                        from core.telegram_notifier import send as _tg_send
+                        await _tg_send(msg)
+                        _daily_summary_fired_for = now_ct.date()
+                        logger.info(f"[DECAY_MONITOR] 15:10 daily summary sent: pnl={pnl_str} {n}t")
+                    except Exception as _e:
+                        logger.warning(f"[DECAY_MONITOR] daily summary error: {_e}")
+
+            except Exception as _outer:
+                logger.debug(f"[DECAY_MONITOR] loop error: {_outer}")
+
+            await asyncio.sleep(3600)  # check once per hour
 
     # ─── News Scanner Background Loop ─────────────────────────────────
     async def _news_scanner_loop(self):
