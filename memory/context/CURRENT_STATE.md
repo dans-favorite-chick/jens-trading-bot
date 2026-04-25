@@ -188,6 +188,16 @@ After the 14:31 reboot, currently registered:
 | `PhoenixMorningRitual` | 06:30 CT Mon-Fri | ⏳ Script ready: `scripts/register_morning_ritual_task.ps1` |
 | `PhoenixPostSessionDebrief` | 16:05 CT Mon-Fri | ⏳ Script ready: `scripts/register_post_session_debrief_task.ps1` |
 | `PhoenixWeeklyEvolution` | Sun 18:00 CT | ⏳ Script ready: `scripts/register_weekly_evolution_task.ps1` |
+| `PhoenixWatcher` | AtLogOn (daemon) | ⏳ Script ready: `scripts/register_watcher_task.ps1` (added 2026-04-25 ~16:30 CDT — escalates RED_ALERT to Twilio SMS + Telegram; runs watcher_agent.py continuously with auto-restart) |
+| `PhoenixFinnhubNews` | AtLogOn (daemon) | ⏳ Script ready: `scripts/register_finnhub_news_task.ps1` (added 2026-04-25 ~16:50 CDT — Finnhub WS+REST news feed, persists to logs/finnhub_news.jsonl) |
+| `PhoenixFredMacros` | AtLogOn (daemon, --interval-min 60) | ⏳ Script ready: `scripts/register_fred_macros_task.ps1` (added 2026-04-25 ~16:50 CDT — FFR/CPI/UNRATE/T10Y2Y poller, regime-shift Telegram alerts) |
+
+### `.env` flags flipped 2026-04-25 ~16:50 CDT (defense-in-depth)
+
+- **`PHOENIX_STREAM_VALIDATOR=1`** — peer-MAD price-band validation at the
+  bridge layer. Built specifically for today's dual-stream incident class.
+- **`PHOENIX_BRIDGE_SINGLE_STREAM=1`** — explicit (default already 1)
+  rejecting any 2nd+ NT8 connection at socket-accept.
 
 **ACTION:** Re-run the four `register_*.ps1` scripts as Administrator
 to restore the full schedule. Each script is idempotent (replaces any
