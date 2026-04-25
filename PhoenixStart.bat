@@ -20,7 +20,7 @@ if exist "memory\.KILL_SWITCH_ENGAGED" (
     echo   no marker present.
 )
 
-echo Enabling scheduled tasks (Watcher + Boot + RiskGate + RiskWatchdog + Routines)...
+echo Enabling scheduled tasks (Watcher + Boot + RiskGate + RiskWatchdog + Routines + Daemons)...
 schtasks /Change /TN "PhoenixWatcher"             /ENABLE >nul 2>&1
 schtasks /Change /TN "PhoenixBoot"                /ENABLE >nul 2>&1
 schtasks /Change /TN "PhoenixRiskGate"            /ENABLE >nul 2>&1
@@ -28,6 +28,10 @@ schtasks /Change /TN "PhoenixRiskWatchdog"        /ENABLE >nul 2>&1
 schtasks /Change /TN "PhoenixMorningRitual"       /ENABLE >nul 2>&1
 schtasks /Change /TN "PhoenixPostSessionDebrief"  /ENABLE >nul 2>&1
 schtasks /Change /TN "PhoenixWeeklyEvolution"     /ENABLE >nul 2>&1
+schtasks /Change /TN "PhoenixGrading"             /ENABLE >nul 2>&1
+REM 2026-04-25: added daemons for news + macros tier
+schtasks /Change /TN "PhoenixFinnhubNews"         /ENABLE >nul 2>&1
+schtasks /Change /TN "PhoenixFredMacros"          /ENABLE >nul 2>&1
 
 echo Triggering PhoenixWatcher immediately (one-shot)...
 schtasks /Run /TN "PhoenixWatcher" >nul 2>&1
@@ -35,6 +39,10 @@ schtasks /Run /TN "PhoenixWatcher" >nul 2>&1
 echo Triggering PhoenixRiskGate + PhoenixRiskWatchdog immediately (one-shot)...
 schtasks /Run /TN "PhoenixRiskGate"     >nul 2>&1
 schtasks /Run /TN "PhoenixRiskWatchdog" >nul 2>&1
+
+echo Triggering PhoenixFinnhubNews + PhoenixFredMacros (daemons)...
+schtasks /Run /TN "PhoenixFinnhubNews"  >nul 2>&1
+schtasks /Run /TN "PhoenixFredMacros"   >nul 2>&1
 
 echo Launching bridge + dashboard + watchdog...
 call "%~dp0launch_all.bat"
