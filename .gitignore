@@ -120,8 +120,18 @@ phoenix_bot/
 !.claude/settings.json
 
 # out/baselines/ — pre-computed grader baselines (P5 squeeze_baseline.json etc.)
-# Other out/ subdirs (grades, morning_ritual, debrief, weekly_evolution, bench)
-# stay regenerable + ignored.
+# Other out/ contents (grades, morning_ritual, debrief, weekly_evolution, bench,
+# ad-hoc diagnostic JSONs) stay regenerable + ignored.
 !out/
+out/*
 !out/baselines/
 !out/baselines/**
+
+# === 2026-04-25 re-ignores: __pycache__ + .pyc inside allowlisted dirs ===
+# The allowlist patterns above use `**` and would otherwise un-ignore stale
+# bytecode caches. Re-ignore here so they DON'T sneak into commits.
+phoenix_bot/**/__pycache__/
+phoenix_bot/**/*.pyc
+phoenix_bot/**/*.pyo
+.claude/**/__pycache__/
+.claude/**/*.pyc
