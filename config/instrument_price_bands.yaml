@@ -1,0 +1,20 @@
+# Phoenix Bot - Instrument Price Bands
+# Used by core/bridge/stream_validator.py to reject ticks whose price
+# is structurally outside the live trading band for a given instrument.
+#
+# 2026-04-25: Added after the 2026-04-24 incident where a stale NT8
+# TickStreamer instance fed ~7,150 prices alongside the real ~27,415
+# stream, claiming the same MNQM6 instrument label. The static-band
+# check is the cheapest signal — if a tick is way outside the band,
+# we don't even need cross-client comparison to know it's bogus.
+
+MNQ: {min: 15000, max: 35000}
+NQ:  {min: 15000, max: 35000}
+MES: {min: 4000,  max: 8000}
+ES:  {min: 4000,  max: 8000}
+# MYM/YM Dow micro - rare on this stack, but documented
+MYM: {min: 30000, max: 50000}
+YM:  {min: 30000, max: 50000}
+# RTY/M2K Russell - rare
+RTY: {min: 1500,  max: 3000}
+M2K: {min: 1500,  max: 3000}

@@ -44,6 +44,23 @@ if %errorlevel%==0 (
 echo Opening browser to dashboard...
 start http://127.0.0.1:5000
 
+REM Give the last cmd window a moment to title itself before we try to
+REM match by title in window_layout.ps1.
+timeout /t 2 /nobreak >nul
+
+REM Apply saved window positions (bypasses FancyZones — uses Win32
+REM SetWindowPos directly). If window_layout.json doesn't exist yet,
+REM arrange windows manually once then run:
+REM    powershell -ExecutionPolicy Bypass -File tools\window_layout.ps1 -Capture
+if exist "%~dp0tools\window_layout.json" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\window_layout.ps1"
+) else (
+    echo.
+    echo [window_layout] No saved layout yet. Arrange windows how you like,
+    echo [window_layout] then run: powershell -ExecutionPolicy Bypass -File tools\window_layout.ps1 -Capture
+    echo [window_layout] After that, future launches will auto-position.
+)
+
 echo.
 echo ========================================
 echo   Bridge, Dashboard, and Watchdog running.

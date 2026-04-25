@@ -1,15 +1,71 @@
 venv/
 venv_stable/
+.venv/
+.venv-ml/
+.venv-*/
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
 logs/
 tmp_*
 .env
+.env.local
+.env.*.local
 *.egg-info/
 dist/
 build/
-.claude/
+
+# Phoenix routines + benchmark artifacts (regenerable; large)
+out/morning_ritual/
+out/post_session_debrief/
+out/weekly_evolution/
+out/grades/
+out/bench/
+out/digest_queue.jsonl
+
+# FRED + ChromaDB local cache (regenerable from API)
+data/cache/
+data/regime_history.jsonl
+
+# FinBERT ONNX model — large binary, downloadable via optimum-cli
+models/finbert_onnx/
+models/finbert_onnx_int8/
+
+# Heartbeat files (runtime state)
+heartbeat/
+
+# Test cache + coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE / OS noise
+.idea/
+.vscode/
+*.swp
+*~
+Thumbs.db
+.DS_Store
+# Claude Code: ignore worktree/cache/session state, but COMMIT skills/agents/commands/settings
+# (the audit on 2026-04-25 flagged that the broad `.claude/` rule was blocking
+# future Phoenix-specific skills under .claude/skills/ from ever committing.)
+.claude/worktrees/
+.claude/cache/
+.claude/file-history/
+.claude/session-env/
+.claude/sessions/
+.claude/shell-snapshots/
+.claude/telemetry/
+.claude/projects/
+.claude/ide/
+.claude/paste-cache/
+.claude/plans/
+.claude/scheduled-tasks/
+.claude/backups/
+.claude/.credentials.json
+.claude/history.jsonl
+# Tracked: .claude/settings.json, .claude/skills/, .claude/agents/, .claude/commands/
 
 # Scratch directories (see SCRATCH_DIRS.md)
 Phoenix Rising Project/
@@ -23,3 +79,19 @@ data/**/*.sqlite
 data/**/*.db
 data/**/*.parquet
 !data/.gitkeep
+
+# === added 2026-04-25 — cruft that should never be tracked ===
+.venv-ml/
+.claude/
+bin/
+out/
+models/
+data/cache/
+data/regime_history.jsonl
+heartbeat/
+*.pyc
+*.pyc.*
+__pycache__/
+council/
+phoenix_bot/
+base_bot_check.pyc.*

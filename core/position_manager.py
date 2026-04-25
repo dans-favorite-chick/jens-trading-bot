@@ -132,6 +132,19 @@ class PositionManager:
         # Insertion-order tracker for "most-recently-opened" semantics
         # (used when legacy .position is called with multiple positions).
         self._open_order: list[str] = []
+        # Fix A (2026-04-23): pending-entry tracker. When a LIMIT entry
+        # OIF is submitted but the fill doesn't confirm within
+        # wait_for_fill's 5s window, the base_bot took the ENTRY_PENDING
+        # branch and returned without recording the pending order anywhere.
+        # Next signal on the same account fired another entry → NT8 rejected
+        # "Exceeds account's maximum position quantity" because the first
+        # limit was still working. We now stash a small pending-entry
+        # record per account so the signal-gate can see "entry in flight,
+        # skip."  Key = account, value = {trade_id, strategy, direction,
+        # limit_price, qty, submitted_at}. Entries older than
+        # PENDING_ENTRY_TIMEOUT_S are considered expired (limit cancelled
+        # by NT8 TIF or stale record) and ignored.
+        self._pending_entries: dict[str, dict] = {}
 
         # ── P0.1 (D13): hydrate historical closed trades from disk ──────
         # Dashboard P&L and any consumer of .trade_history / .recent_trades()
@@ -253,6 +266,65 @@ class PositionManager:
             if pos.strategy == strategy:
                 return pos
         return None
+
+    # ─── Fix A (2026-04-23): pending-entry tracker ───────────────────
+
+    # Entries older than this are considered stale (e.g. NT8 TIF expired
+    # the limit, or the bot restarted losing context). 15 min is generous
+    # for limit orders on sim accounts with GTC TIF — adjust if needed.
+    PENDING_ENTRY_TIMEOUT_S: float = 900.0
+
+    def record_pending_entry(self, account: str, trade_id: str, strategy: str,
+                             direction: str, limit_price: float, qty: int) -> None:
+        """Stash a pending LIMIT entry that NT8 accepted but hasn't filled.
+
+        Called from base_bot._enter_trade's ENTRY_PENDING branch so the
+        signal gate can see this limit is in flight on the account and
+        not fire a duplicate entry.
+        """
+        self._pending_entries[account] = {
+            "trade_id": trade_id,
+            "strategy": strategy,
+            "direction": direction,
+            "limit_price": float(limit_price),
+            "qty": int(qty),
+            "submitted_at": time.time(),
+        }
+        logger.info(
+            f"[PENDING_ENTRY:{trade_id}] {direction} {qty} @ {limit_price:.2f} "
+            f"on {account} (strategy={strategy}) — registered"
+        )
+
+    def clear_pending_entry(self, account: str) -> None:
+        """Remove the pending record for an account (called when entry
+        fills, is rejected, or is cancelled)."""
+        stale = self._pending_entries.pop(account, None)
+        if stale:
+            logger.debug(f"[PENDING_ENTRY] cleared {account} (trade={stale['trade_id']})")
+
+    def has_pending_entry(self, account: str) -> bool:
+        """True if an un-filled LIMIT entry is known to be working on
+        this account. Stale entries (older than PENDING_ENTRY_TIMEOUT_S)
+        are auto-expired and return False.
+        """
+        rec = self._pending_entries.get(account)
+        if rec is None:
+            return False
+        if (time.time() - rec["submitted_at"]) > self.PENDING_ENTRY_TIMEOUT_S:
+            logger.info(
+                f"[PENDING_ENTRY] {account} record expired "
+                f"(trade={rec['trade_id']}, age>{self.PENDING_ENTRY_TIMEOUT_S}s)"
+            )
+            self._pending_entries.pop(account, None)
+            return False
+        return True
+
+    def get_pending_entry(self, account: str) -> dict | None:
+        """Return the pending-entry record for an account, honouring
+        the same staleness check as has_pending_entry()."""
+        if not self.has_pending_entry(account):
+            return None
+        return self._pending_entries.get(account)
 
     # ─── Open ─────────────────────────────────────────────────────────
 

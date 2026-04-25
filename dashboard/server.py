@@ -5,10 +5,12 @@ Flask app serving the trading dashboard and REST API endpoints.
 Polls bridge health and bot state; serves to browser on :5000.
 """
 
+import datetime
 import json
 import logging
 import math
 import os
+import re
 import signal
 import subprocess
 import time
@@ -1022,6 +1024,516 @@ def api_mq_update():
         "notes":           existing.get("regime_summary", {}).get("notes"),
     }
     return jsonify({"ok": True, "snapshot": snapshot})
+
+
+# ─── API: Phoenix Routines (added 2026-04-25 §3.6) ──────────────────
+#
+# Surfaces the latest morning_ritual / post_session_debrief / weekly_evolution
+# artifacts so the dashboard's Routines tab can render verdict + summary +
+# link to the full markdown/HTML/PDF reports.
+
+_ROUTINES = ("morning_ritual", "post_session_debrief", "weekly_evolution")
+_OUT_DIR = os.path.join(os.path.dirname(__file__), "..", "out")
+
+
+@app.route("/api/routines/list")
+def api_routines_list():
+    """Latest report per routine, plus the digest queue contents."""
+    import datetime as _dt
+    out = {"routines": {}, "digest_queue": []}
+    for r in _ROUTINES:
+        rdir = os.path.join(_OUT_DIR, r)
+        if not os.path.isdir(rdir):
+            out["routines"][r] = {"available": False}
+            continue
+        md_files = sorted(
+            (f for f in os.listdir(rdir) if f.endswith(".md")),
+            reverse=True,
+        )[:7]
+        latest = None
+        if md_files:
+            mp = os.path.join(rdir, md_files[0])
+            try:
+                with open(mp, encoding="utf-8") as f:
+                    head = "".join(f.readlines()[:60])
+                # Extract verdict from the markdown header
+                m = re.search(r"\*\*Verdict:\*\*\s*(\w+)", head)
+                verdict = m.group(1) if m else "?"
+                latest = {
+                    "filename": md_files[0],
+                    "session_date": md_files[0].replace(".md", ""),
+                    "verdict": verdict,
+                    "preview": head,
+                    "modified_iso": _dt.datetime.fromtimestamp(
+                        os.path.getmtime(mp)
+                    ).isoformat(timespec="seconds"),
+                }
+            except Exception as e:
+                latest = {"error": repr(e)}
+        out["routines"][r] = {
+            "available": True,
+            "latest": latest,
+            "history": md_files,
+        }
+    # Digest queue (peek without draining)
+    queue_path = os.path.join(_OUT_DIR, "digest_queue.jsonl")
+    if os.path.exists(queue_path):
+        try:
+            with open(queue_path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            out["digest_queue"].append(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue
+        except Exception:
+            pass
+    return safe_jsonify(out)
+
+
+@app.route("/api/routines/<routine>/<date>")
+def api_routines_one(routine: str, date: str):
+    if routine not in _ROUTINES:
+        return safe_jsonify({"ok": False, "error": "unknown routine"}), 404
+    rdir = os.path.join(_OUT_DIR, routine)
+    md_path = os.path.join(rdir, f"{date}.md")
+    html_path = os.path.join(rdir, f"{date}.html")
+    if not os.path.exists(md_path):
+        return safe_jsonify({"ok": False, "error": "not_found"}), 404
+    try:
+        markdown = open(md_path, encoding="utf-8").read()
+        html = open(html_path, encoding="utf-8").read() if os.path.exists(html_path) else None
+        return safe_jsonify({"ok": True, "routine": routine, "date": date,
+                             "markdown": markdown, "html": html})
+    except Exception as e:
+        return safe_jsonify({"ok": False, "error": repr(e)}), 500
+
+
+# ─── API: live PriceSanity + Advisor snapshot (added 2026-04-25) ────
+#
+# Surfaces the in-process price_sanity guard state + advisor guidance so
+# the dashboard's Trading view can show a live "what mode is the guard in"
+# pill + the current MarketAdvisor RR-tier recommendation. Both modules
+# are imported lazily because the dashboard process is separate from the
+# bot process — we read whatever last-published snapshot is available via
+# the bot's /api/status push (already in _state) AND we can query our own
+# in-process imports (which match the bot's, modulo separate processes).
+
+
+@app.route("/api/sanity-snapshot")
+def api_sanity_snapshot():
+    """Live PriceSanity + AdvisorGuidance snapshot for the dashboard.
+
+    Note: dashboard runs in its own process. The price_sanity module is
+    a singleton WITHIN a process, so we get the dashboard's view of it,
+    not the sim_bot's. The bot's view is the authoritative one — we
+    surface the dashboard-process view here as a sanity check / live
+    reference. For the BOT's view, the bot pushes its own price_sanity
+    snapshot through /api/bot-state which we mirror in _state.
+    """
+    out = {"ok": True}
+    try:
+        from core import price_sanity
+        out["price_sanity"] = price_sanity.snapshot()
+    except Exception as e:
+        out["price_sanity_error"] = repr(e)
+    try:
+        from core import fmp_sanity
+        out["fmp_reference"] = fmp_sanity.get_reference_mnq_price()
+    except Exception as e:
+        out["fmp_error"] = repr(e)
+    # Latest market dict from any bot push
+    try:
+        with _state_lock:
+            for bot_name in ("sim", "prod"):
+                bot = _state.get(bot_name) or {}
+                m = bot.get("market") or {}
+                if m and "advisor_guidance" in m:
+                    out[f"{bot_name}_advisor"] = m["advisor_guidance"]
+                    break
+    except Exception as e:
+        out["advisor_error"] = repr(e)
+    return safe_jsonify(out)
+
+
+# ─── API: Phase B+ Grades + Logs (added 2026-04-25) ─────────────────
+#
+# Three feature surfaces:
+#   /api/grades/live              — running metrics for today's session
+#   /api/grades/list, /<date>     — historical 16:00-CT grade reports
+#   /api/learner-status           — proof the AI Historical Learner has
+#                                    actually consumed grade + trade data
+#   /api/logs/why-no-trade        — live "why didn't we trade" feed,
+#                                    grouped by strategy and rejection reason
+#   /api/logs/tail, /files        — raw log tail + file inventory
+
+
+_GRADES_DIR = os.path.join(os.path.dirname(__file__), "..", "out", "grades")
+_LEARNER_DIR = os.path.join(os.path.dirname(__file__), "..", "logs", "ai_learner")
+_LOGS_DIR = os.path.join(os.path.dirname(__file__), "..", "logs")
+_PRIMARY_LOGS = {
+    "sim_bot": "sim_bot_stdout.log",
+    "prod_bot": "prod_bot_stdout.log",
+    "bridge": "bridge_stdout.log",
+    "watchdog": "watchdog.log",
+    "watcher": None,   # resolved at runtime — date-dependent name
+}
+
+
+def _resolve_log_path(key: str) -> str | None:
+    if key == "watcher":
+        # watcher_<YYYY-MM-DD>.log
+        from datetime import date as _d
+        cand = os.path.join(_LOGS_DIR, f"watcher_{_d.today().isoformat()}.log")
+        return cand if os.path.exists(cand) else None
+    if key in _PRIMARY_LOGS and _PRIMARY_LOGS[key]:
+        cand = os.path.join(_LOGS_DIR, _PRIMARY_LOGS[key])
+        return cand if os.path.exists(cand) else None
+    return None
+
+
+@app.route("/api/grades/list")
+def api_grades_list():
+    """Recent grade reports — newest first. Each entry: {date, score, results}."""
+    out = []
+    if os.path.isdir(_GRADES_DIR):
+        for fname in sorted(os.listdir(_GRADES_DIR), reverse=True):
+            if not fname.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(_GRADES_DIR, fname), encoding="utf-8") as f:
+                    data = json.load(f)
+                results = data.get("results", [])
+                pass_count = sum(1 for r in results if r.get("overall_pass"))
+                out.append({
+                    "date": data.get("session_date") or fname.replace(".json", ""),
+                    "score": f"{pass_count}/{len(results)}",
+                    "summary": [
+                        {"id": r.get("prediction_id"), "label": r.get("label"),
+                         "pass": r.get("overall_pass"), "qual_obs": r.get("qual_observation")}
+                        for r in results
+                    ],
+                })
+            except Exception as e:
+                logger.debug(f"[grades] skipping {fname}: {e!r}")
+    return safe_jsonify({"grades": out[:30]})
+
+
+@app.route("/api/grades/<date>")
+def api_grades_one(date: str):
+    """Full grade detail for one date."""
+    fname = f"{date}.json"
+    p = os.path.join(_GRADES_DIR, fname)
+    if not os.path.exists(p):
+        return safe_jsonify({"ok": False, "error": "not_found", "date": date}), 404
+    try:
+        with open(p, encoding="utf-8") as f:
+            return safe_jsonify({"ok": True, **json.load(f)})
+    except Exception as e:
+        return safe_jsonify({"ok": False, "error": repr(e)}), 500
+
+
+@app.route("/api/grades/live")
+def api_grades_live():
+    """Running grade for TODAY's session, computed on-the-fly from
+    logs/sim_bot_stdout.log. Returns the same shape as a stored grade
+    but uses session-so-far data, so the dashboard can show a scrolling
+    in-progress view rather than waiting until 16:00 CT."""
+    from datetime import date as _d, datetime as _dt
+    log_path = os.path.join(_LOGS_DIR, "sim_bot_stdout.log")
+    if not os.path.exists(log_path):
+        return safe_jsonify({"ok": False, "error": "log_not_found"})
+    # Late import — keeps dashboard importable even if graders package
+    # ever moves under a feature flag.
+    try:
+        from tools.log_parsers.sim_bot_log import parse_sim_bot_log
+        from tools.graders.orb_or_too_wide import OrbOrTooWideGrader
+        from tools.graders.bias_vwap_gate import BiasVwapGateGrader
+        from tools.graders.noise_cadence_spam import NoiseCadenceSpamGrader
+        from tools.graders.ib_warmup import IbWarmupGrader
+        from tools.graders.compression_squeeze import CompressionSqueezeGrader
+        from tools.graders.spring_silence import SpringSilenceGrader
+    except Exception as e:
+        return safe_jsonify({"ok": False, "error": f"graders_import: {e!r}"})
+    today = _d.today()
+    since = _dt.combine(today, _dt.min.time())
+    until = _dt.combine(today, _dt.max.time())
+    events = list(parse_sim_bot_log(log_path, since=since, until=until))
+    # Load baseline (for P5)
+    baseline = {}
+    bp = os.path.join(os.path.dirname(__file__), "..", "out", "baselines", "squeeze_baseline.json")
+    if os.path.exists(bp):
+        try:
+            with open(bp, encoding="utf-8") as f:
+                baseline = json.load(f)
+        except Exception:
+            baseline = {}
+    graders = [OrbOrTooWideGrader(), BiasVwapGateGrader(), NoiseCadenceSpamGrader(),
+               IbWarmupGrader(), CompressionSqueezeGrader(), SpringSilenceGrader()]
+    results = []
+    for g in graders:
+        r = g._safe_grade(events, baseline)
+        results.append(r.to_dict())
+    return safe_jsonify({
+        "ok": True,
+        "session_date": today.isoformat(),
+        "n_events_today": len(events),
+        "results": results,
+    })
+
+
+@app.route("/api/learner-status")
+def api_learner_status():
+    """Proof the AI Historical Learner has consumed grade + trade data.
+    Surfaces:
+      - latest weekly_*.md report (date + size + first lines)
+      - pending_recommendations.json (count + sample)
+      - learner_scheduled.log tail (last cron run)
+    """
+    out = {
+        "ok": True,
+        "weekly_reports": [],
+        "pending_recommendations": [],
+        "last_scheduled_run": None,
+        "evidence": {},
+    }
+    if not os.path.isdir(_LEARNER_DIR):
+        out["ok"] = False
+        out["error"] = "learner_dir_missing"
+        return safe_jsonify(out)
+    # Weekly reports
+    weekly = sorted([f for f in os.listdir(_LEARNER_DIR) if f.startswith("weekly_") and f.endswith(".md")],
+                    reverse=True)[:7]
+    for fname in weekly:
+        p = os.path.join(_LEARNER_DIR, fname)
+        try:
+            st = os.stat(p)
+            with open(p, encoding="utf-8", errors="ignore") as f:
+                first_lines = [next(f, "") for _ in range(8)]
+            out["weekly_reports"].append({
+                "filename": fname,
+                "size_bytes": st.st_size,
+                "modified_iso": datetime.datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds"),
+                "preview": "".join(first_lines).strip()[:600],
+            })
+        except Exception as e:
+            logger.debug(f"[learner] weekly skip {fname}: {e!r}")
+    # Pending recommendations
+    rec_path = os.path.join(_LEARNER_DIR, "pending_recommendations.json")
+    if os.path.exists(rec_path):
+        try:
+            with open(rec_path, encoding="utf-8") as f:
+                recs = json.load(f)
+            if isinstance(recs, list):
+                out["pending_recommendations"] = recs[:20]
+                out["evidence"]["recommendations_count"] = len(recs)
+            elif isinstance(recs, dict):
+                # Tolerate {"recommendations": [...], "metadata": {...}} shape
+                lst = recs.get("recommendations") or recs.get("items") or []
+                out["pending_recommendations"] = lst[:20]
+                out["evidence"]["recommendations_count"] = len(lst)
+                out["evidence"]["last_run_iso"] = recs.get("generated_at")
+        except Exception as e:
+            out["evidence"]["recommendations_error"] = repr(e)
+    # Scheduled run log
+    sched = os.path.join(_LOGS_DIR, "learner_scheduled.log")
+    if os.path.exists(sched):
+        try:
+            st = os.stat(sched)
+            with open(sched, encoding="utf-8", errors="ignore") as f:
+                tail = f.readlines()[-20:]
+            out["last_scheduled_run"] = {
+                "modified_iso": datetime.datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds"),
+                "tail": "".join(tail).strip()[:1500],
+            }
+        except Exception as e:
+            out["last_scheduled_run"] = {"error": repr(e)}
+    # Has the learner consumed today's data? Heuristic: latest weekly's
+    # date is within the last 48h.
+    if out["weekly_reports"]:
+        try:
+            latest_iso = out["weekly_reports"][0]["modified_iso"]
+            age_h = (datetime.datetime.now() - datetime.datetime.fromisoformat(latest_iso)).total_seconds() / 3600
+            out["evidence"]["latest_weekly_age_hours"] = round(age_h, 1)
+            out["evidence"]["learning_active"] = age_h < 48.0
+        except Exception:
+            pass
+    return safe_jsonify(out)
+
+
+def _classify_log_kind(message: str) -> str:
+    """Mirror tools.log_parsers.sim_bot_log._classify but inline so the
+    dashboard doesn't depend on that package at import time."""
+    if "PRICE_SANITY" in message: return "PRICE_SANITY"
+    if "STOP_SANITY_FAIL" in message: return "STOP_SANITY_FAIL"
+    if "[FILTER]" in message: return "FILTER"
+    if "BLOCKED gate:" in message: return "BLOCKED"
+    if "REJECTED:" in message: return "REJECTED"
+    if "NO_SIGNAL" in message: return "NO_SIGNAL"
+    if "warmup_incomplete" in message: return "SKIP"
+    if "SIGNAL " in message: return "SIGNAL"
+    if "[TRADE]" in message: return "TRADE"
+    return "OTHER"
+
+
+@app.route("/api/logs/why-no-trade")
+def api_logs_why_no_trade():
+    """Live 'why didn't we trade' feed. Parses the last N lines of the
+    sim_bot log and groups rejections by strategy + reason. Updates as
+    the bot runs.
+
+    Query params:
+      ?bot=sim|prod   (default: sim)
+      ?lines=2000     (default: tail this many lines)
+    """
+    bot = request.args.get("bot", "sim")
+    n = int(request.args.get("lines", 2000))
+    log_key = "sim_bot" if bot == "sim" else "prod_bot"
+    path = _resolve_log_path(log_key)
+    if not path:
+        return safe_jsonify({"ok": False, "error": f"log not found for {bot}"}), 404
+    try:
+        from tools.log_parsers.sim_bot_log import parse_sim_bot_log
+        # Read just the tail — efficient on large logs
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            chunk = min(size, max(50_000, n * 200))
+            f.seek(max(0, size - chunk), os.SEEK_SET)
+            data = f.read().decode("utf-8", errors="ignore")
+        # Stash to a temp file just so we can reuse the parser
+        # — alternative: parse line by line here. Simple split is fine.
+        import re as _re
+        events = []
+        for line in data.splitlines()[-n:]:
+            from tools.log_parsers.sim_bot_log import _TS_RE, _STRATEGY_RE, _GATE_RE, _parse_ts
+            m = _TS_RE.match(line)
+            if not m:
+                continue
+            msg = m.group("message")
+            strat = _STRATEGY_RE.search(msg)
+            gate = _GATE_RE.search(msg)
+            events.append({
+                "ts_iso": (_parse_ts(m.group("ts")) or datetime.datetime.now()).isoformat(timespec="seconds"),
+                "module": m.group("module"),
+                "level": m.group("level"),
+                "message": msg,
+                "strategy": strat.group(1) if strat else None,
+                "gate": gate.group(1) if gate else None,
+                "kind": _classify_log_kind(msg),
+            })
+    except Exception as e:
+        return safe_jsonify({"ok": False, "error": repr(e)}), 500
+
+    # Aggregate by strategy
+    by_strategy: dict[str, dict] = {}
+    blocking_kinds = {"REJECTED", "BLOCKED", "NO_SIGNAL", "SKIP"}
+    for ev in events:
+        s = ev.get("strategy") or "_unknown"
+        bucket = by_strategy.setdefault(s, {
+            "total_evals": 0,
+            "n_signal": 0,
+            "n_trade": 0,
+            "n_rejection": 0,
+            "reasons": {},
+            "last_rejections": [],
+        })
+        bucket["total_evals"] += 1
+        kind = ev["kind"]
+        if kind == "SIGNAL":
+            bucket["n_signal"] += 1
+        elif kind == "TRADE":
+            bucket["n_trade"] += 1
+        elif kind in blocking_kinds:
+            bucket["n_rejection"] += 1
+            # Reason key: gate name if BLOCKED, else first 40 chars of message
+            if kind == "BLOCKED":
+                reason = f"gate:{ev.get('gate') or 'unknown'}"
+            elif kind == "REJECTED":
+                # extract "REJECTED: <FOO>" prefix
+                m = _re.search(r"REJECTED:\s*([A-Z_]+)", ev["message"])
+                reason = m.group(1) if m else "REJECTED"
+            elif kind == "SKIP":
+                reason = "warmup_incomplete"
+            else:  # NO_SIGNAL
+                m = _re.search(r"NO_SIGNAL\s+(\w+)", ev["message"])
+                reason = m.group(1) if m else "NO_SIGNAL"
+            bucket["reasons"][reason] = bucket["reasons"].get(reason, 0) + 1
+            # Keep last 5 rejection events per strategy
+            if len(bucket["last_rejections"]) >= 5:
+                bucket["last_rejections"].pop(0)
+            bucket["last_rejections"].append({
+                "ts": ev["ts_iso"], "kind": kind, "reason": reason,
+                "message": ev["message"][:240],
+            })
+    # Sort reasons within each strategy
+    for s, b in by_strategy.items():
+        b["top_reasons"] = sorted(
+            ({"reason": k, "count": v} for k, v in b["reasons"].items()),
+            key=lambda x: -x["count"]
+        )[:8]
+        del b["reasons"]
+    return safe_jsonify({
+        "ok": True,
+        "bot": bot,
+        "n_events_scanned": len(events),
+        "by_strategy": by_strategy,
+    })
+
+
+@app.route("/api/logs/files")
+def api_logs_files():
+    """Inventory of available log files."""
+    out = []
+    for key, fname in _PRIMARY_LOGS.items():
+        if fname is None:
+            path = _resolve_log_path(key)
+        else:
+            path = os.path.join(_LOGS_DIR, fname) if os.path.exists(os.path.join(_LOGS_DIR, fname)) else None
+        if not path:
+            out.append({"key": key, "available": False})
+            continue
+        try:
+            st = os.stat(path)
+            out.append({
+                "key": key,
+                "available": True,
+                "filename": os.path.basename(path),
+                "size_mb": round(st.st_size / 1_000_000, 2),
+                "modified_iso": datetime.datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds"),
+            })
+        except Exception as e:
+            out.append({"key": key, "available": False, "error": repr(e)})
+    return safe_jsonify({"files": out})
+
+
+@app.route("/api/logs/tail")
+def api_logs_tail():
+    """Raw last-N lines from a chosen log file. Defaults to sim_bot, 200 lines.
+
+    ?key=<sim_bot|prod_bot|bridge|watchdog|watcher>
+    ?lines=200
+    """
+    key = request.args.get("key", "sim_bot")
+    n = int(request.args.get("lines", 200))
+    path = _resolve_log_path(key)
+    if not path:
+        return safe_jsonify({"ok": False, "error": f"log {key!r} not found"}), 404
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            chunk = min(size, max(20_000, n * 200))
+            f.seek(max(0, size - chunk), os.SEEK_SET)
+            data = f.read().decode("utf-8", errors="ignore")
+        lines = data.splitlines()[-n:]
+        return safe_jsonify({
+            "ok": True, "key": key, "filename": os.path.basename(path),
+            "lines": lines,
+        })
+    except Exception as e:
+        return safe_jsonify({"ok": False, "error": repr(e)}), 500
 
 
 # ─── Main ───────────────────────────────────────────────────────────

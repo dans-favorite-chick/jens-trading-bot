@@ -77,11 +77,40 @@ class OpeningRangeBreakout(BaseStrategy):
         # ── Config ──────────────────────────────────────────────────
         or_duration = int(self.config.get("or_duration_minutes", 15))
         min_or_size_pts = float(self.config.get("min_or_size_points", 10))
-        max_or_size_pts = float(self.config.get("max_or_size_points", 60))
+        max_or_size_pts_floor = float(self.config.get("max_or_size_points", 80))
+        # 2026-04-24: ATR-adaptive max width. Old fixed 60-pt cap blocked 98%
+        # of evals (`gate:or_too_wide`) on current MNQ volatility. New formula:
+        #   adaptive_max = max(floor, atr_5m * mult), clamped to hard_cap.
+        # That accommodates wider ORs on high-vol days while still rejecting
+        # true gap-and-go days (>4× ATR is structurally unreachable).
+        max_or_size_atr_mult = float(self.config.get("max_or_size_atr_mult", 4.0))
+        max_or_size_hard_cap = float(self.config.get("max_or_size_hard_cap_points", 150))
+        atr_5m = float(market.get("atr_5m", 0) or 0)
+        if atr_5m > 0:
+            max_or_size_pts = min(
+                max(max_or_size_pts_floor, atr_5m * max_or_size_atr_mult),
+                max_or_size_hard_cap,
+            )
+        else:
+            max_or_size_pts = max_or_size_pts_floor
         max_entry_delay_min = int(self.config.get("max_entry_delay_minutes", 60))
         max_stop_points = float(self.config.get("max_stop_points", 25))
         stop_buffer_ticks = int(self.config.get("stop_buffer_ticks", 2))
         target_rr = float(self.config.get("target_rr", 2.0))
+        # 2026-04-25 §4.1: advisor-guided RR tier override. See bias_momentum
+        # for the policy rationale. ORB defaults to 2:1; advisor can widen
+        # to 3:1 on trending regime or tighten to 1.5:1 on overextended.
+        _adv = market.get("advisor_guidance") or {}
+        _adv_rr = _adv.get("suggested_rr_tier")
+        if _adv_rr and float(_adv_rr) > 0:
+            _orig_rr = target_rr
+            target_rr = float(_adv_rr)
+            if abs(target_rr - _orig_rr) >= 0.5:
+                logger.debug(
+                    f"[EVAL] {self.name}: advisor RR override "
+                    f"{_orig_rr:.1f} -> {target_rr:.1f} "
+                    f"(regime={_adv.get('market_regime')})"
+                )
 
         # ── Detect date, reset daily (anchored to ET calendar) ───────
         last_bar = bars_1m[-1]
@@ -118,7 +147,11 @@ class OpeningRangeBreakout(BaseStrategy):
             logger.debug(f"[EVAL] {self.name}: BLOCKED gate:or_too_tight")
             return None  # Too tight — low-vol day, skip
         if or_size > max_or_size_pts:
-            logger.debug(f"[EVAL] {self.name}: BLOCKED gate:or_too_wide")
+            logger.debug(
+                f"[EVAL] {self.name}: BLOCKED gate:or_too_wide "
+                f"(or_size={or_size:.1f}pt > adaptive_cap={max_or_size_pts:.1f}pt, "
+                f"atr_5m={atr_5m:.1f})"
+            )
             return None  # Too wide — gap day, skip
 
         # ── Step 3: Check entry window cutoff ───────────────────────

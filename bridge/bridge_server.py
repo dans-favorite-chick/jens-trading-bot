@@ -98,6 +98,33 @@ class BridgeServer:
         self.connection_events: list[dict] = []
         self.max_events = 200
 
+        # 2026-04-25 StreamValidator (Phase B+ Section 1). Imports the
+        # shared singleton so every inbound tick can be observed. The
+        # 2026-04-24 multi-stream incident (3 NT8 TickStreamers, one
+        # feeding ~7,150 prices alongside the real ~27,415 stream, all
+        # claiming MNQM6) is detected here and per-port stats accumulate
+        # in health_snapshot().
+        #
+        # IMPORTANT: ships DORMANT in observation mode. Set the env flag
+        #     PHOENIX_STREAM_VALIDATOR=1
+        # to enable enforcement (drop quarantined-port ticks at fanout).
+        # Without the flag, the validator is INVOKED for stats only —
+        # every tick is forwarded regardless of the validation result.
+        # Flip the flag once Section 1 has been verified in production.
+        #
+        # Defensive: any import or init failure is logged once as a WARN
+        # and the validator goes silent. The bridge MUST never crash
+        # because of this layer.
+        self._stream_validator = None
+        self._stream_validator_enforce = (
+            os.environ.get("PHOENIX_STREAM_VALIDATOR", "0") == "1"
+        )
+        try:
+            from core.bridge.stream_validator import get_validator
+            self._stream_validator = get_validator()
+        except Exception as _e:
+            self._log_event("warn", f"StreamValidator unavailable: {_e!r}")
+
         # Stats
         self.start_time = time.time()
         self.ticks_received = 0
@@ -201,9 +228,60 @@ class BridgeServer:
                     self.nt8_last_heartbeat_time = time.time()
 
                 elif msg_type == "tick":
+                    # B7: bump liveness timestamps FIRST. A tick arriving
+                    # proves the NT8 socket is alive regardless of whether
+                    # its content passes validation downstream. Putting the
+                    # timestamp bumps before the StreamValidator block also
+                    # keeps test_b7_heartbeat_tick_split happy.
                     self.nt8_last_tick_time = time.time()
-                    # Ticks also prove liveness — bump both.
                     self.nt8_last_heartbeat_time = time.time()
+
+                    # 2026-04-25 Phase B+ §1: feed every tick to the
+                    # StreamValidator for OBSERVATION. By default this
+                    # only updates per-port stats; the result is NOT
+                    # used to drop ticks. Set PHOENIX_STREAM_VALIDATOR=1
+                    # to enable drop-on-reject enforcement.
+                    #
+                    # Validator MUST NEVER crash the bridge — wrap in
+                    # try/except and fail-open on any unexpected error.
+                    _src_port = remote[1] if remote else 0
+                    if self._stream_validator is not None:
+                        try:
+                            _accepted = self._stream_validator.on_tick(
+                                port=_src_port,
+                                instrument=data.get("instrument")
+                                           or self.nt8_instrument or "",
+                                price=float(data.get("price", 0) or 0),
+                            )
+                            if (not _accepted) and self._stream_validator_enforce:
+                                # Enforcement mode: drop the tick and emit
+                                # a recovery hint heartbeat for watcher_agent.
+                                _reason = self._stream_validator.quarantine_reason(_src_port) or "rejected"
+                                self._log_event(
+                                    "warn",
+                                    f"[STREAM_VALIDATOR] dropped tick from "
+                                    f"port={_src_port}: {_reason}",
+                                )
+                                try:
+                                    from pathlib import Path as _P
+                                    _hb = _P(__file__).resolve().parent.parent / "heartbeat" / "bridge_alert.json"
+                                    _hb.parent.mkdir(parents=True, exist_ok=True)
+                                    _hb.write_text(json.dumps({
+                                        "event": "tick_rejected",
+                                        "port": _src_port,
+                                        "reason": _reason,
+                                        "ts": time.time(),
+                                    }), encoding="utf-8")
+                                except Exception:
+                                    pass
+                                continue
+                        except Exception as _vex:
+                            # Fail-open: log once-ish and continue forwarding.
+                            self._log_event(
+                                "warn",
+                                f"[STREAM_VALIDATOR] error: {_vex!r}",
+                            )
+                    # (timestamps already bumped at top of tick branch above)
                     self.ticks_received += 1
                     self.recent_tick_times.append(time.time())
 
@@ -459,11 +537,21 @@ class BridgeServer:
                       if self.nt8_last_heartbeat_time > 0 else -1)
 
         # nt8_status tiers:
-        #   live         → ticks fresh (<5s)
-        #   silent_stall → heartbeat fresh but ticks stale >60s during RTH (B7)
-        #   stale        → heartbeat still arriving but within disconnect threshold
+        #   live         → connection healthy (heartbeat fresh OR tick fresh)
+        #   silent_stall → heartbeat fresh but ticks stale >60s (B7)
+        #   stale        → within disconnect threshold but both signals aging
         #   disconnected → heartbeat stale OR never seen
-        if self.nt8_connected and nt8_age < 5:
+        #
+        # 2026-04-23: widened "live" criteria. The prior rule required ticks
+        # within 5s, which made overnight NQ (where quiet gaps of 5-10s
+        # between ticks are normal) flap live→stale→live→stale in the
+        # watchdog log every few seconds. A fresh HEARTBEAT (<=10s) is the
+        # real "TCP socket alive" signal; tick freshness is a separate
+        # data-flow signal covered by silent_stall. If either is fresh,
+        # classify live. Only if BOTH age past their windows do we escalate.
+        _hb_fresh  = self.nt8_connected and nt8_hb_age >= 0 and nt8_hb_age < 10
+        _tick_fresh = self.nt8_connected and nt8_age < 15
+        if _hb_fresh or _tick_fresh:
             nt8_status = "live"
         elif self.nt8_connected and nt8_hb_age >= 0 and nt8_hb_age < 10 and nt8_age > 60:
             nt8_status = "silent_stall"

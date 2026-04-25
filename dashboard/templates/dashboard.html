@@ -233,6 +233,47 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
   </div>
 </div>
 
+<!-- ===== SECTION: View Switcher (added 2026-04-25) ===== -->
+<div class="view-bar" style="display:flex;gap:6px;margin-bottom:10px;border-bottom:1px solid var(--border);padding-bottom:6px;">
+  <button class="view-btn active" id="vbtn-trading" onclick="showView('trading',this)">Trading</button>
+  <button class="view-btn" id="vbtn-grades" onclick="showView('grades',this)">Grades</button>
+  <button class="view-btn" id="vbtn-logs" onclick="showView('logs',this)">Logs</button>
+  <button class="view-btn" id="vbtn-routines" onclick="showView('routines',this)">Routines</button>
+</div>
+<style>
+  .view-btn{background:var(--bg-card);color:var(--text-dim);border:1px solid var(--border);padding:7px 18px;border-radius:5px 5px 0 0;cursor:pointer;font-family:var(--mono);font-size:12px;}
+  .view-btn.active{background:var(--bg-deep);color:var(--text);border-bottom-color:var(--bg-deep);font-weight:700;}
+  .view-btn:hover{color:var(--text);}
+  .view-section{display:none;}
+  .view-section.active{display:block;}
+  .grades-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:12px;}
+  .grade-row{display:grid;grid-template-columns:50px 1fr 110px 90px 60px;gap:8px;padding:7px 8px;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:12px;align-items:center;}
+  .grade-row.fail{color:var(--red);} .grade-row.pass{color:var(--green);}
+  .grade-row.head{font-weight:700;color:var(--text-dim);border-bottom:2px solid var(--border);}
+  .live-pulse{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);margin-right:6px;animation:pulse 1.4s ease-in-out infinite;}
+  @keyframes pulse{0%,100%{opacity:.4;}50%{opacity:1;}}
+  .strat-card{border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:8px;background:var(--bg-card);}
+  .strat-card .top{display:flex;justify-content:space-between;font-family:var(--mono);font-size:12px;color:var(--text-dim);margin-bottom:6px;}
+  .strat-card .strat-name{font-weight:700;color:var(--text);font-size:13px;}
+  .strat-card .reasons{font-family:var(--mono);font-size:11px;}
+  .strat-card .reason-row{display:flex;justify-content:space-between;padding:2px 0;color:var(--text-dim);}
+  .strat-card .reason-row .reason{color:var(--text);}
+  .strat-card .reason-row .count{color:var(--orange);font-weight:700;}
+  .strat-card .last-rej{margin-top:6px;font-size:11px;color:var(--text-dim);font-family:var(--mono);max-height:60px;overflow-y:auto;}
+  .log-tail{height:600px;overflow-y:auto;background:#0a0a0a;color:#cfd3da;font-family:var(--mono);font-size:11px;padding:8px;border:1px solid var(--border);border-radius:4px;white-space:pre-wrap;}
+  .learner-badge{padding:8px 12px;border-radius:5px;font-family:var(--mono);font-size:12px;}
+  .learner-badge.active{background:#0d2818;color:var(--green);border:1px solid var(--green);}
+  .learner-badge.stale{background:#2c1f0d;color:var(--orange);border:1px solid var(--orange);}
+  .learner-badge.dead{background:#2c0d0d;color:var(--red);border:1px solid var(--red);}
+  .small-card{background:var(--bg-card);border:1px solid var(--border);border-radius:5px;padding:10px;}
+  .small-card h4{margin:0 0 8px 0;font-size:12px;color:var(--text-dim);text-transform:uppercase;}
+  .filter-bar{display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;}
+  .filter-bar select, .filter-bar input{background:var(--bg-card);color:var(--text);border:1px solid var(--border);padding:5px 8px;border-radius:3px;font-family:var(--mono);font-size:11px;}
+</style>
+
+<!-- ===== VIEW: Trading (existing dashboard) ===== -->
+<div id="view-trading" class="view-section active">
+
 <!-- ===== SECTION: Alert Banner ===== -->
 <div id="alert-banner" class="alert-banner">CONNECTION LOST — NT8 feed disconnected</div>
 
@@ -244,6 +285,19 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
   <span id="h-bridge-bot" class="health-pill dead"><span class="dot"></span>Bridge :8766: <span class="age">--</span></span>
   <span id="h-prod" class="health-pill dead"><span class="dot"></span>Prod Bot: <span class="age">--</span></span>
   <span id="h-sim" class="health-pill dead"><span class="dot"></span>Sim Bot: <span class="age">--</span></span>
+</div>
+
+<!-- ===== SECTION: PriceSanity + Advisor Live Bar (added 2026-04-25) ===== -->
+<div id="sanity-bar" style="display:flex;gap:8px;align-items:center;padding:8px 10px;margin-bottom:8px;background:var(--bg-card);border:1px solid var(--border);border-radius:5px;font-family:var(--mono);font-size:11px;flex-wrap:wrap;">
+  <span style="color:var(--text-dim);">PRICE GUARD:</span>
+  <span id="ps-mode" class="health-pill dead"><span class="dot"></span>mode: <span id="ps-mode-val">--</span></span>
+  <span id="ps-counts" style="color:var(--text-dim);">accepted=<span id="ps-acc" style="color:var(--text);">--</span> · rejected=<span id="ps-rej" style="color:var(--orange);">--</span> · flips=<span id="ps-flips" style="color:var(--text);">--</span></span>
+  <span style="color:var(--text-dim);margin-left:8px;">FMP ref:</span>
+  <span id="ps-fmp" style="color:var(--text);">--</span>
+  <span style="color:var(--text-dim);margin-left:auto;">ADVISOR:</span>
+  <span id="adv-regime" class="health-pill" style="background:var(--bg-deep);">regime: <span id="adv-regime-val">--</span></span>
+  <span id="adv-rr" style="color:var(--text-dim);">RR tier: <span id="adv-rr-val" style="color:var(--green);font-weight:700;">--</span></span>
+  <span id="adv-flags" style="color:var(--orange);font-size:10px;"></span>
 </div>
 
 <!-- ===== SECTION: AI Council Bias ===== -->
@@ -388,7 +442,7 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
     </div>
 
     <div class="mq-field mq-hvl">
-      <label>HVL ★ Most Important</label>
+      <label>0DTE HVL ★ Most Important</label>
       <input type="number" id="mq-hvl" name="hvl" step="0.25" placeholder="21200.00">
     </div>
 
@@ -477,6 +531,145 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
 <audio id="alert-sound" preload="auto">
   <source src="data:audio/wav;base64,UklGRl9vT19teleQmFzZT..." type="audio/wav">
 </audio>
+
+</div><!-- /view-trading -->
+
+<!-- ===== VIEW: Grades (added 2026-04-25) ===== -->
+<div id="view-grades" class="view-section">
+  <div class="grades-grid">
+    <div class="card">
+      <h3><span class="live-pulse"></span>Live Grades — Today's Session
+        <span style="font-size:11px;color:var(--text-dim);font-weight:400;margin-left:8px;">
+          (recomputed every 5s from <code id="lg-source">logs/sim_bot_stdout.log</code>;
+          <span id="lg-events">0</span> events scanned)
+        </span>
+      </h3>
+      <div id="live-grades-table" class="grade-rows">
+        <div class="grade-row head"><div>ID</div><div>Label</div><div>Quant</div><div>Threshold</div><div>Status</div></div>
+        <div style="padding:14px;color:var(--text-dim);font-family:var(--mono);font-size:12px;">Loading...</div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Historical Grades — Last 30 sessions</h3>
+      <div id="historical-grades-table">
+        <div style="padding:14px;color:var(--text-dim);font-family:var(--mono);font-size:12px;">Loading...</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>AI Historical Learner — Has it studied this?
+      <span id="learner-pill" class="learner-badge stale" style="margin-left:10px;">checking...</span>
+    </h3>
+    <div style="display:grid;grid-template-columns:1fr 2fr;gap:12px;">
+      <div class="small-card">
+        <h4>Last weekly run</h4>
+        <div id="learner-weekly" style="font-family:var(--mono);font-size:11px;color:var(--text-dim);">--</div>
+      </div>
+      <div class="small-card">
+        <h4>Pending recommendations <span id="learner-rec-count" style="color:var(--orange);"></span></h4>
+        <div id="learner-recs" style="font-family:var(--mono);font-size:11px;max-height:140px;overflow-y:auto;color:var(--text-dim);">--</div>
+      </div>
+    </div>
+  </div>
+</div><!-- /view-grades -->
+
+<!-- ===== VIEW: Logs (added 2026-04-25) ===== -->
+<div id="view-logs" class="view-section">
+  <div class="card">
+    <h3><span class="live-pulse"></span>Why didn't we trade — live per-strategy
+      <span style="font-size:11px;color:var(--text-dim);font-weight:400;margin-left:8px;">
+        (groups recent rejections by strategy and reason; updates every 4s)
+      </span>
+    </h3>
+    <div class="filter-bar">
+      <label style="font-size:11px;color:var(--text-dim);">Bot:</label>
+      <select id="wnt-bot" onchange="pollWhyNoTrade()">
+        <option value="sim" selected>sim</option>
+        <option value="prod">prod</option>
+      </select>
+      <label style="font-size:11px;color:var(--text-dim);">Tail lines:</label>
+      <select id="wnt-lines" onchange="pollWhyNoTrade()">
+        <option value="500">500</option>
+        <option value="2000" selected>2000</option>
+        <option value="10000">10000</option>
+      </select>
+      <span style="font-size:11px;color:var(--text-dim);margin-left:auto;align-self:center;">
+        scanned: <span id="wnt-scanned">--</span> events
+      </span>
+    </div>
+    <div id="why-no-trade-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:8px;">
+      <div style="padding:14px;color:var(--text-dim);font-family:var(--mono);font-size:12px;">Loading...</div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:12px;">
+    <h3>Raw log tail
+      <span style="font-size:11px;color:var(--text-dim);font-weight:400;margin-left:8px;">
+        (last N lines; auto-refresh every 4s)
+      </span>
+    </h3>
+    <div class="filter-bar">
+      <label style="font-size:11px;color:var(--text-dim);">File:</label>
+      <select id="lt-key" onchange="pollLogTail()">
+        <option value="sim_bot" selected>sim_bot</option>
+        <option value="prod_bot">prod_bot</option>
+        <option value="bridge">bridge</option>
+        <option value="watchdog">watchdog</option>
+        <option value="watcher">watcher</option>
+      </select>
+      <label style="font-size:11px;color:var(--text-dim);">Lines:</label>
+      <select id="lt-lines" onchange="pollLogTail()">
+        <option value="100">100</option>
+        <option value="200" selected>200</option>
+        <option value="500">500</option>
+        <option value="1000">1000</option>
+      </select>
+      <label style="font-size:11px;color:var(--text-dim);">Filter (regex):</label>
+      <input type="text" id="lt-filter" placeholder="(blank = all)" oninput="pollLogTail()" style="width:200px;">
+      <span style="font-size:11px;color:var(--text-dim);margin-left:auto;align-self:center;">
+        <span id="lt-filename">--</span>
+      </span>
+    </div>
+    <pre id="log-tail" class="log-tail">Loading...</pre>
+  </div>
+</div><!-- /view-logs -->
+
+<!-- ===== VIEW: Routines (added 2026-04-25 §3.6) ===== -->
+<div id="view-routines" class="view-section">
+  <div class="card">
+    <h3><span class="live-pulse"></span>Phoenix Routines
+      <span style="font-size:11px;color:var(--text-dim);font-weight:400;margin-left:8px;">
+        (autonomous workflows — auto-refresh every 30s)
+      </span>
+    </h3>
+    <div id="routines-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;">
+      <div class="small-card" id="routine-morning_ritual">
+        <h4>🌅 Morning Ritual <span style="color:var(--text-dim);font-weight:400;">06:30 CT Mon-Fri</span></h4>
+        <div style="font-family:var(--mono);font-size:11px;color:var(--text-dim);">Loading...</div>
+      </div>
+      <div class="small-card" id="routine-post_session_debrief">
+        <h4>📋 Session Debrief <span style="color:var(--text-dim);font-weight:400;">16:05 CT Mon-Fri</span></h4>
+        <div style="font-family:var(--mono);font-size:11px;color:var(--text-dim);">Loading...</div>
+      </div>
+      <div class="small-card" id="routine-weekly_evolution">
+        <h4>📈 Weekly Evolution <span style="color:var(--text-dim);font-weight:400;">Sun 18:00 CT</span></h4>
+        <div style="font-family:var(--mono);font-size:11px;color:var(--text-dim);">Loading...</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:12px;">
+    <h3>Pending consolidated digest
+      <span style="font-size:11px;color:var(--text-dim);font-weight:400;margin-left:8px;">
+        (drained by post_session_debrief at 16:05 CT — single Telegram, no fatigue)
+      </span>
+    </h3>
+    <div id="digest-queue-list" style="font-family:var(--mono);font-size:11px;">
+      <div style="padding:14px;color:var(--text-dim);">Loading...</div>
+    </div>
+  </div>
+</div><!-- /view-routines -->
 
 <!-- ===== SECTION: JavaScript ===== -->
 <script>
@@ -1371,6 +1564,214 @@ function renderStrategyRisk(data) {
 // ── Helpers ────────────────────────────────────────────────────────
 function el(id) { return document.getElementById(id); }
 
+// ── View switcher + Phase B+ pollers (added 2026-04-25) ───────────
+let activeView = 'trading';
+function showView(name, btn) {
+  activeView = name;
+  document.querySelectorAll('.view-section').forEach(s => s.classList.remove('active'));
+  const target = el('view-' + name);
+  if (target) target.classList.add('active');
+  document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  // Eager refresh on view switch
+  if (name === 'grades') { pollLiveGrades(); pollHistoricalGrades(); pollLearnerStatus(); }
+  if (name === 'logs')   { pollWhyNoTrade(); pollLogTail(); }
+  if (name === 'routines') { pollRoutines(); }
+}
+
+function _fmtQuant(r) {
+  if (r.quant_units === '%') return (r.quant_value * 100).toFixed(2) + '%';
+  if (r.quant_units === '% drop') return (r.quant_value * 100).toFixed(1) + '% drop';
+  if (r.quant_units === 'minutes') return r.quant_value.toFixed(1) + 'min';
+  return String(r.quant_value);
+}
+function _fmtThreshold(r) {
+  if (r.quant_units === '%') return '<' + (r.quant_threshold * 100).toFixed(0) + '%';
+  if (r.quant_units === '% drop') return '≥' + (r.quant_threshold * 100).toFixed(0) + '% drop';
+  if (r.quant_units === 'minutes') return '≤' + r.quant_threshold + 'min';
+  return '≤' + r.quant_threshold;
+}
+
+async function pollLiveGrades() {
+  try {
+    const res = await fetch('/api/grades/live');
+    const data = await res.json();
+    if (!data.ok) {
+      el('live-grades-table').innerHTML =
+        '<div style="padding:12px;color:var(--red);font-family:var(--mono);font-size:12px;">Error: ' + (data.error || 'unknown') + '</div>';
+      return;
+    }
+    el('lg-events').textContent = data.n_events_today || 0;
+    let html = '<div class="grade-row head"><div>ID</div><div>Label</div><div>Quant</div><div>Threshold</div><div>Status</div></div>';
+    (data.results || []).forEach(r => {
+      const cls = r.overall_pass ? 'pass' : 'fail';
+      const status = r.overall_pass ? '✅ PASS' : '❌ FAIL';
+      const tooltip = (r.qual_observation || '').replace(/"/g, '&quot;').slice(0, 200);
+      html += `<div class="grade-row ${cls}" title="${tooltip}">
+        <div><b>${r.prediction_id}</b></div>
+        <div>${r.label}</div>
+        <div>${_fmtQuant(r)}</div>
+        <div>${_fmtThreshold(r)}</div>
+        <div>${status}</div>
+      </div>`;
+    });
+    el('live-grades-table').innerHTML = html;
+  } catch (e) {
+    el('live-grades-table').innerHTML =
+      '<div style="padding:12px;color:var(--red);">Network error: ' + e + '</div>';
+  }
+}
+
+async function pollHistoricalGrades() {
+  try {
+    const res = await fetch('/api/grades/list');
+    const data = await res.json();
+    const rows = (data.grades || []);
+    if (!rows.length) {
+      el('historical-grades-table').innerHTML =
+        '<div style="padding:14px;color:var(--text-dim);font-family:var(--mono);font-size:12px;">No grade reports yet. PhoenixGrading runs at 16:00 CT Mon-Fri.</div>';
+      return;
+    }
+    let html = `<div class="grade-row head" style="grid-template-columns:90px 60px 1fr;">
+      <div>Date</div><div>Score</div><div>Predictions</div></div>`;
+    rows.forEach(g => {
+      const pills = (g.summary || []).map(p => {
+        const c = p.pass ? 'var(--green)' : 'var(--red)';
+        return `<span style="color:${c};margin-right:6px;font-weight:700;" title="${(p.label||'')+' — '+(p.qual_obs||'')}">${p.id}</span>`;
+      }).join('');
+      const passCount = parseInt((g.score || '0/0').split('/')[0]) || 0;
+      const total = parseInt((g.score || '0/0').split('/')[1]) || 6;
+      const cls = passCount === total ? 'pass' : (passCount === 0 ? 'fail' : '');
+      html += `<div class="grade-row ${cls}" style="grid-template-columns:90px 60px 1fr;">
+        <div>${g.date}</div>
+        <div><b>${g.score}</b></div>
+        <div>${pills}</div>
+      </div>`;
+    });
+    el('historical-grades-table').innerHTML = html;
+  } catch (e) {
+    el('historical-grades-table').innerHTML =
+      '<div style="padding:12px;color:var(--red);">Error: ' + e + '</div>';
+  }
+}
+
+async function pollLearnerStatus() {
+  try {
+    const res = await fetch('/api/learner-status');
+    const data = await res.json();
+    const pill = el('learner-pill');
+    const ev = data.evidence || {};
+    if (data.ok && ev.learning_active) {
+      pill.className = 'learner-badge active';
+      pill.textContent = `✅ ACTIVE — last run ${ev.latest_weekly_age_hours||'?'}h ago, ${ev.recommendations_count||0} recommendations`;
+    } else if (data.ok) {
+      pill.className = 'learner-badge stale';
+      pill.textContent = `⚠ STALE — last weekly ${ev.latest_weekly_age_hours||'?'}h ago`;
+    } else {
+      pill.className = 'learner-badge dead';
+      pill.textContent = `❌ INACTIVE — ${data.error || 'no learner output'}`;
+    }
+    // Latest weekly preview
+    if ((data.weekly_reports || []).length) {
+      const w = data.weekly_reports[0];
+      el('learner-weekly').innerHTML =
+        `<b>${w.filename}</b><br>` +
+        `<span style="color:var(--text-dim);">${w.modified_iso} · ${w.size_bytes}b</span><br><br>` +
+        `<span style="white-space:pre-wrap;color:var(--text);font-size:10px;">${(w.preview||'').replace(/</g,'&lt;')}</span>`;
+    } else {
+      el('learner-weekly').innerHTML = '<span style="color:var(--red);">No weekly reports found.</span>';
+    }
+    // Recommendations
+    el('learner-rec-count').textContent =
+      ev.recommendations_count != null ? `(${ev.recommendations_count})` : '';
+    const recs = data.pending_recommendations || [];
+    if (recs.length) {
+      el('learner-recs').innerHTML = recs.map((r, i) => {
+        const summary = r.summary || r.description || r.title || JSON.stringify(r).slice(0, 200);
+        return `<div style="padding:4px 0;border-bottom:1px solid var(--border);"><b>${i+1}.</b> ${summary}</div>`;
+      }).join('');
+    } else {
+      el('learner-recs').innerHTML = '<span style="color:var(--text-dim);">No pending recommendations.</span>';
+    }
+  } catch (e) {
+    el('learner-pill').className = 'learner-badge dead';
+    el('learner-pill').textContent = '❌ ERROR — ' + e;
+  }
+}
+
+async function pollWhyNoTrade() {
+  if (activeView !== 'logs') return;
+  const bot = el('wnt-bot') ? el('wnt-bot').value : 'sim';
+  const lines = el('wnt-lines') ? el('wnt-lines').value : '2000';
+  try {
+    const res = await fetch(`/api/logs/why-no-trade?bot=${bot}&lines=${lines}`);
+    const data = await res.json();
+    if (!data.ok) {
+      el('why-no-trade-grid').innerHTML =
+        '<div style="padding:12px;color:var(--red);">Error: ' + (data.error || 'unknown') + '</div>';
+      return;
+    }
+    el('wnt-scanned').textContent = data.n_events_scanned || 0;
+    const strategies = data.by_strategy || {};
+    const keys = Object.keys(strategies).filter(k => k !== '_unknown').sort();
+    if (!keys.length) {
+      el('why-no-trade-grid').innerHTML =
+        '<div style="padding:12px;color:var(--text-dim);">No strategy events in this window. Bot may be warming up or NT8 is disconnected.</div>';
+      return;
+    }
+    el('why-no-trade-grid').innerHTML = keys.map(name => {
+      const b = strategies[name];
+      const reasonsHtml = (b.top_reasons || []).map(r =>
+        `<div class="reason-row"><span class="reason">${r.reason}</span><span class="count">${r.count}</span></div>`
+      ).join('') || '<div class="reason-row"><span class="reason" style="color:var(--green);">no rejections</span><span class="count">0</span></div>';
+      const lastHtml = (b.last_rejections || []).slice(-3).reverse().map(rej =>
+        `<div>${rej.ts.slice(11,19)} <span style="color:var(--orange);">${rej.reason}</span> ${rej.message.slice(0,80).replace(/</g,'&lt;')}</div>`
+      ).join('');
+      return `<div class="strat-card">
+        <div class="top">
+          <span class="strat-name">${name}</span>
+          <span>evals=${b.total_evals} · sig=${b.n_signal} · trade=${b.n_trade} · rej=${b.n_rejection}</span>
+        </div>
+        <div class="reasons">${reasonsHtml}</div>
+        ${lastHtml ? '<div class="last-rej"><b>Last rejections:</b><br>' + lastHtml + '</div>' : ''}
+      </div>`;
+    }).join('');
+  } catch (e) {
+    el('why-no-trade-grid').innerHTML =
+      '<div style="padding:12px;color:var(--red);">Network error: ' + e + '</div>';
+  }
+}
+
+async function pollLogTail() {
+  if (activeView !== 'logs') return;
+  const key = el('lt-key') ? el('lt-key').value : 'sim_bot';
+  const lines = el('lt-lines') ? el('lt-lines').value : '200';
+  const filterRaw = el('lt-filter') ? el('lt-filter').value : '';
+  try {
+    const res = await fetch(`/api/logs/tail?key=${key}&lines=${lines}`);
+    const data = await res.json();
+    if (!data.ok) {
+      el('log-tail').textContent = 'Error: ' + (data.error || 'unknown');
+      el('lt-filename').textContent = '';
+      return;
+    }
+    el('lt-filename').textContent = data.filename || '';
+    let lns = data.lines || [];
+    if (filterRaw) {
+      try {
+        const re = new RegExp(filterRaw, 'i');
+        lns = lns.filter(ln => re.test(ln));
+      } catch (e) { /* invalid regex; show all */ }
+    }
+    el('log-tail').textContent = lns.join('\n');
+    // Auto-scroll to bottom
+    const tail = el('log-tail');
+    tail.scrollTop = tail.scrollHeight;
+  } catch (e) {
+    el('log-tail').textContent = 'Network error: ' + e;
+  }
+}
+
 // ── Start ──────────────────────────────────────────────────────────
 setInterval(poll, POLL_MS);
 poll();
@@ -1382,6 +1783,96 @@ setInterval(pollStrategyRisk, POLL_MS);
 pollStrategyRisk();
 setInterval(pollWorkingOrders, POLL_MS);
 pollWorkingOrders();
+
+// Phase B+ pollers — only fetch when their view is active OR refresh
+// in the background at slower cadences so the data is fresh on switch.
+setInterval(() => { if (activeView === 'grades') pollLiveGrades(); }, 5000);
+setInterval(() => { if (activeView === 'grades') pollHistoricalGrades(); }, 30000);
+setInterval(pollLearnerStatus, 60000);
+setInterval(pollWhyNoTrade, 4000);
+setInterval(pollLogTail, 4000);
+// Initial fetch of learner status so the badge is ready when user switches views
+pollLearnerStatus();
+
+// Phoenix Routines tab (§3.6)
+async function pollRoutines() {
+  if (activeView !== 'routines') return;
+  try {
+    const res = await fetch('/api/routines/list');
+    const data = await res.json();
+    const routines = data.routines || {};
+    for (const [name, info] of Object.entries(routines)) {
+      const card = el(`routine-${name}`);
+      if (!card) continue;
+      const inner = card.querySelector('div');
+      if (!info.available) {
+        inner.innerHTML = '<span style="color:var(--text-dim);">No reports yet — routine has not run.</span>';
+        continue;
+      }
+      const latest = info.latest;
+      if (!latest || latest.error) {
+        inner.innerHTML = `<span style="color:var(--red);">Error: ${latest && latest.error || 'unknown'}</span>`;
+        continue;
+      }
+      const v = latest.verdict || '?';
+      const vColor = {GREEN:'var(--green)',YELLOW:'var(--orange)',RED:'var(--red)'}[v] || 'var(--text-dim)';
+      const preview = (latest.preview || '').replace(/</g,'&lt;').slice(0, 600);
+      inner.innerHTML =
+        `<div style="margin-bottom:8px;"><b>${latest.session_date}</b> · ` +
+        `<span style="color:${vColor};font-weight:700;">${v}</span> · ` +
+        `<span style="color:var(--text-dim);">${latest.modified_iso}</span></div>` +
+        `<pre style="font-size:10px;background:#0a0a0a;padding:6px;max-height:180px;overflow-y:auto;white-space:pre-wrap;color:#cfd3da;">${preview}</pre>` +
+        (info.history && info.history.length > 1
+          ? `<div style="font-size:10px;color:var(--text-dim);margin-top:4px;">${info.history.length} historical report(s) on disk</div>`
+          : '');
+    }
+    // Digest queue
+    const dq = data.digest_queue || [];
+    const dqHost = el('digest-queue-list');
+    if (!dq.length) {
+      dqHost.innerHTML = '<div style="padding:10px;color:var(--text-dim);">Queue is empty — last digest sent or no morning_ritual run yet today.</div>';
+    } else {
+      dqHost.innerHTML = dq.map(item => {
+        const v = item.verdict || '?';
+        const vColor = {GREEN:'var(--green)',YELLOW:'var(--orange)',RED:'var(--red)'}[v] || 'var(--text-dim)';
+        return `<div style="padding:6px 0;border-bottom:1px solid var(--border);">
+          <span style="color:${vColor};font-weight:700;">${v}</span>
+          <span style="color:var(--text-dim);"> · ${item.routine || '?'} · ${item.session_date || '?'}</span>
+          <br><span>${(item.summary_md || '').replace(/</g,'&lt;').slice(0,160)}</span>
+        </div>`;
+      }).join('');
+    }
+  } catch (e) {/* silent */}
+}
+setInterval(pollRoutines, 30000);
+
+// PriceSanity + Advisor live bar (visible in Trading view at all times)
+async function pollSanityBar() {
+  try {
+    const res = await fetch('/api/sanity-snapshot');
+    const data = await res.json();
+    const ps = data.price_sanity || {};
+    if (ps.mode) {
+      el('ps-mode-val').textContent = ps.mode;
+      const pill = el('ps-mode');
+      pill.className = 'health-pill ' + (ps.mode === 'local_primary' ? 'live' : 'dead');
+    }
+    if (ps.ticks_accepted != null) el('ps-acc').textContent = ps.ticks_accepted;
+    if (ps.ticks_rejected != null) el('ps-rej').textContent = ps.ticks_rejected;
+    if (ps.mode_flips != null) el('ps-flips').textContent = ps.mode_flips;
+    if (data.fmp_reference != null) el('ps-fmp').textContent = Number(data.fmp_reference).toFixed(2);
+
+    const adv = data.sim_advisor || data.prod_advisor || null;
+    if (adv) {
+      el('adv-regime-val').textContent = adv.market_regime || '--';
+      el('adv-rr-val').textContent = adv.suggested_rr_tier ? Number(adv.suggested_rr_tier).toFixed(1) + ':1' : '--';
+      const flags = adv.caution_flags || [];
+      el('adv-flags').textContent = flags.length ? '⚠ ' + flags.join(',') : '';
+    }
+  } catch (e) {/* silent */}
+}
+setInterval(pollSanityBar, 3000);
+pollSanityBar();
 </script>
 </body>
 </html>

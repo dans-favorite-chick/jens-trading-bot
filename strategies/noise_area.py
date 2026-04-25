@@ -169,16 +169,32 @@ class NoiseAreaMomentum(BaseStrategy):
             return None
 
         # ── 30-minute signal cadence ────────────────────────────────
+        # 2026-04-24: this gate is EXPECTED to short-circuit on most evals.
+        # Strategy is designed to evaluate only at 30-min bar closes (minute
+        # 0 and 30). The previous BLOCKED log was firing once per minute and
+        # filling the log with the same noise the user perceived as "always
+        # blocked." Demoted to a single one-line trace; counter the number of
+        # off-cadence skips so they're countable but not spammy.
         minute_of_hour = bar_dt_et.minute
         if minute_of_hour % trade_freq_min != 0:
-            logger.debug(f"[EVAL] {self.name}: BLOCKED gate:not_on_30min_cadence")
+            # No log line — this fires every minute by design. The count is
+            # surfaced through a single periodic INFO at the bottom-of-hour
+            # so operators can confirm the gate is alive without log spam.
+            self._off_cadence_skip_count = getattr(self, "_off_cadence_skip_count", 0) + 1
             return None
         # Dedup: one signal per 30-min window
         window_key = bar_dt_et.replace(second=0, microsecond=0).timestamp()
         if window_key == self._last_30min_fired_ts:
-            logger.debug(f"[EVAL] {self.name}: BLOCKED gate:already_checked_this_window")
-            return None
+            return None  # silent — same minute, second tick
         self._last_30min_fired_ts = window_key
+        # On-cadence: log once per cadence window so we can confirm the
+        # strategy is reaching its evaluation window in real-time.
+        _skip_count = getattr(self, "_off_cadence_skip_count", 0)
+        logger.info(
+            f"[EVAL] {self.name}: ON CADENCE — evaluating at "
+            f"{bar_dt_et.strftime('%H:%M')} ET ({_skip_count} off-cadence skips since last)"
+        )
+        self._off_cadence_skip_count = 0
 
         # ── EoD cutoff ──────────────────────────────────────────────
         if bar_dt_et.strftime("%H:%M") >= eod_time_et:
@@ -251,6 +267,24 @@ class NoiseAreaMomentum(BaseStrategy):
         ]
 
         broken_boundary = ub if direction == "LONG" else lb
+
+        # 2026-04-25 §4.1 (OPERATOR_TODO): bias_momentum + orb consume the
+        # advisor's suggested_rr_tier to scale their static target_rr. Noise
+        # Area uses target_rr=0.0 (dynamic / managed exit via the
+        # `price_returns_inside_noise_area` exit_trigger), so multiplying
+        # target_rr by anything is a no-op. We surface the advisor's regime
+        # + tier in the confluences for transparency / future managed-exit
+        # tuning, but do NOT alter behavior here. Operator can later switch
+        # the managed exit to honor the advisor's tier (e.g., wider profit
+        # take in TRENDING regime) — that's a separate, deeper refactor.
+        _adv = market.get("advisor_guidance") or {}
+        if _adv.get("market_regime"):
+            confluences.append(
+                f"advisor: regime={_adv.get('market_regime')} "
+                f"tier={_adv.get('suggested_rr_tier', 'n/a')}:1 "
+                f"(advisor RR not applied — managed exit)"
+            )
+
         logger.info(f"[EVAL] {self.name}: SIGNAL {direction} entry={entry_price:.2f}")
         return Signal(
             direction=direction,

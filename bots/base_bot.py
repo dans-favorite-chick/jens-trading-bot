@@ -148,6 +148,164 @@ def _validate_nt8_paths():
     sys.exit(1)
 
 
+# ── OIF Sink (Phase B+ migration: PHOENIX_RISK_GATE) ──────────────────────
+#
+# Every OIF write that base_bot performs flows through `_get_oif_sink()`.
+# When PHOENIX_RISK_GATE is unset or "0" (the default) the helper returns
+# a DirectFileSink which simply re-dispatches to the legacy
+# bridge.oif_writer functions — behavior is byte-for-byte identical to
+# the pre-migration code. When PHOENIX_RISK_GATE=1, the helper returns a
+# RiskGateSink which forwards each request to the gate over a Windows
+# named pipe and respects the ACCEPT/REFUSE response.
+#
+# RiskGateSink fails soft: if the gate process isn't running, it logs
+# WARN once and falls back to DirectFileSink so the bot keeps trading.
+# That preserves the safety property: enabling the flag must NEVER make
+# the bot worse than the legacy path; in the worst case, it degrades to
+# the legacy path with a visible warning.
+#
+# Helper functions wrap each legacy call so the surrounding logic
+# (account routing, B59 live-guard, _move_nt8_stop, scale-out, exit
+# fallback, emergency flatten, post-fill OCO attach) stays untouched.
+
+_OIF_SINK = None  # cached per-process; rebuilt on env-flag flip is not supported
+
+
+def _get_oif_sink():
+    """Return the configured OIF sink (DirectFileSink by default,
+    RiskGateSink if PHOENIX_RISK_GATE=1). Cached per-process for speed."""
+    global _OIF_SINK
+    if _OIF_SINK is None:
+        from phoenix_bot.orchestrator.oif_writer import get_default_sink
+        _OIF_SINK = get_default_sink()
+    return _OIF_SINK
+
+
+def _sink_submit_place(direction: str, qty: int, entry_type: str,
+                       entry_price: float, stop_price: float,
+                       target_price, trade_id: str, account: str,
+                       strategy: str = "", sub_strategy=None) -> dict:
+    """Sink-mediated bracket PLACE. Returns the sink response dict.
+    On REFUSE, the caller should treat as a no-op and skip the entry."""
+    from config.settings import INSTRUMENT
+    sink = _get_oif_sink()
+    req = {
+        "v": 1,
+        "id": trade_id or "",
+        "op": "PLACE",
+        "strategy": strategy or "",
+        "account": account or "",
+        "instrument": INSTRUMENT,
+        "action": "BUY" if str(direction).upper() == "LONG" else "SELL",
+        "qty": int(qty),
+        "order_type": str(entry_type).upper(),
+        "tif": "GTC",
+        "price_ref": float(entry_price or 0.0),
+        "entry_price": float(entry_price or 0.0),
+        "stop_price": float(stop_price) if stop_price is not None else None,
+        "target_price": float(target_price) if target_price is not None else None,
+        "trade_id": trade_id or "",
+        "sub_strategy": sub_strategy,
+    }
+    return sink.submit(req)
+
+
+def _sink_submit_protect(direction: str, qty: int, stop_price: float,
+                         target_price: float, trade_id: str,
+                         account: str) -> dict:
+    """Sink-mediated post-fill OCO protection (PROTECT op)."""
+    from config.settings import INSTRUMENT
+    sink = _get_oif_sink()
+    req = {
+        "v": 1,
+        "id": trade_id or "",
+        "op": "PROTECT",
+        "strategy": "",
+        "account": account,
+        "instrument": INSTRUMENT,
+        # PROTECT carries direction of the FILLED position; the legacy
+        # writer derives the opposite side for stop+target.
+        "direction": str(direction).upper(),
+        "action": "SELL" if str(direction).upper() == "LONG" else "BUY",
+        "qty": int(qty),
+        "order_type": "OCO",
+        "tif": "GTC",
+        "stop_price": float(stop_price),
+        "target_price": float(target_price),
+        "trade_id": trade_id,
+    }
+    return sink.submit(req)
+
+
+def _sink_submit_exit(qty: int, trade_id: str, account: str,
+                      reason: str = "") -> dict:
+    """Sink-mediated EXIT (CLOSEPOSITION)."""
+    from config.settings import INSTRUMENT
+    sink = _get_oif_sink()
+    req = {
+        "v": 1,
+        "id": trade_id or "",
+        "op": "EXIT",
+        "strategy": "",
+        "account": account,
+        "instrument": INSTRUMENT,
+        "action": "SELL",  # not actually used for EXIT; legacy writer issues CLOSEPOSITION
+        "qty": int(qty),
+        "order_type": "MARKET",
+        "tif": "GTC",
+        "trade_id": trade_id,
+        "reason": reason,
+    }
+    return sink.submit(req)
+
+
+def _sink_submit_partial_exit(direction: str, n_contracts: int,
+                              trade_id: str, account: str) -> dict:
+    """Sink-mediated PARTIAL_EXIT (scale-out)."""
+    from config.settings import INSTRUMENT
+    sink = _get_oif_sink()
+    req = {
+        "v": 1,
+        "id": trade_id or "",
+        "op": "PARTIAL_EXIT",
+        "strategy": "",
+        "account": account,
+        "instrument": INSTRUMENT,
+        "direction": str(direction).upper(),
+        "action": "SELL" if str(direction).upper() == "LONG" else "BUY",
+        "qty": int(n_contracts),
+        "order_type": "MARKET",
+        "tif": "GTC",
+        "trade_id": trade_id,
+    }
+    return sink.submit(req)
+
+
+def _sink_submit_modify_stop(direction: str, new_stop_price: float,
+                             n_contracts: int, trade_id: str,
+                             account: str, old_stop_order_id: str) -> dict:
+    """Sink-mediated stop cancel+replace (MODIFY_STOP)."""
+    from config.settings import INSTRUMENT
+    sink = _get_oif_sink()
+    req = {
+        "v": 1,
+        "id": trade_id or "",
+        "op": "MODIFY_STOP",
+        "strategy": "",
+        "account": account,
+        "instrument": INSTRUMENT,
+        "direction": str(direction).upper(),
+        "action": "SELL" if str(direction).upper() == "LONG" else "BUY",
+        "qty": int(n_contracts),
+        "order_type": "STOPMARKET",
+        "tif": "GTC",
+        "new_stop_price": float(new_stop_price),
+        "trade_id": trade_id,
+        "old_stop_order_id": old_stop_order_id,
+    }
+    return sink.submit(req)
+
+
 # ── Trend Rider helpers (module-level, pure functions) ───────────────────────
 
 def _should_scale_out(pos, price: float, scale_rr: float) -> bool:
@@ -172,8 +330,11 @@ def _move_nt8_stop(pos, old_stop_price: float, new_stop_price: float) -> None:
         )
         return
     try:
-        from bridge.oif_writer import write_modify_stop, scan_outgoing_for_order_id
-        paths = write_modify_stop(
+        from bridge.oif_writer import scan_outgoing_for_order_id
+        # Phase B+: route through Sink Protocol. With PHOENIX_RISK_GATE=0
+        # this dispatches to bridge.oif_writer.write_modify_stop exactly
+        # as before. With PHOENIX_RISK_GATE=1 it goes through RiskGate.
+        resp = _sink_submit_modify_stop(
             direction=pos.direction,
             new_stop_price=new_stop_price,
             n_contracts=pos.contracts,
@@ -181,7 +342,7 @@ def _move_nt8_stop(pos, old_stop_price: float, new_stop_price: float) -> None:
             account=pos.account,
             old_stop_order_id=pos.stop_order_id,
         )
-        if paths:
+        if resp.get("decision") == "ACCEPT":
             new_oid = scan_outgoing_for_order_id(pos.account, new_stop_price)
             if new_oid:
                 pos.stop_order_id = new_oid
@@ -189,7 +350,10 @@ def _move_nt8_stop(pos, old_stop_price: float, new_stop_price: float) -> None:
                 f"[STOP_MOVED:{pos.trade_id}] {old_stop_price:.2f} -> {new_stop_price:.2f}"
             )
         else:
-            logger.error(f"[STOP_MOVE_FAILED:{pos.trade_id}] write_modify_stop returned []")
+            logger.error(
+                f"[STOP_MOVE_FAILED:{pos.trade_id}] sink {resp.get('sink','?')} "
+                f"REFUSED: {resp.get('reason','?')}"
+            )
     except Exception as e:
         logger.error(f"[STOP_MOVE_EXCEPTION:{pos.trade_id}] {e}")
 
@@ -843,6 +1007,19 @@ class BaseBot:
 
         # Hourly decay health check + 15:10 CT daily summary Telegram push.
         asyncio.ensure_future(self._decay_monitor_loop())
+
+        # 2026-04-24: FMP market-data cross-check loop. Fetches NDX/QQQ
+        # from financialmodelingprep.com, converts to MNQ-equivalent, and
+        # compares against the local accepted tick. If local drifts more
+        # than 1.5% from FMP on two consecutive checks, writes the HALT
+        # marker so circuit_breakers pauses new entries within ~5s. Safe
+        # no-op when FMP_API_KEY is unset.
+        try:
+            from core import fmp_sanity
+            asyncio.ensure_future(fmp_sanity.poll_loop(interval_s=60.0,
+                                                      halt_on_divergence_pct=0.015))
+        except Exception as e:
+            logger.warning(f"[FMP] sanity loop failed to start (non-blocking): {e!r}")
 
         while True:
             try:
@@ -2094,6 +2271,27 @@ class BaseBot:
         except Exception:
             pass
 
+        # 2026-04-24 Market advisor guidance. Deterministic producer that
+        # synthesizes MQ + FMP + tick-agg state into sentiment / volatility
+        # / market_regime / suggested_rr_tier / caution_flags. Strategies
+        # can opt in by reading market["advisor_guidance"]["suggested_rr_tier"]
+        # to adjust their RR (2:1 for CHOPPY, 3:1 for TRENDING, 1.5:1 for
+        # OVEREXTENDED per Jennifer). Guidance is also surfaced into the
+        # council's voter prompt further down. Failures never crash eval.
+        try:
+            from agents.market_advisor import enrich_market_snapshot as _enrich_advisor
+            market = _enrich_advisor(market)
+            _g = market.get("advisor_guidance") or {}
+            if _g:
+                logger.debug(
+                    f"[ADVISOR] sent={_g.get('sentiment')} "
+                    f"regime={_g.get('market_regime')} "
+                    f"rr={_g.get('suggested_rr_tier')} "
+                    f"flags={','.join(_g.get('caution_flags', [])) or '-'}"
+                )
+        except Exception as e:
+            logger.debug(f"[ADVISOR] enrichment failed (non-blocking): {e!r}")
+
         # Phase 8: Enrich with pandas-ta pattern data
         try:
             active = self.pandas_ta.get_active_patterns()
@@ -3255,11 +3453,12 @@ class BaseBot:
         # UNPROTECTED POSITION is in NT8 — FLATTEN immediately to prevent
         # unbounded loss, then loud-alert.
         if stop_price and target_price:
-            from bridge.oif_writer import write_protection_oco, write_oif
+            # Phase B+ Sink-mediated PROTECT. PHOENIX_RISK_GATE=0 -> identical
+            # behavior to the legacy write_protection_oco call.
             protection_ok = False
             for attempt in range(1, 4):
                 try:
-                    paths = write_protection_oco(
+                    resp = _sink_submit_protect(
                         direction=signal.direction,
                         qty=contracts,
                         stop_price=round(stop_price, 2),
@@ -3267,6 +3466,15 @@ class BaseBot:
                         trade_id=f"{tid}_protect{attempt}",
                         account=_account,
                     )
+                    paths = resp.get("oif_paths") or (
+                        [resp["oif_path"]] if resp.get("decision") == "ACCEPT"
+                        and resp.get("oif_path") else []
+                    )
+                    if resp.get("decision") == "REFUSE":
+                        logger.warning(
+                            f"[RISK_GATE] PROTECT refused for {tid} "
+                            f"(attempt {attempt}): {resp.get('reason')}"
+                        )
                     if paths:
                         logger.info(
                             f"[PROTECT:{tid}] OCO attached on attempt #{attempt} "
@@ -3300,11 +3508,22 @@ class BaseBot:
                     f"unprotected {signal.direction} position on {_account}"
                 )
                 try:
-                    write_oif(
-                        "CLOSEPOSITION", qty=contracts,
+                    # Sink-mediated emergency flatten. With the gate engaged,
+                    # an EXIT op should always be ACCEPT'd (the gate doesn't
+                    # block close-position orders); fail-soft fallback covers
+                    # the case where the gate is unreachable.
+                    _ef_resp = _sink_submit_exit(
+                        qty=contracts,
                         trade_id=f"{tid}_emergency_flatten",
                         account=_account,
+                        reason="UNPROTECTED_FLATTEN",
                     )
+                    if _ef_resp.get("decision") != "ACCEPT":
+                        logger.critical(
+                            f"[PROTECT:{tid}] EMERGENCY FLATTEN refused by "
+                            f"sink {_ef_resp.get('sink','?')}: "
+                            f"{_ef_resp.get('reason','?')}"
+                        )
                 except Exception as e:
                     logger.critical(f"[PROTECT:{tid}] EMERGENCY FLATTEN FAILED: {e}")
                 try:
@@ -3555,14 +3774,21 @@ class BaseBot:
         # reaches zero, NT8 auto-cancels the OCO.
 
         # STEP 2: Write partial exit OIF (exit n_exit contracts at market)
+        # Sink-mediated PARTIAL_EXIT — DirectFileSink delegates straight to
+        # bridge.oif_writer.write_partial_exit when the gate flag is off.
         try:
-            from bridge.oif_writer import write_partial_exit
-            write_partial_exit(
+            _se_resp = _sink_submit_partial_exit(
                 direction=pos.direction,
                 n_contracts=n_exit,
                 trade_id=f"{tid}_scale1",
                 account=pos.account,
             )
+            if _se_resp.get("decision") != "ACCEPT":
+                logger.error(
+                    f"[SCALE_OUT:{tid}] Partial exit refused by sink "
+                    f"{_se_resp.get('sink','?')}: {_se_resp.get('reason','?')}"
+                )
+                return
         except Exception as e:
             logger.error(f"[SCALE_OUT:{tid}] Partial exit OIF failed: {e}")
             return
@@ -3664,6 +3890,22 @@ class BaseBot:
         if pos is None:
             return
         tid = pos.trade_id
+
+        # 2026-04-24 debounce. On a reconciled-phantom position at 09:29:07
+        # the exit path fired hundreds of times in 500ms (see
+        # logs/sim_bot_stdout.log: 94,433 EXIT_PENDING lines lifetime). Once
+        # an exit is in flight for a trade_id, suppress duplicate sends for
+        # 2 seconds — runtime reconciliation (every 30s) is the proper
+        # driver for unwinding pending exits, not the tick-exit loop.
+        if not hasattr(self, "_last_exit_send_ts"):
+            self._last_exit_send_ts: dict[str, float] = {}
+        _now = time.time()
+        _prev = self._last_exit_send_ts.get(tid, 0.0)
+        if _now - _prev < 2.0:
+            logger.debug(f"[EXIT_PENDING:{tid}] debounce skip — last send {_now - _prev:.2f}s ago")
+            return
+        self._last_exit_send_ts[tid] = _now
+
         self.status = "EXIT_PENDING"
         logger.info(f"[EXIT_PENDING:{tid}] Sending exit for {pos.direction} @ {price:.2f}, reason={reason}")
 
@@ -3686,9 +3928,19 @@ class BaseBot:
         except Exception as e:
             logger.error(f"[EXIT:{tid}] WS send failed: {e} — writing OIF fallback")
             try:
-                from bridge.oif_writer import write_oif
-                write_oif("EXIT", pos.contracts, trade_id=tid, account=pos.account)
-                exit_sent = True
+                # Sink-mediated EXIT fallback. Identical to the legacy
+                # write_oif('EXIT', ...) call when PHOENIX_RISK_GATE=0.
+                _ex_resp = _sink_submit_exit(
+                    qty=pos.contracts, trade_id=tid, account=pos.account,
+                    reason=reason,
+                )
+                if _ex_resp.get("decision") == "ACCEPT":
+                    exit_sent = True
+                else:
+                    logger.error(
+                        f"[EXIT:{tid}] sink {_ex_resp.get('sink','?')} "
+                        f"REFUSED EXIT: {_ex_resp.get('reason','?')}"
+                    )
             except Exception as e2:
                 logger.error(f"[EXIT:{tid}] OIF fallback ALSO failed: {e2} — MANUAL EXIT NEEDED")
                 asyncio.ensure_future(tg.notify_alert(

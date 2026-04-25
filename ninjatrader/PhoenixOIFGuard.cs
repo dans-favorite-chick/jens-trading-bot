@@ -60,10 +60,17 @@ namespace NinjaTrader.NinjaScript.AddOns
 {
     public class PhoenixOIFGuard : NinjaTrader.NinjaScript.AddOnBase
     {
-        // Phoenix author-tag regex. Matches literal "phoenix_", one or more
-        // digits (the pid), then "_". Anything else = rogue.
+        // Phoenix author-tag regex. Accept both:
+        //   - current writer shape: `oif<counter>_phoenix_<pid>_...`
+        //   - legacy prefix shape:  `phoenix_<pid>_...`
+        // Anything without one of these tags is treated as rogue.
+        //
+        // The current writer embeds the tag mid-filename because NT8's ATI
+        // requires filenames to start with a known type prefix like "oif".
+        // We still trust the old prefix form so the guard does not
+        // quarantine Phoenix-authored files emitted by older tooling.
         private static readonly Regex PhoenixTag = new Regex(
-            @"^phoenix_\d+_", RegexOptions.Compiled);
+            @"(^phoenix_\d+_)|(_phoenix_\d+_)", RegexOptions.Compiled);
 
         private FileSystemWatcher _watcher;
         private string _incomingDir;

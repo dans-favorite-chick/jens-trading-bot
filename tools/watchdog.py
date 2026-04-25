@@ -20,8 +20,9 @@ Actions:
 Usage:
     python tools/watchdog.py                    # Run watchdog
     python tools/watchdog.py --no-restart       # Monitor only, no auto-restart
-    python tools/watchdog.py --bots prod            # Only watch prod bot
-    python tools/watchdog.py                        # Default: watches prod+sim
+    python tools/watchdog.py --bots prod,sim        # Default — both bots
+    python tools/watchdog.py --bots sim             # Only sim (prod dropped)
+    python tools/watchdog.py --bots prod            # Only prod
 """
 
 import argparse
@@ -577,14 +578,14 @@ def main():
     parser = argparse.ArgumentParser(description="Phoenix Bot Watchdog")
     parser.add_argument("--no-restart", action="store_true",
                         help="Monitor only — don't auto-restart bots")
-    parser.add_argument("--bots", type=str, default="sim",
-                        help="Comma-separated bot names to watch (default: sim). "
-                             "B56 2026-04-22: prod_bot dropped from default — "
-                             "sim_bot handles all 16-account routing. Two bots "
-                             "trading the same accounts caused double-submit + "
-                             "NT8 'Exceeds max pos qty' rejects. Pass 'prod,sim' "
-                             "to re-enable prod_bot only if running on a separate "
-                             "account set.")
+    parser.add_argument("--bots", type=str, default="prod,sim",
+                        help="Comma-separated bot names to watch (default: prod,sim). "
+                             "B56 2026-04-22: prod_bot was dropped from default after "
+                             "double-submit rejects when prod+sim hit the same 16 accounts. "
+                             "2026-04-24 re-enable (Jennifer): prod_bot now routes ALL "
+                             "strategies to Sim101; sim_bot routes to the 16 dedicated "
+                             "SimXxx sub-accounts. Disjoint account sets → no double-submit. "
+                             "Pass --bots sim to drop prod from the watch list.")
     parser.add_argument("--analyze", action="store_true",
                         help="Analyze disconnect forensics log and exit")
     parser.add_argument("--api-port", type=int, default=5001,

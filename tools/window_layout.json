@@ -1,0 +1,23 @@
+﻿{
+    "bridge":  {
+                   "X":  1275,
+                   "Y":  -744,
+                   "W":  665,
+                   "H":  337,
+                   "Title":  "Phoenix Bridge - \"C:\\Users\\Trading PC\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe\"  bridge\\bridge_server.py"
+               },
+    "dashboard":  {
+                      "X":  1275,
+                      "Y":  -744,
+                      "W":  665,
+                      "H":  337,
+                      "Title":  "Phoenix Dashboard - \"C:\\Users\\Trading PC\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe\"  dashboard\\server.py"
+                  },
+    "watchdog":  {
+                     "X":  1275,
+                     "Y":  -1081,
+                     "W":  665,
+                     "H":  344,
+                     "Title":  "Phoenix Watchdog - \"C:\\Users\\Trading PC\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe\"  tools\\watchdog.py"
+                 }
+}

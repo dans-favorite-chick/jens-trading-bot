@@ -120,6 +120,15 @@ Vote BULLISH if: positive GEX + price above HVL + vanna/charm bullish + CTA cove
 Vote BEARISH if: negative GEX + price below HVL + vanna bearish + put wall breaking
 Vote NEUTRAL if: GEX data is UNKNOWN/not filled, or mixed signals""",
     },
+    {
+        # Deterministic FinBERT-driven voter (post-2026-04-25 §2.2). Does NOT
+        # call an LLM; the council orchestrator dispatches it through
+        # SentimentFlowAgent.vote() instead of _run_voter(). Defaults to
+        # observation mode (weight=0) unless SENTIMENT_FLOW_ACTIVE is true.
+        "name": "Sentiment Flow",
+        "system": "FinBERT sentiment voter (deterministic, env-gated).",
+        "is_deterministic": True,
+    },
 ]
 
 
@@ -154,6 +163,14 @@ Intermarket: {intermarket}
 NQ/ES Relative Strength: {nq_es_strength}
 Macro: Fed Funds={fed_rate}%, CPI={cpi}% YoY, Unemployment={unemployment}%
 
+## Macro regime
+Latest FRED snapshot ({macro_fetched_at}):
+- Fed Funds Rate: {macro_ffr}%   (last shift: {macro_ffr_shift})
+- CPI YoY: {macro_cpi_yoy}%
+- Unemployment: {macro_unemployment}%
+- 10Y-2Y spread: {macro_curve_2y10y}% ({macro_curve_state})  <- inverted=recession-signal
+Recent regime shifts (24h): {macro_recent_shifts}
+
 ## Menthor Q — Options Dealer Flow (GEX Regime)
 GEX Regime: {mq_gex_regime} | Net GEX: {mq_net_gex_bn}B
 HVL (High Vol Level): {mq_hvl} | Price vs HVL: {mq_price_vs_hvl}
@@ -165,6 +182,17 @@ Vanna Flow: {mq_vanna} | Charm Flow: {mq_charm}
 CTA Positioning: {mq_cta}
 MQ Direction Bias: {mq_direction_bias} | Stop Multiplier: {mq_stop_mult}x
 MQ Notes: {mq_notes}
+
+## Market Advisor Guidance (deterministic prefilter; 2026-04-24)
+Sentiment: {adv_sentiment} (conf {adv_conf})
+Volatility regime: {adv_volatility}
+Market regime: {adv_market_regime}
+Suggested RR tier: {adv_rr_tier}:1 (guiding, not stopping)
+Caution flags: {adv_caution}
+Advisor reasoning: {adv_reasoning}
+
+Jennifer 2026-04-24 policy: CHOPPY → 2:1, TRENDING → 3:1, OVEREXTENDED → 1.5:1.
+Use this as a baseline; your bias vote should weigh it but isn't bound by it.
 
 ## Expert Assessment
 {expert_assessment}
@@ -253,6 +281,70 @@ async def _run_voter(config: dict, market: dict, recent_trades_str: str) -> Vote
                 "RISK-OFF" if im_data.get("risk_off") else "MIXED"
             )
 
+        # 2026-04-24 Market Advisor guidance. If the market dict already
+        # carries `advisor_guidance` (populated by base_bot._evaluate_strategies
+        # via agents.market_advisor.enrich_market_snapshot) we use it.
+        # Otherwise compute on-the-fly so the council can still be invoked
+        # from contexts that bypass base_bot (e.g., ad-hoc scripts).
+        adv = market.get("advisor_guidance")
+        if not adv:
+            try:
+                from agents.market_advisor import compute_guidance
+                adv = compute_guidance(market).to_dict()
+            except Exception:
+                adv = {}
+        adv_sentiment = adv.get("sentiment", "NEUTRAL")
+        adv_conf = adv.get("direction_conf", 0)
+        adv_volatility = adv.get("volatility_regime", "NORMAL")
+        adv_market_regime = adv.get("market_regime", "CHOPPY")
+        adv_rr_tier = adv.get("suggested_rr_tier", 2.0)
+        adv_caution = ", ".join(adv.get("caution_flags", [])) or "none"
+        adv_reasoning = adv.get("reasoning", "N/A")
+
+        # Phase B+ §3.3 — structured FRED macro feed (cached, regime-aware).
+        # Best-effort: never crash the council on FRED outage.
+        macro_fetched_at = "N/A"
+        macro_ffr_str = "N/A"
+        macro_ffr_shift = "none"
+        macro_cpi_yoy_str = "N/A"
+        macro_unemployment_str = "N/A"
+        macro_curve_str = "N/A"
+        macro_curve_state = "unknown"
+        macro_recent_shifts_str = "none"
+        try:
+            from core.macros.fred_feed import FredMacroFeed as _FredMacroFeed
+            from core.macros.regime_history import RegimeHistory as _RegimeHistory
+
+            _feed = _FredMacroFeed()
+            _snap = _feed.get_snapshot()
+            macro_fetched_at = _snap.fetched_at_iso
+            macro_ffr_str = f"{_snap.ffr:.2f}" if _snap.ffr else "N/A"
+            macro_cpi_yoy_str = (
+                f"{_snap.cpi_yoy:.2f}" if _snap.cpi_yoy is not None else "N/A"
+            )
+            macro_unemployment_str = (
+                f"{_snap.unemployment:.2f}" if _snap.unemployment else "N/A"
+            )
+            macro_curve_str = f"{_snap.yield_curve_2y10y:.2f}"
+            macro_curve_state = (
+                "inverted" if _snap.yield_curve_2y10y < 0 else "normal"
+            )
+
+            _hist = _RegimeHistory()
+            _recent = _hist.get_recent_shifts(hours=24)
+            if _recent:
+                macro_recent_shifts_str = "; ".join(
+                    f"{s.series}:{s.direction}" for s in _recent
+                )[:240]
+                _ffr_shifts = [s for s in _recent if s.series == "DFF"]
+                if _ffr_shifts:
+                    last = _ffr_shifts[-1]
+                    macro_ffr_shift = (
+                        f"{last.direction} {last.prev_value}->{last.curr_value}"
+                    )
+        except Exception as _e:  # never block the voter on FRED issues
+            logger.debug("[Council] FRED macro snapshot unavailable: %s", _e)
+
         prompt = VOTER_PROMPT_TEMPLATE.format(
             price=market.get("price", 0),
             vwap=market.get("vwap", 0),
@@ -318,6 +410,21 @@ async def _run_voter(config: dict, market: dict, recent_trades_str: str) -> Vote
             mq_direction_bias=mq_direction_bias,
             mq_stop_mult=mq_stop_mult,
             mq_notes=mq_notes,
+            adv_sentiment=adv_sentiment,
+            adv_conf=adv_conf,
+            adv_volatility=adv_volatility,
+            adv_market_regime=adv_market_regime,
+            adv_rr_tier=adv_rr_tier,
+            adv_caution=adv_caution,
+            adv_reasoning=adv_reasoning,
+            macro_fetched_at=macro_fetched_at,
+            macro_ffr=macro_ffr_str,
+            macro_ffr_shift=macro_ffr_shift,
+            macro_cpi_yoy=macro_cpi_yoy_str,
+            macro_unemployment=macro_unemployment_str,
+            macro_curve_2y10y=macro_curve_str,
+            macro_curve_state=macro_curve_state,
+            macro_recent_shifts=macro_recent_shifts_str,
         )
 
         response = await ask(
@@ -356,6 +463,63 @@ async def _run_voter(config: dict, market: dict, recent_trades_str: str) -> Vote
         logger.warning(f"[Council] Voter '{name}' error: {e}")
         return Vote(voter=name, bias="ABSTAIN", confidence=0,
                     reasoning=f"Error: {str(e)[:60]}", latency_ms=latency)
+
+
+async def _run_deterministic_voter(config: dict, market: dict) -> Vote:
+    """Run a deterministic (non-LLM) voter.
+
+    Currently only ``Sentiment Flow`` uses this path. The voter is invoked
+    synchronously inside an async wrapper so it composes with
+    asyncio.gather(). Any exception is caught and converted to an
+    ABSTAIN vote so the council never crashes on a misbehaving voter.
+    """
+    start = time.time()
+    name = config.get("name", "deterministic-voter")
+    try:
+        if name == "Sentiment Flow":
+            # Lazy import to avoid circular dependency at module load.
+            from agents.sentiment_flow_agent import SentimentFlowAgent
+            agent = SentimentFlowAgent()
+            intel = market.get("intel", {}) if isinstance(market, dict) else {}
+            vote, _info = agent.vote(market, intel)
+            return vote
+        # Unknown deterministic voter -> ABSTAIN.
+        latency = (time.time() - start) * 1000
+        return Vote(voter=name, bias="ABSTAIN", confidence=0,
+                    reasoning=f"Unknown deterministic voter: {name}",
+                    latency_ms=latency)
+    except Exception as e:
+        latency = (time.time() - start) * 1000
+        logger.warning(f"[Council] Deterministic voter '{name}' error: {e}")
+        return Vote(voter=name, bias="ABSTAIN", confidence=0,
+                    reasoning=f"Error: {str(e)[:60]}", latency_ms=latency)
+
+
+def _is_active_deterministic_voter(config: dict) -> bool:
+    """Return True if a deterministic voter config should actually run.
+
+    Currently only "Sentiment Flow" gates on SENTIMENT_FLOW_ACTIVE; other
+    deterministic voters (none today) would default to active.
+    """
+    if not config.get("is_deterministic"):
+        return True  # not deterministic -> always run via _run_voter
+    if config.get("name") == "Sentiment Flow":
+        try:
+            from agents.sentiment_flow_agent import _env_active
+            return bool(_env_active())
+        except Exception:
+            return False
+    return True
+
+
+def _select_voter_configs() -> list[dict]:
+    """Filter VOTER_CONFIGS to those that should participate this run.
+
+    Inactive deterministic voters (e.g. Sentiment Flow when
+    SENTIMENT_FLOW_ACTIVE=false) are excluded so the tally arithmetic is
+    identical to the legacy 8-voter council.
+    """
+    return [c for c in VOTER_CONFIGS if _is_active_deterministic_voter(c)]
 
 
 # ─── Council Orchestrator ──────────────────────────────────────────
@@ -444,13 +608,20 @@ async def run_council(
     else:
         recent_str = "No recent trades available."
 
-    # Run all 7 voters concurrently
+    # Resolve the voter set for this run. Inactive deterministic voters
+    # (e.g. Sentiment Flow with SENTIMENT_FLOW_ACTIVE=false) are excluded
+    # so total_voters / tally arithmetic match the legacy 8-voter council.
+    active_configs = _select_voter_configs()
+
+    def _dispatch(cfg: dict):
+        if cfg.get("is_deterministic"):
+            return _run_deterministic_voter(cfg, market)
+        return _run_voter(cfg, market, recent_str)
+
+    # Run all voters concurrently
     try:
         votes = await asyncio.wait_for(
-            asyncio.gather(*[
-                _run_voter(config, market, recent_str)
-                for config in VOTER_CONFIGS
-            ]),
+            asyncio.gather(*[_dispatch(config) for config in active_configs]),
             timeout=COUNCIL_TIMEOUT_S,
         )
     except asyncio.TimeoutError:
@@ -461,7 +632,7 @@ async def run_council(
     bullish, bearish, neutral, abstain = _tally_votes(votes)
 
     # Determine bias (need QUORUM for directional)
-    total_voters = len(VOTER_CONFIGS)
+    total_voters = len(active_configs)
     if bullish >= QUORUM:
         bias = "BULLISH"
         vote_str = f"{bullish}/{total_voters} BULLISH"

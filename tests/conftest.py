@@ -36,8 +36,24 @@ def _isolate_oif_incoming(monkeypatch):
         monkeypatch.setattr(
             _oif, "_PYTEST_BYPASS_CONSUME_CHECK", True, raising=False,
         )
+        # 2026-04-24: bypass the price-sanity outbound check for default
+        # tests. The guard is intentionally strict (2% deviation from last
+        # accepted tick / FMP reference) which is correct for production
+        # but would reject every test order that uses arbitrary literals
+        # like 18500 / 21000 / 26500. Tests that specifically exercise the
+        # guard should override this flag back to False inside their own
+        # fixture scope (see tests/test_price_sanity.py).
+        monkeypatch.setattr(
+            _oif, "_PYTEST_BYPASS_SANITY_CHECK", True, raising=False,
+        )
     except Exception:
         # oif_writer may not be importable in ultra-minimal test envs
+        pass
+    # Reset the sanity singleton so per-test state never leaks across tests.
+    try:
+        from core import price_sanity
+        price_sanity.reset()
+    except Exception:
         pass
     yield tmp
     shutil.rmtree(tmp, ignore_errors=True)

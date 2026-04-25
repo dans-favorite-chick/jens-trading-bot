@@ -17,3 +17,7 @@ pycot-reports>=0.1
 pandas-ta-classic>=0.4
 psutil
 google-genai
+
+twilio>=9.0  # Added 2026-04-24 for WatcherAgent SMS alerts
+
+reportlab>=4.0   # Phoenix routines PDF assembly (post-2026-04-25 §3.6)

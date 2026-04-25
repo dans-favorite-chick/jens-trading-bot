@@ -631,3 +631,19 @@ The existing Flask dashboard at `dashboard/server.py` on `:5000` gets a new ML p
 - Last optimization results and suggested parameter changes
 
 This is purely display -- no dashboard button can promote ML stages or apply parameter changes. That must go through Telegram commands or manual config edits. The user always decides.
+
+---
+
+## Cross-references added 2026-04-25 (Phase B+ session)
+
+### RiskGate as the Phase C feature transport
+
+[core/risk/risk_gate.py](../core/risk/risk_gate.py) — Phase C's meta-labeler, when it lands, will read sentiment + macro features through the gate's accept/refuse stream. Each gate decision JSON line carries `strategy`, `account`, `instrument`, and (optionally) `price_ref`; the gate writes responses with `oif_path` on accept. This stream is a stable contract for the Phase C labeler to attach feature vectors and pre-trade probability scores without touching `base_bot.py`. The gate's check chain is intentionally orthogonal to model-driven gating — Phase C signals will be advisory inputs piped in via a new `op: "FEATURE"` request type, not a replacement for the deterministic risk caps.
+
+### Sentiment as the Council's primary feed
+
+[core/sentiment_finbert.py](../core/sentiment_finbert.py) (ProsusAI/FinBERT, INT8 ONNX, p50=4.5ms / p99=6.85ms on this Windows host) is the primary feed for the Council's `sentiment_flow_agent` ([phoenix_bot/council/sentiment_flow_agent.py](../phoenix_bot/council/sentiment_flow_agent.py)). Today the agent runs at `DEFAULT_WEIGHT = 0.0` — it observes and persists to ChromaDB but does not move the council vote. A future session will:
+1. Activate Finnhub WS (current stub: [core/news/finnhub_ws.py](../core/news/finnhub_ws.py))
+2. Tune `DEFAULT_WEIGHT` from observation data (target window: 14 days)
+3. Wire FRED macros as a second sentiment dimension
+

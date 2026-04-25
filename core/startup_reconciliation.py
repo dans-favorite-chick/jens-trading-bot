@@ -39,12 +39,42 @@ Public surface
 """
 from __future__ import annotations
 
+import glob
 import os
 import uuid
 import logging
 from typing import Callable, Iterable, Optional
 
 logger = logging.getLogger("StartupReconciliation")
+
+
+def _has_working_protection(outgoing_dir: str, account: str) -> bool:
+    """Return True if NT8 already has at least one WORKING order file on
+    this account. Used by reconciliation (Fix B, 2026-04-23) to avoid
+    attaching a duplicate safety-net OCO when the original bracket's
+    stop+target are still live in NT8.
+
+    NT8 writes `outgoing/{account}_{order_id}.txt` with content like
+    `WORKING;0;26936.25` while an order is working, and the file either
+    disappears or flips to `FILLED`/`CANCELLED` on state change. We only
+    care about the WORKING case — any working order on this account is
+    enough signal that protection is already in place.
+
+    Defensive: swallow IOError on individual files (a file may be mid-
+    write when we scan). Missing dir → False.
+    """
+    if not os.path.isdir(outgoing_dir):
+        return False
+    pattern = os.path.join(outgoing_dir, f"{account}_*.txt")
+    for path in glob.glob(pattern):
+        try:
+            with open(path, "r") as f:
+                content = f.read(64)  # 64 bytes is enough to see the status
+        except OSError:
+            continue
+        if content.strip().upper().startswith("WORKING"):
+            return True
+    return False
 
 
 def _infer_strategy_from_account(account: str) -> Optional[str]:
@@ -214,6 +244,14 @@ def reconcile_positions_from_nt8(
             account=account,
             reconciled=True,
         )
+        # Fix A (2026-04-23): if this adoption matches a pending-entry
+        # record, clear it — the pending LIMIT has filled, so the bot
+        # should be free to re-evaluate new signals on the same account.
+        try:
+            if hasattr(positions, "clear_pending_entry"):
+                positions.clear_pending_entry(account)
+        except Exception:
+            pass
         if not ok:
             logger.warning(
                 f"[RECONCILE:{account}] positions.open_position refused "
@@ -225,19 +263,37 @@ def reconcile_positions_from_nt8(
         # Attach safety-net OCO. If it fails we leave the position open and
         # log LOUDLY — operator must flatten manually. Per task spec we do
         # NOT auto-close because we can't be sure this bot owns the position.
+        #
+        # Fix B (2026-04-23): check for existing working protection orders
+        # before attaching another pair. Pre-fix, when a bracket entry's
+        # LIMIT filled late (after wait_for_fill's 5s timeout), reconciliation
+        # would adopt the orphan and attach a *second* stop+target on top of
+        # the one NT8 already activated from the original bracket — causing
+        # the "Exceeds account's maximum position quantity" rejects we saw
+        # on SimSpring Setup (stop @ 26928.75) and SimVWapp Pullback
+        # (stop @ 26936.25) the morning of 2026-04-23.
         oco_ok = False
-        try:
-            paths = oco_writer(
-                direction=direction,
-                qty=qty,
-                stop_price=stop_price,
-                target_price=target_price,
-                trade_id=trade_id + "_protect",
-                account=account,
+        if _has_working_protection(outgoing_dir, account):
+            logger.info(
+                f"[RECONCILE:{account}] NT8 already has working "
+                f"protection orders — skipping safety-net OCO to avoid "
+                f"duplicate stop/target rejection. Position adopted into "
+                f"Python state; existing bracket OCO will close it."
             )
-            oco_ok = bool(paths)
-        except Exception as e:
-            logger.error(f"[RECONCILE:{account}] safety-net OCO raised: {e!r}")
+            oco_ok = True  # Already protected — treat as success for logging.
+        else:
+            try:
+                paths = oco_writer(
+                    direction=direction,
+                    qty=qty,
+                    stop_price=stop_price,
+                    target_price=target_price,
+                    trade_id=trade_id + "_protect",
+                    account=account,
+                )
+                oco_ok = bool(paths)
+            except Exception as e:
+                logger.error(f"[RECONCILE:{account}] safety-net OCO raised: {e!r}")
 
         msg = (
             f"[RECONCILED:{account}] adopted {direction} {qty} @ {avg_price} "

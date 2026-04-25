@@ -75,6 +75,14 @@ STRATEGIES = {
         "min_confluence": 5.5,
         "max_hold_min": 60,   # Give it room to run — strong trends last 30-60 min
         "min_momentum": 80,
+        # 2026-04-24: Explosive bypass thresholds. The VWAP gate rejected 99% of
+        # bias_momentum signals in the 48h prior because VCR rarely cleared the
+        # 1.5x bar (and the close-position requirement of >=0.75 / <=0.25 was
+        # also restrictive). Lowered to broaden the bypass window — strategy
+        # already requires bar-delta in direction so corner cases stay covered.
+        "vcr_threshold": 1.2,                  # was hardcoded 1.5
+        "explosive_close_pos_long": 0.65,      # was 0.75
+        "explosive_close_pos_short": 0.35,     # was 0.25
         # EMA9 extension gate (see bias_momentum.py): outside golden windows (OPEN_MOMENTUM,
         # MID_MORNING), reject if price is already > N ticks from EMA9. Prevents chasing
         # extended moves in LATE_AFTERNOON. 60t = 15pts — still allows re-entry close
@@ -82,8 +90,15 @@ STRATEGIES = {
         "max_ema_dist_ticks": 60,
     },
     "spring_setup": {
-        "enabled": True,
-        "validated": True,    # Runs in prod bot
+        # 2026-04-24 RETIRED: 48h log analysis showed 1,250 NO_SIGNAL events
+        # (46% of evals reporting `no_spring_wick`). Spring wick + reverse pattern
+        # is structurally rare in MNQ intraday — most MNQ moves are directional,
+        # not wick-and-reject. Strategy fundamentally mismatched to current
+        # market profile. Re-enable only after retooling the wick-criteria
+        # spec (consider widening min_wick_ticks or combining with VWAP mean
+        # reversion for confluence).
+        "enabled": False,
+        "validated": True,    # Was running in prod bot before retire
         "stop_multiplier": 1.5,  # fallback wick multiplier (used only if stop_at_structure=False)
         "target_rr": 1.5,
         "min_wick_ticks": 6,
@@ -161,7 +176,12 @@ STRATEGIES = {
     "ib_breakout": {
         "enabled": True,
         "validated": True,    # Runs in prod bot — 96.2% IB break rate, 74.56% WR
-        "ib_minutes": 30,
+        # 2026-04-24: dropped from 30 → 10 per Jennifer's request after the 48h
+        # log analysis showed IB Breakout was 100% blocked on warmup_incomplete
+        # — bot mid-session restarts couldn't ever build a 30-min IB before the
+        # entry window expired. 10 minutes is half the published spec but keeps
+        # the strategy live across mid-day restarts and after market gaps.
+        "ib_minutes": 10,
         "target_extension": 1.5,
         "max_ib_width_atr_mult": 1.5,
         "stop_at_ib_midpoint": False,  # False = stop at full IB opposite, True = tighter stop at midpoint
@@ -185,7 +205,13 @@ STRATEGIES = {
         "confirmation_close_minutes": 5,
         "max_entry_delay_minutes": 60,     # Cutoff at 10:30 ET / 9:30 CST
         "min_or_size_points": 10,          # Skip low-vol days
-        "max_or_size_points": 60,          # Skip news-gap days
+        # 2026-04-24: was a hard 60-pt cap, blocked 98% of evals (`gate:or_too_wide`).
+        # Now ATR-adaptive: max width = max(max_or_size_points, atr_5m * max_or_size_atr_mult)
+        # capped by max_or_size_hard_cap_points. Lets a high-vol day produce a wider
+        # OR while still rejecting true gap days (>4× ATR).
+        "max_or_size_points": 80,                # Floor (use this if ATR unavailable)
+        "max_or_size_atr_mult": 4.0,             # Adaptive cap = 4× ATR-5m
+        "max_or_size_hard_cap_points": 150,      # Absolute ceiling — gap days still rejected
         "max_stop_points": 25,             # Hard cap = $50 on MNQ
         "stop_buffer_ticks": 2,
         "target_rr": 2.0,                  # Partial 1R + runner (SCALE_OUT handles partial)
@@ -198,7 +224,11 @@ STRATEGIES = {
         "enabled": True,
         "validated": False,         # Lab only — new strategy, 10+ day warmup needed
         "lookback_days": 14,
-        "band_mult": 1.0,
+        # 2026-04-24: dropped 1.0 → 0.7. Published spec is for SPY (low vol);
+        # MNQ is more volatile and price rarely breaks the 1σ cone. Tightened
+        # so price more often clears the band. If false-breakouts spike,
+        # tighten further or add a 2nd confirm bar.
+        "band_mult": 0.7,
         "trade_freq_minutes": 30,
         "require_vwap_confluence": True,
         "min_noise_history_days": 10,
@@ -216,6 +246,11 @@ STRATEGIES = {
         "tight_mult":    None,      # None = regime default
         "min_tf_votes": 2,          # TF votes needed to confirm direction (exhaustion allows min-1)
         "stop_buffer_ticks": 3,     # Ticks beyond coil low/high for stop
+        # 2026-04-24: raised from default 5 → 12. Per 48h analysis, squeeze
+        # was released before the 5-bar minimum 68% of the time on current
+        # MNQ vol regime. 12 bars (60 min on 5m) ensures the squeeze is
+        # genuine and not a noise compression that resolves immediately.
+        "min_squeeze_bars": 12,
         # Stop management — NQ research clamps (Fix 7, 2026-04-20)
         "min_stop_ticks": 40,       # 10pt floor (Propfolio noise floor)
         "max_stop_ticks": 120,      # 30pt ceiling (Steady Turtle NQ band)

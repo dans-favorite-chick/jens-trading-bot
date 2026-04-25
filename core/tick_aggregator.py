@@ -343,6 +343,18 @@ class TickAggregator:
         if price <= 0:
             return self.snapshot()
 
+        # 2026-04-24 price-sanity guard. A mixed NT8 tick stream fed prices
+        # oscillating between ~27,175 and ~7,175 (two different contracts
+        # under the same "MNQM6" label). Reject ticks that deviate from
+        # the rolling median by more than the configured threshold before
+        # they contaminate last_price / VWAP / bars / CVD.
+        from core import price_sanity as _ps
+        _ok, _why = _ps.check_tick(price)
+        if not _ok:
+            _ps.record_rejected(price, _why)
+            return self.snapshot()
+        _ps.record_accepted(price)
+
         try:
             ts = datetime.fromisoformat(ts_str).timestamp()
         except (ValueError, TypeError):

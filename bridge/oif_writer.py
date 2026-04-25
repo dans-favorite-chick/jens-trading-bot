@@ -237,6 +237,38 @@ def cancel_all_orders_line(account: str = None) -> str:
     return f"CANCELALLORDERS;{account};;;;;;;;;;;"
 
 
+def close_position_line(account: str, instrument: str | None = None,
+                        tif: str = "GTC") -> str:
+    """Build CLOSEPOSITION OIF line.
+
+    NT8 ATI format mirrors the legacy write_oif() EXIT path (line ~999):
+        CLOSEPOSITION;<account>;<instrument>;<tif>;;;;;;;;;
+    13 fields total (12 semicolons). Used by tools/oif_killswitch.py to
+    flatten any open position alongside CANCELALLORDERS for working orders.
+
+    Args:
+        account: Target NT8 account name. Required, non-empty.
+        instrument: NT8 instrument symbol. Defaults to settings.INSTRUMENT.
+        tif: Time-in-force. Defaults to GTC (B41: DAY rejected by sim
+             sub-accounts; GTC universal).
+
+    Returns:
+        OIF line ready to be written to NT8's incoming/ folder.
+
+    Raises:
+        ValueError: account empty.
+        RuntimeError: account matches LIVE_ACCOUNT env var (B59 hard-guard).
+    """
+    if not account or not str(account).strip():
+        raise ValueError(
+            "close_position_line requires a non-empty account. "
+            "An empty account would route the close to NT8's default."
+        )
+    _reject_live_account(account, "close_position_line")
+    inst = instrument or INSTRUMENT
+    return f"CLOSEPOSITION;{account};{inst};{tif};;;;;;;;;"
+
+
 def cancel_single_order_line(order_id: str) -> str:
     """Build single-order CANCEL OIF line (B5 fix).
 
@@ -285,9 +317,13 @@ def _stage_oif(cmd: str, trade_id: str, suffix: str = "") -> tuple[str, str]:
     os.makedirs(OIF_INCOMING, exist_ok=True)
     tag = f"_{trade_id}" if trade_id else ""
     sfx = f"_{suffix}" if suffix else ""
-    # P0.2 (D8): `phoenix_<pid>_` prefix — PhoenixOIFGuard AddOn on the NT8
-    # side quarantines anything in incoming/ without this prefix.
-    fname = f"phoenix_{_PHOENIX_PID}_oif{_oif_counter}{tag}{sfx}.txt"
+    # Filename MUST start with `oif` — NT8 ATI classifies files by prefix
+    # (oif/cancel/closeposition/...); anything else is logged as "Unknown OIF
+    # file type" and silently dropped. On 2026-04-22 a `phoenix_<pid>_oif*`
+    # prefix (P0.2/6aabbe0) caused ~33 hours of phantom trades before NT8's
+    # rejection was noticed. Keep the author tag embedded further into the
+    # name so PhoenixOIFGuard can still match `_phoenix_\d+_`.
+    fname = f"oif{_oif_counter}_phoenix_{_PHOENIX_PID}{tag}{sfx}.txt"
     final_path = os.path.join(OIF_INCOMING, fname)
     # Return same path for both — _commit_staged becomes a no-op for the
     # "rename" step; file is already at its final location.
@@ -368,6 +404,58 @@ def write_bracket_order(
         _reject_live_account(account, f"write_bracket_order[{trade_id}]")
     # 4C: surface missing account before any file IO.
     _require_account(account, "write_bracket_order")
+
+    # 2026-04-24 price-sanity guard. See core/price_sanity.py. On the
+    # day a mixed NT8 tick stream fed prices oscillating between ~27,175
+    # and ~7,175, five brackets committed at the corrupted prices and
+    # booked $-40k each. This check cross-references every price on the
+    # outbound order against the most recently accepted tick (or FMP
+    # reference if ticks have gone silent) and refuses the bracket if
+    # the deviation exceeds the tolerance. Stop/target checks are
+    # tolerance-doubled because structural stops can legitimately land
+    # ~5-10% away from market on wide-range bars.
+    #
+    # Tests that do not simulate a live tick stream flip
+    # `_PYTEST_BYPASS_SANITY_CHECK` = True via conftest so they can write
+    # arbitrary-priced test orders without tripping the guard. Tests that
+    # specifically exercise the guard override that flag back to False.
+    _skip_sanity = globals().get("_PYTEST_BYPASS_SANITY_CHECK", False)
+    if not _skip_sanity:
+        try:
+            from core import price_sanity as _ps
+            _ok, _why = _ps.check_order_price(entry_price, label="entry")
+            if not _ok:
+                _ps.record_order_rejected(entry_price, _why, label="entry")
+                logger.critical(
+                    f"[OIF:{trade_id}] REFUSING bracket — entry price {entry_price} "
+                    f"failed sanity check: {_why}"
+                )
+                return []
+            for _lbl, _p in (("stop", stop_price), ("target", target_price)):
+                if _p is None or _p <= 0:
+                    continue
+                _ok2, _why2 = _ps.check_order_price(_p, label=_lbl)
+                if not _ok2:
+                    # Stops/targets tolerate 2× the order threshold — wide
+                    # legitimate stops would otherwise trip on fast markets.
+                    _dev_s = _why2.split("deviation ")[-1].split("%")[0] if "deviation" in _why2 else "inf"
+                    try:
+                        _dev_pct = float(_dev_s) / 100.0
+                    except ValueError:
+                        _dev_pct = 1.0
+                    if _dev_pct > 2 * _ps.snapshot().get("order_tolerance_pct", 0.02):
+                        _ps.record_order_rejected(_p, _why2, label=_lbl)
+                        logger.critical(
+                            f"[OIF:{trade_id}] REFUSING bracket — {_lbl} price {_p} "
+                            f"failed sanity check: {_why2}"
+                        )
+                        return []
+                    # Within 2× tolerance: allow but log WARNING for audit.
+                    logger.warning(
+                        f"[OIF:{trade_id}] {_lbl} price {_p} elevated but within 2× tol: {_why2}"
+                    )
+        except ImportError:
+            logger.warning("[OIF] price_sanity module unavailable — skipping sanity guard")
 
     # OCO group ensures stop/target cancel each other
     if oco_id is None:
@@ -721,7 +809,19 @@ def write_protection_oco(direction: str, qty: int, stop_price: float,
     # B59 hard-guard — fail before staging any protection files.
     _reject_live_account(account, f"write_protection_oco[{trade_id}]")
     exit_side = "SELL" if direction == "LONG" else "BUY"
-    oco_id = f"OCO_{trade_id.split('_')[0]}"  # strip "_protect" suffix
+    # 2026-04-23: fix OCO id collision for reconciled trades. Prior code
+    # used `trade_id.split("_")[0]` which returned just the FIRST token —
+    # for entry trades that happened to be the unique hash (fine), but
+    # for reconciled ones the trade_id is like
+    # `RECONCILED_SimSpring Setup_05ba19d4_protect` and [0] is literally
+    # the word "RECONCILED". Every reconciled adoption then built the same
+    # `OCO_RECONCILED` string, and NT8 rejects with "OCO ID ... cannot be
+    # reused. Please use a new OCO ID." the moment a second reconciled
+    # position tried to attach a bracket. Strip only the trailing
+    # `_protect` marker and keep the rest verbatim — the trade_id itself
+    # is globally unique per position.
+    _base_tid = trade_id[:-len("_protect")] if trade_id.endswith("_protect") else trade_id
+    oco_id = f"OCO_{_base_tid}"
 
     stop_line = _build_stop_line(exit_side, qty, stop_price,
                                  oco_id=oco_id, account=account)

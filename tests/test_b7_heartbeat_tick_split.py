@@ -47,13 +47,35 @@ class TestTimestampsExistAndSeparate(unittest.TestCase):
                          "heartbeat handler still bumps nt8_last_tick_time — B7 regressed")
 
     def test_tick_handler_bumps_both(self):
-        """tick handler should bump BOTH (ticks imply liveness)."""
+        """tick handler should bump BOTH (ticks imply liveness).
+
+        2026-04-25 §4.3: replaced the brittle 2500-char substring window
+        with a regex-based check that finds both timestamp bumps anywhere
+        WITHIN the tick handler block (bounded by the next `elif`/`if`
+        msg_type == ... at the same indentation, OR end-of-file). This
+        is durable against future bridge refactors that move code around
+        within the tick branch -- only an actual removal of either bump
+        would fail."""
+        import re as _re
         src = _read_bridge_src()
         idx = src.index('elif msg_type == "tick":')
-        # Get the next ~10 lines
-        tail = src[idx:idx + 600]
-        self.assertIn("self.nt8_last_tick_time = time.time()", tail)
-        self.assertIn("self.nt8_last_heartbeat_time = time.time()", tail)
+        # Tick handler ends at the NEXT `elif msg_type == ` or `if msg_type == `.
+        # Falls back to end-of-file if neither found.
+        candidates = [m.start() for m in _re.finditer(
+            r'\n(\s+)(elif|if) msg_type == ', src[idx + 5:]
+        )]
+        block_end = (idx + 5 + candidates[0]) if candidates else len(src)
+        block = src[idx:block_end]
+        self.assertRegex(
+            block,
+            r'self\.nt8_last_tick_time\s*=\s*time\.time\(\)',
+            "tick handler must bump nt8_last_tick_time",
+        )
+        self.assertRegex(
+            block,
+            r'self\.nt8_last_heartbeat_time\s*=\s*time\.time\(\)',
+            "tick handler must bump nt8_last_heartbeat_time (B7)",
+        )
 
 
 class TestStaleWatcherDistinctSignals(unittest.TestCase):

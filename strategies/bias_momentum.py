@@ -55,6 +55,22 @@ class BiasMomentumFollow(BaseStrategy):
         # computed at the end, after direction is known. Regime overrides (if any
         # are added later) can still tighten/loosen this — ATR is the base floor.
         target_rr = self.config.get("target_rr", 5.0)
+        # 2026-04-25 §4.1: advisor-guided RR tier override. When market_advisor
+        # has classified the regime (TRENDING / CHOPPY / OVEREXTENDED), use its
+        # suggested_rr_tier instead of the static config value. Choppy = 2:1,
+        # trending = 3:1, overextended = 1.5:1 (per Jennifer's policy). Falls
+        # back to config target_rr if advisor unavailable.
+        _adv = market.get("advisor_guidance") or {}
+        _adv_rr = _adv.get("suggested_rr_tier")
+        if _adv_rr and float(_adv_rr) > 0:
+            _orig_rr = target_rr
+            target_rr = float(_adv_rr)
+            if abs(target_rr - _orig_rr) >= 0.5:
+                logger.debug(
+                    f"[EVAL] {self.name}: advisor RR override "
+                    f"{_orig_rr:.1f} -> {target_rr:.1f} "
+                    f"(regime={_adv.get('market_regime')})"
+                )
 
         # Minimal warmup — only need 1 bar to have data, use what we have
         if len(bars_1m) < 1:
@@ -71,7 +87,10 @@ class BiasMomentumFollow(BaseStrategy):
         tf_bias = market.get("tf_bias", {})
         cvd = market.get("cvd", 0)
         bar_delta = market.get("bar_delta", 0)
-        price = market.get("close", 0.0)
+        # Use the live snapshot price first. `market["close"]` is not a
+        # guaranteed field on the runtime snapshot, and falling back to 0.0
+        # turns the EMA/VWAP gates into false rejects.
+        price = market.get("price", 0.0) or market.get("close", 0.0)
         vwap = market.get("vwap", 0.0)
 
         # ── Direction — EMA Stack + Explosive Bypass ────────────────────────
@@ -125,6 +144,13 @@ class BiasMomentumFollow(BaseStrategy):
         ema_stack_short = (ema9 > 0 and ema21 > 0 and ema9 < ema21)
 
         # Explosive bypass: high-conviction breakout bar → enter before VWAP confirms
+        # 2026-04-24 Jennifer: lowered thresholds (VCR 1.5→1.2, close-pos 0.75/0.25→0.65/0.35)
+        # so the bypass triggers in normal-vol bars, not just true climaxes. The 99%
+        # rejection rate on VWAP_GATE was driven by VCR almost never clearing 1.5x.
+        # Caller-supplied config knobs let us re-tighten without redeploying code.
+        _vcr_threshold = float(self.config.get("vcr_threshold", 1.2))
+        _close_pos_long = float(self.config.get("explosive_close_pos_long", 0.65))
+        _close_pos_short = float(self.config.get("explosive_close_pos_short", 0.35))
         _avg_vol    = float(market.get("avg_vol_5m", 0.0) or 0.0)
         _bar_delta  = float(market.get("bar_delta", 0.0) or 0.0)
         _vcr        = float(market.get("vol_climax_ratio", 1.0) or 1.0)
@@ -135,10 +161,12 @@ class BiasMomentumFollow(BaseStrategy):
             _close_pos5 = ((_last5.close - _last5.low) / _bar_range) if _bar_range > 0 else 0.5
         else:
             _close_pos5 = 0.5
-        # Explosive long: vol elevated + buying delta + close in top 25%
-        explosive_long  = (_vcr >= 1.5 and _bar_delta > 0 and _close_pos5 >= 0.75 and _avg_vol > 0)
-        # Explosive short: vol elevated + selling delta + close in bottom 25%
-        explosive_short = (_vcr >= 1.5 and _bar_delta < 0 and _close_pos5 <= 0.25 and _avg_vol > 0)
+        # Explosive long: vol elevated + buying delta + close in upper part of bar
+        explosive_long  = (_vcr >= _vcr_threshold and _bar_delta > 0
+                           and _close_pos5 >= _close_pos_long and _avg_vol > 0)
+        # Explosive short: vol elevated + selling delta + close in lower part of bar
+        explosive_short = (_vcr >= _vcr_threshold and _bar_delta < 0
+                           and _close_pos5 <= _close_pos_short and _avg_vol > 0)
 
         if trend_day:
             # TREND mode: direction from MQ context (unchanged)

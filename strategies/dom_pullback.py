@@ -270,6 +270,8 @@ class DOMPullback(BaseStrategy):
         # show: slow, doji-like bars (quiet selling) → then a fast up bar (buyers in).
         # This is the same pattern as 1m but with 5-10x better timing resolution.
         tick_bars = market.get("bars_tick", [])   # 300-tick bars (dicts: o,h,l,c,v)
+        if not isinstance(tick_bars, list):
+            tick_bars = []
         tick_confirmed = False
         tick_note = ""
 

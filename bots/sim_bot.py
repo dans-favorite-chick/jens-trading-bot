@@ -634,6 +634,7 @@ class SimBot(BaseBot):
                     f"active_positions={self.positions.active_count}")
 
         best_signal = None
+        pending_signals = []
         for strat in self.strategies:
             if not strat.enabled:
                 self._last_eval["strategies"].append({"name": strat.name, "result": "SKIP_DISABLED"})
@@ -680,6 +681,7 @@ class SimBot(BaseBot):
                     })
                     if signal.confidence > (best_signal.confidence if best_signal else 0):
                         best_signal = signal
+                    pending_signals.append(signal)
                 else:
                     reject = getattr(strat, "_last_reject", "")
                     if reject:
@@ -741,10 +743,20 @@ class SimBot(BaseBot):
                 "confluences": best_signal.confluences,
             }
 
-            # LIVE entry — base_bot's tick loop consumes _pending_signal
-            # and dispatches to _enter_trade which performs the real
-            # WS→bridge→oif_writer pipeline with the per-strategy account.
-            self._pending_signal = best_signal
+            # Queue every eligible signal for live execution. Sim mode is for
+            # per-strategy validation, so letting only the single "best" signal
+            # through creates survivorship bias and suppresses otherwise valid
+            # strategy/account activity.
+            existing = getattr(self, "_pending_signals", [])
+            if not isinstance(existing, list):
+                existing = []
+            queued_strategies = {sig.strategy for sig in existing}
+            for signal in sorted(pending_signals, key=lambda s: s.confidence, reverse=True):
+                if signal.strategy in queued_strategies:
+                    continue
+                existing.append(signal)
+                queued_strategies.add(signal.strategy)
+            self._pending_signals = existing
         else:
             self.last_signal = None
 
