@@ -1,10 +1,11 @@
 # Phoenix Bot — Current State
 
-_Last updated: 2026-04-25 10:01 Central Daylight Time_
+_Last updated: 2026-04-25 10:38 Central Daylight Time_
 _Next Claude session: read this FIRST for situational awareness_
 
 ## Bot operational state (as of Tuesday afternoon, 2026-04-21)
 
+- **2026-04-25:** Phase B+ skeleton sprint -- six items shipped today (stream validator, risk gate, FinBERT, VPS plan, skills digest, dashboard tabs). Defaults remain SAFE (`PHOENIX_RISK_GATE=0`, `PHOENIX_STREAM_VALIDATOR=0`); no flag flips. See `memory/context/PHASE_B_PLUS_LOG.md`.
 - **Prod bot:** UP, flat, Sim101 account (LIVE_TRADING=False, ~28 hours uptime)
 - **Lab bot:** **DECOMMISSIONED** — paper-only flow ended 2026-04-21 15:38 CDT.
   `bots/lab_bot.py` preserved on disk as rollback safety net only.
