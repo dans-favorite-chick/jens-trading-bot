@@ -45,6 +45,19 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+# 2026-04-25: load .env before reading FINNHUB_API_KEY. When this script
+# is launched by Task Scheduler (PhoenixFinnhubNews), the spawning context
+# does NOT inherit shell env exports — it only sees user/system Windows
+# environment vars. .env keys live ONLY in the dotfile, so without this
+# load the runner would always exit with "FINNHUB_API_KEY is not set"
+# even though the key is sitting in .env. Same pattern used by
+# fred_poll.py and watcher_agent.py.
+try:
+    from dotenv import load_dotenv  # type: ignore
+    load_dotenv(dotenv_path=_PROJECT_ROOT / ".env", override=True)
+except Exception:
+    pass  # python-dotenv missing → fall through; runner will report missing key
+
 # Defer imports until after sys.path is fixed.
 try:
     from core.news.finnhub_ws import (  # noqa: E402
