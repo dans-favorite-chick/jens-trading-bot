@@ -30,7 +30,8 @@
 param(
     [string]$TaskName = "PhoenixFredMacros",
     [string]$ProjectRoot = "C:\Trading Project\phoenix_bot",
-    [int]$IntervalMin = 60
+    [int]$IntervalMin = 60,
+    [string]$TaskUser = "TradingPC\Trading PC"
 )
 
 $ErrorActionPreference = "Stop"
@@ -77,7 +78,7 @@ $action = New-ScheduledTaskAction `
     -Argument "`"$scriptPath`" --interval-min $IntervalMin" `
     -WorkingDirectory $ProjectRoot
 
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $TaskUser
 
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
@@ -89,7 +90,7 @@ $settings = New-ScheduledTaskSettingsSet `
     -RestartInterval (New-TimeSpan -Minutes 1)
 
 $principal = New-ScheduledTaskPrincipal `
-    -UserId "$env:USERDOMAIN\$env:USERNAME" `
+    -UserId $TaskUser `
     -LogonType Interactive `
     -RunLevel Highest
 

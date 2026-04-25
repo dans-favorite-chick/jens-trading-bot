@@ -29,7 +29,8 @@
 [CmdletBinding()]
 param(
     [string]$TaskName = "PhoenixFinnhubNews",
-    [string]$ProjectRoot = "C:\Trading Project\phoenix_bot"
+    [string]$ProjectRoot = "C:\Trading Project\phoenix_bot",
+    [string]$TaskUser = "TradingPC\Trading PC"
 )
 
 $ErrorActionPreference = "Stop"
@@ -72,7 +73,7 @@ if ($existing) {
 $action = New-ScheduledTaskAction -Execute $pyExe -Argument "`"$scriptPath`"" -WorkingDirectory $ProjectRoot
 
 # Daemon — fire at user logon, stay alive forever.
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $TaskUser
 
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
@@ -84,7 +85,7 @@ $settings = New-ScheduledTaskSettingsSet `
     -RestartInterval (New-TimeSpan -Minutes 1)
 
 $principal = New-ScheduledTaskPrincipal `
-    -UserId "$env:USERDOMAIN\$env:USERNAME" `
+    -UserId $TaskUser `
     -LogonType Interactive `
     -RunLevel Highest
 

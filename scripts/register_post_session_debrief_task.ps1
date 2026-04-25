@@ -13,7 +13,8 @@
 [CmdletBinding()]
 param(
     [string]$TaskName = "PhoenixPostSessionDebrief",
-    [string]$ProjectRoot = "C:\Trading Project\phoenix_bot"
+    [string]$ProjectRoot = "C:\Trading Project\phoenix_bot",
+    [string]$TaskUser = "TradingPC\Trading PC"
 )
 
 $ErrorActionPreference = "Stop"
@@ -60,7 +61,7 @@ $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
     -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -MultipleInstances IgnoreNew
 
-$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Highest
+$principal = New-ScheduledTaskPrincipal -UserId $TaskUser -LogonType Interactive -RunLevel Highest
 
 $task = New-ScheduledTask -Action $action -Trigger $trigger -Settings $settings -Principal $principal
 Register-ScheduledTask -TaskName $TaskName -InputObject $task | Out-Null

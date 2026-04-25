@@ -26,7 +26,8 @@
 param(
     [string]$GateTaskName = "PhoenixRiskGate",
     [string]$WatchdogTaskName = "PhoenixRiskWatchdog",
-    [string]$ProjectRoot = "C:\Trading Project\phoenix_bot"
+    [string]$ProjectRoot = "C:\Trading Project\phoenix_bot",
+    [string]$TaskUser = "TradingPC\Trading PC"
 )
 
 $ErrorActionPreference = "Stop"
@@ -91,7 +92,7 @@ $settings = New-ScheduledTaskSettingsSet `
     -MultipleInstances IgnoreNew
 
 $principal = New-ScheduledTaskPrincipal `
-    -UserId "$env:USERDOMAIN\$env:USERNAME" `
+    -UserId $TaskUser `
     -LogonType Interactive `
     -RunLevel Highest
 

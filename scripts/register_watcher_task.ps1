@@ -36,7 +36,8 @@
 [CmdletBinding()]
 param(
     [string]$TaskName = "PhoenixWatcher",
-    [string]$ProjectRoot = "C:\Trading Project\phoenix_bot"
+    [string]$ProjectRoot = "C:\Trading Project\phoenix_bot",
+    [string]$TaskUser = "TradingPC\Trading PC"
 )
 
 $ErrorActionPreference = "Stop"
@@ -88,7 +89,7 @@ $action = New-ScheduledTaskAction -Execute $pyExe -Argument "`"$scriptPath`"" -W
 
 # Trigger: at user logon. NT8 needs interactive session for its data feed,
 # so the bot stack runs under the logged-on user; watcher follows.
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $TaskUser
 
 # Settings:
 #   - Auto-restart on failure (up to 999 times, 1 min apart)
@@ -106,7 +107,7 @@ $settings = New-ScheduledTaskSettingsSet `
     -RestartInterval (New-TimeSpan -Minutes 1)
 
 $principal = New-ScheduledTaskPrincipal `
-    -UserId "$env:USERDOMAIN\$env:USERNAME" `
+    -UserId $TaskUser `
     -LogonType Interactive `
     -RunLevel Highest
 
