@@ -1,7 +1,106 @@
 # Phoenix Bot — Current State
 
-_Last updated: 2026-04-25 ~15:30 CDT (after dual-stream incident cleanup)_
+_Last updated: 2026-04-25 ~17:40 CDT (full scheduled-task lattice operational, SMS verified end-to-end)_
 _Next Claude session: read this FIRST for situational awareness_
+
+## ✅ Saturday EOD — full operational state
+
+**The entire Phoenix automation lattice is now live and verified:**
+
+| Layer | Status | Evidence |
+|---|---|---|
+| Bridge `:8765` single-stream enforcement | ✅ ON | `PHOENIX_BRIDGE_SINGLE_STREAM=1`, 3 unit tests + live spy verification |
+| Bridge `:8765` peer-MAD validator | ✅ ON | `PHOENIX_STREAM_VALIDATOR=1` (was 0 all weekend until today) |
+| Multi-account close isolation | ✅ Tested | 7 unit tests; closes only target account, never cross-cancels |
+| Twilio SMS escalation | ✅ E2E verified | `sid=SMba9bbf84b5866fdefa0ae9587b898aa0` delivered to phone |
+| Telegram alerts | ✅ Live | Watcher logged `[Alerter] Telegram ready` |
+| Gemini AI investigator | ✅ Live | Watcher logged `[Investigator] Gemini client ready` |
+| 11 scheduled tasks under `TradingPC\Trading PC` | ✅ Registered | See task table below |
+| 7 Phoenix processes | ✅ Running | prod_bot, sim_bot, bridge, dashboard, watcher, finnhub, fred |
+| Test suite | ✅ Green | 1,231 passing, 4 skipped, 0 failing |
+| Repo | ✅ Pushed | `5cf0d3d` on `origin/main` |
+
+## Scheduled task lattice (final state, all under Trading PC user)
+
+| Task | Trigger | Currently | Notes |
+|---|---|---|---|
+| `PhoenixBoot` | AtLogOn | Ready | Auto-launches stack via PhoenixStart.bat at logon (was broken with dbren Principal until today) |
+| `PhoenixWatcher` | AtLogOn (daemon) | **Running** | SMS/Telegram escalation, 3-strike rule, NT8 SILENT_STALL detection |
+| `PhoenixFinnhubNews` | AtLogOn (daemon) | **Running** | News feed; WS connected (free-tier limited, REST fallback active) |
+| `PhoenixFredMacros` | AtLogOn (daemon, --interval-min 60) | **Running** | FFR/CPI/UNRATE/T10Y2Y poller, Telegram on regime shift |
+| `PhoenixGrading` | 16:00 CT Mon-Fri | Ready | Daily prediction grader |
+| `PhoenixMorningRitual` | 06:30 CT Mon-Fri | Ready | Pre-market 7-check, deterministic verdict |
+| `PhoenixPostSessionDebrief` | 16:05 CT Mon-Fri | Ready | Consolidated digest (Telegram) |
+| `PhoenixWeeklyEvolution` | Sun 18:00 CT | Ready | Auto-PR with adaptive params + CPCV/DSR/PBO checkboxes |
+| `PhoenixRiskGate` | AtBoot/AtLogOn | Ready | Fail-closed gate (gated by `PHOENIX_RISK_GATE=0`, off by default) |
+| `PhoenixRiskWatchdog` | AtBoot/AtLogOn | Ready | Heartbeat watchdog for risk gate |
+| `PhoenixLearner` | 23:30 CT daily | Ready | Historical learner (only one that survived all reboots — was correctly principled originally) |
+
+## Saturday afternoon root-cause + cleanup summary
+
+After the morning Phase B+ Sprint 2 work, the afternoon was a 4-hour
+incident response on the dual-stream pollution bug. Final root cause
+turned out to be 3 layered failures (see KNOWN_ISSUES.md for full
+playbook):
+
+1. Two legacy NT8 source files were still compiled in `NinjaTrader.Custom.dll`:
+   - `Indicators\JenTradingBotV1DataFeed.cs` (V1-era WS indicator)
+   - `Strategies\OLDDONTUSEMarketDataBroadcasterv2.cs` (V2-era strategy)
+2. NT8 `<ShowDefaultWorkspaces>true</ShowDefaultWorkspaces>` auto-loaded a
+   workspace with **9 hidden MNQM6 charts** (`IsWindowVisible=false`,
+   invisible in taskbar, no Window menu in this NT8 version)
+3. `PHOENIX_STREAM_VALIDATOR=0` (default) — bridge defense was off
+
+**Defense layers added today (preventing recurrence):**
+
+- `bridge/bridge_server.py::handle_nt8_tcp` — rejects 2nd+ NT8 connection
+  at socket-accept layer (`PHOENIX_BRIDGE_SINGLE_STREAM=1`)
+- `tools/nt8_unhide_all_windows.ps1` — Win32 EnumWindows + ShowWindow
+  to surface hidden NT8 chart windows; required because newer NT8
+  builds have no Window menu
+- `tools/diagnose_nt8_client.py` — spy bot that classifies the
+  connected NT8 client by message-shape fingerprint
+- `tools/_patch_register_scripts.py` — idempotent helper that
+  retroactively fixed all 8 register scripts to use `$TaskUser`
+  (`TradingPC\Trading PC`) instead of `$env:USERDOMAIN\$env:USERNAME`
+
+## .env state (relevant flags only — secrets redacted)
+
+```
+PHOENIX_STREAM_VALIDATOR=1          # peer-MAD validator (NEW today)
+PHOENIX_BRIDGE_SINGLE_STREAM=1      # socket-accept reject (NEW today)
+SENTIMENT_FLOW_ACTIVE=false         # FinBERT voter (deferred)
+SENTIMENT_FLOW_WEIGHT=0.10          # ignored while ACTIVE=false
+LIVE_ACCOUNT=1590711                # B59 hard-guard target
+SIM_ACCOUNT=Sim101                  # prod_bot default routing
+```
+
+Twilio + Telegram + Gemini + Google + Finnhub + FRED + Anthropic +
+OpenAI + Groq + Grok + Alpaca + MenthorQ keys all populated and
+verified loadable by `dotenv` (after a brief mid-afternoon
+.env corruption incident — em-dash byte 0x97 from PowerShell
+`Add-Content`, fixed in-place by re-encoding as ASCII/UTF-8).
+
+## Operator runbook (next session)
+
+**Sunday 17:00 CT — market reopen first test:**
+1. NT8 reconnects → bridge log shows ONE `NT8 client connected from`
+2. `(Get-NetTCPConnection -LocalPort 8765 -State Established).Count` = 1
+3. Stream validator silently approves real ticks
+4. Watcher's "bridge_down" false-alarm clears
+
+**Monday 06:30 CT — first scheduled-task fire:**
+1. `PhoenixMorningRitual` → `out/morning_ritual/2026-04-27.md`
+2. Order round-trip test: `python tools/verify_oif_fix.py`
+3. `PhoenixGrading` 16:00 CT → `PhoenixPostSessionDebrief` 16:05 CT
+   consolidated Telegram
+
+**Deferred (not blocking):**
+- `PHOENIX_RISK_GATE=1` — flip when ready to intercept every OIF
+- `SENTIMENT_FLOW_ACTIVE=true` — flip after shadow data validates
+- CPCV/DSR/PBO harness — Phase C dependency
+
+
 
 ## ⚠️ Today's NT8 dual-stream incident — RESOLVED (this afternoon)
 

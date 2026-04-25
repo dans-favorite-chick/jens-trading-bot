@@ -5,6 +5,101 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+### 2026-04-25 ~17:40 CDT — full automation lattice operational (manual entry)
+
+After the dual-stream incident cleanup, an additional 2-hour push to close
+out the entire scheduled-task / SMS / daemon agenda:
+
+**Bridge-side single-stream enforcement** (commit `323a391`):
+- `bridge/bridge_server.py::handle_nt8_tcp` now rejects any 2nd+ concurrent
+  NT8 connection at socket-accept (`PHOENIX_BRIDGE_SINGLE_STREAM=1`,
+  default ON). First-writer-wins; auto-recovery when client #1's TCP
+  socket dies. Belt to today's morning workspace-cleanup suspenders.
+- 3 unit tests in `tests/test_bridge_single_stream.py` (rejection,
+  opt-out, recovery) — all green.
+- Live-verified against running bridge: 2nd connection got EOF.
+
+**Multi-account close-isolation tests** (same commit):
+- `tests/test_multi_account_close_isolation.py` — 7 tests proving that
+  closing one account never cascades to other accounts. Defenses:
+  B58 (require_account), B59 (live guard), B75 (CANCEL_ALL block),
+  per-position `account` field, `daily_flatten` per-position iteration,
+  PhoenixOIFGuard pid-tag filename whitelist.
+
+**Three new scheduled task daemons** (commit `1019256`):
+- `scripts/register_watcher_task.ps1` — PhoenixWatcher, runs
+  `tools/watcher_agent.py` continuously, escalates RED_ALERT to Twilio
+  SMS (`TWILIO_TO_NUMBER`) and Telegram. Auto-restart on failure.
+- `scripts/register_finnhub_news_task.ps1` — PhoenixFinnhubNews,
+  WS+REST hybrid. WS connects on free tier but free-tier symbol
+  subscription is restricted; REST fallback handles it.
+- `scripts/register_fred_macros_task.ps1` — PhoenixFredMacros,
+  --interval-min 60 daemon polling FFR/CPI/UNRATE/T10Y2Y, Telegram on
+  regime shift.
+
+**User-context fix** (commit `6d5cb99`):
+- All 8 `register_*.ps1` scripts hardcoded `$env:USERDOMAIN\$env:USERNAME`
+  for the Principal — when run from elevated PS as `dbren` (the
+  admin user), tasks were registered with Principal=`dbren`, so they
+  never fired (dbren is never interactively logged in).
+- Patched all 8 to take a `$TaskUser` parameter defaulting to
+  `"TradingPC\Trading PC"` (the actual daily console user).
+- `tools/_patch_register_scripts.py` — idempotent batch patcher.
+
+**.env corruption + fix** (no commit — .env is gitignored):
+- Earlier I appended `PHOENIX_STREAM_VALIDATOR=1` via PowerShell
+  `Add-Content` with em-dash characters in the comments. PowerShell
+  encoded em-dash as cp1252 byte 0x97; `dotenv` reads as UTF-8 and
+  exploded with `UnicodeDecodeError`. Result: ALL keys silently
+  failed to load, watcher/finnhub started with degraded mode.
+- Fixed in-place by re-encoding as ASCII/UTF-8 (Python script
+  decoded cp1252, mapped smart-punctuation to ASCII, ascii-encoded,
+  wrote utf-8 back).
+- Lesson: never append to .env with raw `Add-Content`. Use
+  `Set-Content -Encoding utf8` or Python.
+
+**Finnhub `load_dotenv` fix** (commit `453aa6b`):
+- `tools/finnhub_news_runner.py` was reading `os.environ.get("FINNHUB_API_KEY")`
+  without ever calling `load_dotenv()`. Fine when launched from a shell
+  that already loaded .env; broken when launched by Task Scheduler
+  (which doesn't inherit shell env). Added 5-line load_dotenv block at
+  module init, matching the pattern in `fred_poll.py` and `watcher_agent.py`.
+
+**PhoenixBoot principal fix** (commits `44a92ca`, `5cf0d3d`):
+- `PhoenixBoot` was the auto-launch task for the entire stack at boot,
+  registered with Principal=dbren — meaning it has been silently
+  failing on every reboot since Jennifer originally set it up. Stack
+  has not auto-recovered from reboots; she's been manually launching
+  via `launch_all.bat`.
+- New `scripts/register_phoenix_boot_task.ps1` re-registers under
+  Trading PC. First attempt with `LogonType S4U` failed Access Denied
+  (S4U needs stored password or "Log on as batch job" right);
+  switched to `-AtLogOn -User TradingPC\Trading PC` with
+  `LogonType Interactive` — same effective behavior, no privilege
+  needed.
+- Updated `PhoenixStart.bat` to enable + trigger the 3 new daemons
+  (PhoenixFinnhubNews, PhoenixFredMacros, plus PhoenixGrading which
+  was missed in the original).
+
+**SMS verification (E2E)**:
+- Twilio creds (TWILIO_ACCOUNT_SID/AUTH_TOKEN/FROM/TO) all populated
+- Test command from operator: `python -c "from tools.watcher_agent
+  import Alerter; ok = Alerter().sms('Phoenix watcher SMS test
+  2026-04-25 EOD'); print('SENT' if ok else 'FAILED')"`
+- Result: `[Alerter] SMS sent sid=SMba9bbf84b5866fdefa0ae9587b898aa0`
+- First-ever end-to-end Twilio→phone path verified. Watcher will now
+  page on RED_ALERT findings.
+
+**Test count**: 1,221 → **1,231 passing, 4 skipped, 0 failing** (10 new
+tests across the two suites).
+
+**Repo state**: HEAD `5cf0d3d` on `origin/main`, working tree clean.
+
+**Operator action items for next session**: see CURRENT_STATE.md
+"Operator runbook" section.
+
+---
+
 ### 2026-04-25 ~15:30 CDT — NT8 dual-stream incident: real root cause found + closed (manual entry)
 
 **Why:** Earlier today's "RESOLVED 2026-04-19" claim about NT8 multi-stream was
