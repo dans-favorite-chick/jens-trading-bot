@@ -5,6 +5,64 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+### 2026-04-25 ~15:30 CDT — NT8 dual-stream incident: real root cause found + closed (manual entry)
+
+**Why:** Earlier today's "RESOLVED 2026-04-19" claim about NT8 multi-stream was
+wrong — the issue recurred and required a 3-hour debugging session this
+afternoon to find the actual root cause. This entry corrects the record and
+captures the diagnostic playbook.
+
+**What happened:**
+- Bridge `:8765` had 2+ TCP connections all weekend (PriceSanity rejected
+  27,000+ corrupt ticks with the ~7,196 phantom-price signature)
+- We initially thought: duplicate TickStreamer indicators → false lead
+- Then: rogue `MarketDataBroadcasterV2` strategy → partial truth
+- Then: rogue `JenTradingBotV1_DataFeed` indicator → partial truth
+- Final root cause: 3 layered issues
+  1. Two legacy `.cs` files compiled into `NinjaTrader.Custom.dll`
+  2. NT8 `<ShowDefaultWorkspaces>true</ShowDefaultWorkspaces>` auto-loaded
+     `Jen's Fav.xml` / `Jen's indicators.xml` with **9 hidden MNQM6 charts**
+     plus ESM6/AUDUSD/SuperDOM windows (`IsWindowVisible=false`, no taskbar
+     entry, no Window menu in this NT8 build)
+  3. `PHOENIX_STREAM_VALIDATOR=0` — bridge-level defense off
+
+**Files added today:**
+- `tools/diagnose_nt8_client.py` — spy bot that connects to bridge `:8766`,
+  captures fanout, identifies the connected NT8 component by message-shape
+- `tools/nt8_unhide_all_windows.ps1` — Win32 `EnumWindows` +
+  `ShowWindow(SW_SHOWNORMAL)` against `NinjaTrader.exe` PID. Surfaces every
+  hidden NT8-owned window so you can SEE what's loaded. Without this you
+  cannot find ghost charts in newer NT8 builds (no Window menu).
+
+**Diagnostic insight that broke the case:** bridge health endpoint
+`nt8_last_heartbeat_age_s ≈ 2.8s` matched TickStreamer's `HEARTBEAT_MS=3000`
+exactly. Legacy V2 strategy uses `HEARTBEAT_BARS=30` (bars-not-ms, silent
+on closed market). That fingerprint identified the client as TickStreamer
+— but Win32 enumeration revealed it was attached to one of nine hidden
+charts, not the visible one (because there wasn't a visible one).
+
+**Cleanup completed by Jennifer:**
+1. Both legacy `.cs` files moved to `.disabled_2026_04_25`
+2. Hidden charts surfaced via `tools/nt8_unhide_all_windows.ps1`
+3. Unwanted charts closed
+4. Clean workspace saved as `phoenix_clean_2026_04_25`
+5. "Show default workspaces on startup" disabled
+6. NT8 restarted; bridge confirms 0 connections on `:8765` with NT8 closed
+
+**Followups:**
+- Set `PHOENIX_STREAM_VALIDATOR=1` in `.env` permanently (defense-in-depth)
+- Sunday 17:00 CT market open is the first real validation
+- Order-flow round-trip test (`tools/verify_oif_fix.py`) now safe to run
+  once market is live and connection count = 1
+
+**Memory corrections in this commit:**
+- `CURRENT_STATE.md` — added "Today's NT8 dual-stream incident" section at top
+- `KNOWN_ISSUES.md` — replaced incorrect "RESOLVED 2026-04-19" entry with the
+  real recurring-root-cause + cleanup playbook
+- `audit_log.jsonl` — explicit `nt8_workspace_cleanup` event
+
+---
+
 ### 2026-04-25 EOD — Sprint 2: Phoenix Routines + remaining §3 + git push (manual entry)
 
 **Why:** Capture the work that the auto-writeback's per-file lists don't tell

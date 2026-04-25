@@ -1,7 +1,69 @@
 # Phoenix Bot — Current State
 
-_Last updated: 2026-04-25 EOD Central Daylight Time_
+_Last updated: 2026-04-25 ~15:30 CDT (after dual-stream incident cleanup)_
 _Next Claude session: read this FIRST for situational awareness_
+
+## ⚠️ Today's NT8 dual-stream incident — RESOLVED (this afternoon)
+
+**Symptom:** bridge `:8765` had 2+ established TCP connections all weekend.
+PriceSanity logged 27,000+ tick rejections over Friday→Saturday with corrupt
+~7,196-class prices alongside real ~27,440 MNQ prices ("phantom $40K trade"
+signature).
+
+**Real root cause** (turned out to be 3 layered issues, not the simple
+"single TickStreamer dupe" we thought):
+
+1. **Two legacy NT8 source files were still installed and compiled:**
+   - `Indicators\JenTradingBotV1DataFeed.cs` — V1-era WebSocket indicator
+     with `IsSuspendedWhileInactive=false`, broadcasting synthetic
+     mom/prec/conf fields plus a secondary data series whose price scale
+     was the source of the corrupt 7,196 stream.
+   - `Strategies\OLDDONTUSEMarketDataBroadcasterv2.cs` — V2-era WebSocket
+     strategy, also targeting `:8765`, with its own ATI write path.
+2. **NT8 auto-loaded a bloated workspace via
+   `<ShowDefaultWorkspaces>true</ShowDefaultWorkspaces>`** — `Jen's Fav.xml`
+   and/or `Jen's indicators.xml` brought up **9 hidden MNQM6 charts** plus
+   ESM6/AUDUSD/SuperDOM windows (`IsWindowVisible=false`). Charts were
+   alive in NT8 memory holding TickStreamer instances + TCP connections,
+   but invisible — not in taskbar, no Window menu in this NT8 build to
+   reveal them.
+3. **The system was operating one PriceSanity edge case away from a real
+   loss the entire weekend.** PriceSanity caught all corrupt ticks at the
+   bot level; the OIF builders' price-sanity guard would have caught any
+   that slipped past. But `PHOENIX_STREAM_VALIDATOR=0` meant the bridge-
+   level defense built specifically for this scenario was off.
+
+**Cleanup playbook (now embedded in `tools/nt8_unhide_all_windows.ps1`):**
+
+1. Move both legacy `.cs` files to `.disabled_2026_04_25` quarantine.
+2. Run `tools/nt8_unhide_all_windows.ps1` from elevated PS — uses
+   Win32 `EnumWindows` + `ShowWindow(SW_SHOWNORMAL)` to surface every
+   hidden NT8-owned window. Without this you cannot find the 9 ghost
+   charts.
+3. Manually close every chart not needed; keep one MNQM6 with
+   TickStreamer attached.
+4. Workspaces → Save As → `phoenix_clean_2026_04_25` (clean baseline).
+5. Tools → Options → General → uncheck "Show default workspaces on
+   startup" — prevents recurrence.
+6. NT8 NinjaScript Editor → F5 to recompile (purges legacy classes
+   from cached `NinjaTrader.Custom.dll`).
+7. Full NT8 restart. Verify: with NT8 running but no chart open,
+   `(Get-NetTCPConnection -LocalPort 8765 -State Established).Count`
+   must return 0. Open one chart → count = 1. Close chart → back to 0.
+8. **Set `PHOENIX_STREAM_VALIDATOR=1` in `.env`** — bridge-level
+   defense for any future workspace pollution.
+
+**Diagnostic insight that broke the case:** `nt8_last_heartbeat_age_s ≈ 2.8`
+on bridge health endpoint matched **TickStreamer's `HEARTBEAT_MS=3000`**
+timer exactly. Legacy V2 strategy uses `HEARTBEAT_BARS=30` (bars, not
+milliseconds — silent on a closed Saturday market). That fingerprint
+proved the connecting client was TickStreamer, but a Win32 window
+enumeration revealed it was attached to one of nine hidden charts.
+
+**Status as of 15:30 CDT:** Jennifer completed cleanup. NT8 is currently
+closed; bridge confirms `nt8_status: disconnected`, 0 connections on
+`:8765`. Next NT8 startup should bring 0 connections (until a chart is
+manually opened).
 
 ## Bot operational state (as of Saturday 2026-04-25 EOD)
 

@@ -102,10 +102,60 @@ deferred.
 
 ## ✅ RECENTLY RESOLVED
 
-### NT8 multi-stream issue — RESOLVED 2026-04-19 (Sunday diagnostic)
+### NT8 multi-stream issue — RECURRING (closed again 2026-04-25, root cause documented)
 
-Single client confirmed. `core/bridge/stream_validator.py` now ships as
-a defense-in-depth check (default OFF) for any future regression.
+**The 2026-04-19 "single client confirmed" diagnosis was incomplete.** The
+issue recurred today (2026-04-25) and we now have the real root cause and
+a definitive cleanup playbook.
+
+**Root cause:** three independent failure modes layered together:
+
+1. **Stale legacy NT8 source files** still installed and compiled into
+   `NinjaTrader.Custom.dll`:
+   - `Indicators\JenTradingBotV1DataFeed.cs` (V1-era WebSocket indicator,
+     `IsSuspendedWhileInactive=false`, broadcasting synthetic
+     mom/prec/conf fields plus a secondary series whose price scale
+     produced the corrupt ~7,196 stream)
+   - `Strategies\OLDDONTUSEMarketDataBroadcasterv2.cs` (V2-era WebSocket
+     strategy, competing OIF writer at the ATI path)
+2. **NT8 `<ShowDefaultWorkspaces>true</ShowDefaultWorkspaces>` setting**
+   auto-loading a workspace (e.g. `Jen's Fav.xml`, `Jen's indicators.xml`)
+   that contained 9+ hidden MNQM6 charts plus ESM6/AUDUSD/SuperDOM
+   windows. Hidden via `IsWindowVisible=false` — invisible in taskbar,
+   no Window menu in this NT8 build to reveal them.
+3. **`PHOENIX_STREAM_VALIDATOR=0`** — bridge-level defense was off
+   (default-off was reasonable on day 1, but should now be ON).
+
+**Cleanup playbook (definitive):**
+
+1. Quarantine both legacy `.cs` files:
+   `Move-Item <file>.cs <file>.cs.disabled_<date>`
+2. Run `tools/nt8_unhide_all_windows.ps1` from elevated PS to surface all
+   hidden NT8 windows via Win32 `ShowWindow(SW_SHOWNORMAL)`.
+3. Manually close every unwanted chart; keep one MNQM6 with TickStreamer.
+4. Save clean workspace, set as new baseline.
+5. Tools → Options → General → uncheck "Show default workspaces on
+   startup".
+6. NinjaScript Editor → F5 to recompile (purges legacy classes from
+   cached DLL).
+7. Full NT8 restart. With no chart open, `(Get-NetTCPConnection
+   -LocalPort 8765 -State Established).Count` must return 0.
+8. Set `PHOENIX_STREAM_VALIDATOR=1` in `.env` permanently.
+
+**Diagnostic that breaks the case in future recurrences:**
+- Bridge health endpoint `nt8_last_heartbeat_age_s` matches TickStreamer's
+  `HEARTBEAT_MS=3000` timer (~3s) — proves connection is TickStreamer not
+  legacy V2 (which uses `HEARTBEAT_BARS=30`, silent on closed market).
+- Win32 `EnumWindows` + filter on PID = NinjaTrader.exe with
+  `IsWindowVisible=false` reveals hidden charts that GUI hunting can't
+  find.
+- `tools/diagnose_nt8_client.py` connects as a spy bot to `:8766`,
+  captures fanout, identifies component by message field set.
+
+**Status (2026-04-25 ~15:30 CDT):** RESOLVED via Jennifer's full cleanup.
+Bridge confirms `nt8_status: disconnected`, 0 connections on `:8765`
+with NT8 closed. Sunday 17:00 CT market open is the first real test —
+expect exactly 1 TickStreamer connection from one chart.
 
 ### Phantom $40K trades (price-scale bug) — RESOLVED 2026-04-25 (morning)
 
