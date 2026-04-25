@@ -55,6 +55,31 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 - `strategies/orb.py`
 
 ---
+### 2026-04-25 09:58 Central Daylight Time — Session changes: 24 files modified
+
+**Files changed:**
+- `PHOENIX_PROJECT_PROMPT.md`
+- `agents/council_gate.py`
+- `bots/base_bot.py`
+- `bots/sim_bot.py`
+- `bridge/bridge_server.py`
+- `bridge/oif_writer.py`
+- `config/strategies.py`
+- `core/position_manager.py`
+- `core/startup_reconciliation.py`
+- `core/tick_aggregator.py`
+- `dashboard/server.py`
+- `dashboard/templates/dashboard.html`
+- `docs/phase_c_architecture.md`
+- `launch_all.bat`
+- `ninjatrader/PhoenixOIFGuard.cs`
+- `requirements.txt`
+- `strategies/bias_momentum.py`
+- `strategies/dom_pullback.py`
+- `strategies/noise_area.py`
+- `strategies/orb.py`
+
+---
 ### 2026-04-25 09:49 Central Daylight Time — Session changes: 24 files modified
 
 **Files changed:**
