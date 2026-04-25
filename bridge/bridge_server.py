@@ -184,6 +184,59 @@ class BridgeServer:
     # Protocol: newline-delimited JSON over TCP.
     async def handle_nt8_tcp(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         remote = writer.get_extra_info("peername")
+
+        # 2026-04-25 SINGLE-STREAM ENFORCEMENT
+        # ----------------------------------------------------------------
+        # Reject any 2nd+ concurrent NT8 connection. Today's incident was
+        # caused by NT8 auto-loading 9 hidden MNQM6 charts plus legacy V1/V2
+        # components, all spawning TickStreamer-class connections to :8765.
+        # PriceSanity caught the corrupt prices but the system was operating
+        # one edge case away from a real loss for ~16 hours.
+        #
+        # Bridge-side enforcement is the right defense layer because:
+        #   - It works against ANY future workspace pollution (no NT8
+        #     recompile required to harden).
+        #   - The check + set is atomic under asyncio's single-thread
+        #     model — two near-simultaneous accept() events are still
+        #     dispatched serially through the event loop.
+        #   - First-writer-wins matches operator intent: the live
+        #     connection is healthy by definition; subsequent connections
+        #     are by definition the unwanted dupes.
+        #
+        # When the active connection's TCP socket dies, the `finally:`
+        # block at the bottom of this handler resets `self.nt8_connected =
+        # False` — the next incoming connection then succeeds normally.
+        #
+        # Set PHOENIX_BRIDGE_SINGLE_STREAM=0 to disable (e.g. for
+        # multi-stream A/B testing). Default ON.
+        if os.environ.get("PHOENIX_BRIDGE_SINGLE_STREAM", "1") == "1":
+            if self.nt8_connected:
+                self._log_event(
+                    "warn",
+                    f"[SINGLE_STREAM] REJECTED 2nd NT8 connection from "
+                    f"{remote} — existing client already connected. "
+                    f"(Set PHOENIX_BRIDGE_SINGLE_STREAM=0 to disable.)"
+                )
+                # Emit a heartbeat alert so watcher_agent can surface this
+                # to the operator (workspace likely polluted again).
+                try:
+                    from pathlib import Path as _P
+                    _hb = _P(__file__).resolve().parent.parent / "heartbeat" / "bridge_alert.json"
+                    _hb.parent.mkdir(parents=True, exist_ok=True)
+                    _hb.write_text(json.dumps({
+                        "event": "single_stream_rejection",
+                        "remote": str(remote),
+                        "ts": time.time(),
+                    }), encoding="utf-8")
+                except Exception:
+                    pass
+                try:
+                    writer.close()
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+                return
+
         self._log_event("info", f"NT8 client connected from {remote}")
         self.nt8_connected = True
         self.nt8_connect_time = time.time()

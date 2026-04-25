@@ -157,6 +157,26 @@ Bridge confirms `nt8_status: disconnected`, 0 connections on `:8765`
 with NT8 closed. Sunday 17:00 CT market open is the first real test —
 expect exactly 1 TickStreamer connection from one chart.
 
+**2026-04-25 ~16:10 CDT — bridge-side enforcement added (defense in depth):**
+`bridge/bridge_server.py::handle_nt8_tcp` now rejects any 2nd+ concurrent
+NT8 connection at the socket-accept layer when
+`PHOENIX_BRIDGE_SINGLE_STREAM=1` (the default). First-writer-wins; the
+2nd connection is closed immediately and a `bridge_alert.json` heartbeat
+is emitted for watcher_agent. Recovery is automatic — when client #1's
+TCP socket dies, the existing `finally:` block resets `nt8_connected =
+False` and the next incoming connection succeeds. Set
+`PHOENIX_BRIDGE_SINGLE_STREAM=0` to disable for multi-stream A/B testing.
+
+Verified via:
+- `tests/test_bridge_single_stream.py` (3 tests: rejection, opt-out,
+  recovery-after-disconnect — all green)
+- Live test against running bridge: client #2 got EOF immediately
+
+This means even if NT8's workspace silently spawns multiple TickStreamer
+instances again, only the FIRST one connects. The duplicate streams
+that drove today's incident are now structurally impossible regardless
+of NT8-side state.
+
 ### Phantom $40K trades (price-scale bug) — RESOLVED 2026-04-25 (morning)
 
 Built `PriceSanity` guard to catch corrupt 7,150 prices. Pre-OIF price
