@@ -60,15 +60,27 @@ $action = New-ScheduledTaskAction `
     -Argument "/c `"$startBat`"" `
     -WorkingDirectory $ProjectRoot
 
-# Trigger: AT BOOT (system startup, fires before any user logs in)
-$trigger = New-ScheduledTaskTrigger -AtStartup
+# Trigger: AT LOGON of Trading PC user.
+#
+# We previously tried -AtStartup with LogonType S4U, but Register-ScheduledTask
+# fails with Access Denied when the calling admin (dbren) tries to register a
+# task that runs as another user (Trading PC) under S4U — Windows requires
+# either Trading PC's stored password OR the "Log on as a batch job" right
+# granted to dbren via Local Security Policy.
+#
+# AtLogOn is functionally equivalent on this trading machine: Trading PC
+# is the daily console user, auto-logged-in or kept-logged-in 24/7. When
+# the machine boots, Trading PC's session starts shortly after — within
+# seconds of OS init — and PhoenixBoot fires then. Same effective behavior,
+# no privilege requirement.
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $TaskUser
 
 # Settings:
-#   - StartWhenAvailable: catch up if boot was missed
+#   - StartWhenAvailable: catch up if logon was missed
 #   - ExecutionTimeLimit Zero: PhoenixStart.bat may run a long time
 #     (calls launch_all.bat which keeps cmd windows open)
-#   - MultipleInstances IgnoreNew: don't fire twice if boot triggered twice
-#   - 30 sec delay so other system services come up first
+#   - MultipleInstances IgnoreNew: don't fire twice if logon triggered twice
+#   - 30 sec delay so other startup services come up first
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
@@ -78,19 +90,26 @@ $settings = New-ScheduledTaskSettingsSet `
 
 $trigger.Delay = "PT30S"
 
-# Principal: run under Trading PC (the daily console user, NOT dbren the
-# elevation admin). RunLevel Highest so it can call schtasks /Run for
-# admin-owned tasks. -LogonType S4U lets the task fire at boot before
-# any user logs in interactively.
+# Principal: run under Trading PC. LogonType Interactive (matches every
+# other Phoenix scheduled task we register; S4U avoided per comment above).
 $principal = New-ScheduledTaskPrincipal `
     -UserId $TaskUser `
-    -LogonType S4U `
+    -LogonType Interactive `
     -RunLevel Highest
 
 $task = New-ScheduledTask -Action $action -Trigger $trigger -Settings $settings -Principal $principal
-Register-ScheduledTask -TaskName $TaskName -InputObject $task | Out-Null
 
-Write-Host "Registered. '$TaskName' will fire at every system boot under $TaskUser."
+# Wrap Register-ScheduledTask in try/catch so script doesn't lie if it fails.
+try {
+    Register-ScheduledTask -TaskName $TaskName -InputObject $task -ErrorAction Stop | Out-Null
+} catch {
+    Write-Error "FAILED to register '$TaskName': $_"
+    Write-Error "Old PhoenixBoot may already have been removed. To restore manually:"
+    Write-Error "    schtasks /Create /TN PhoenixBoot /TR `"cmd /c $startBat`" /SC ONLOGON /RU `"$TaskUser`" /RL HIGHEST /F"
+    exit 2
+}
+
+Write-Host "Registered. '$TaskName' will fire 30 seconds after $TaskUser logs in."
 Write-Host "  Run now (test):    schtasks /Run /TN $TaskName"
 Write-Host "  Disable:           schtasks /Change /TN $TaskName /DISABLE"
 Write-Host "  Remove entirely:   schtasks /Delete /TN $TaskName /F"
