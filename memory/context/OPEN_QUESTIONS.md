@@ -3,96 +3,110 @@
 _User follow-ups and architectural questions that haven't been resolved._
 _New Claude sessions: these are things the user wants progress on._
 
+_Last refreshed: 2026-04-25 EOD._
+
 ## 🔴 Active questions
 
-### Weekend rebuild: is the bot Monday-ready?
+### When does live trading flip on?
 
-Three-session rebuild Fri/Sat/Sun delivers ~20h of infrastructure work. Tier 1 (Friday tonight) is foundation only. Tier 2 (Saturday) is risk mgmt + signal foundation. Tier 3 (Sunday) is composite + integration. Monday activation state pending Sunday WFO validation.
+**Status:** Real live account at $300. Live trading PAUSED on prod
+(stays Sim101). Bot will graduate when account reaches $2,000. Sim
+bot continues 24/7 live-sim execution to build the trade dataset
+needed for Phase C statistical validation.
+
+### When can CPCV / DSR / PBO checkboxes turn green?
+
+**Status (2026-04-25):** `weekly_evolution.py` enforces these as
+unchecked in every commit body. We need ~200 sim trades per strategy
+minimum to compute statistically meaningful CPCV folds + DSR p-value
++ PBO. Sim bot is now generating the dataset. Revisit when
+`out/grades/` has 8+ weekly aggregates.
+
+### Should `high_precision_only` be demoted?
+
+**Status:** Question still open from April but the lab bot was
+decommissioned 2026-04-21, so the source of the 18% WR data is gone.
+Sim bot per-strategy P&L will surface this once enough trades land.
+The new weekly_evolution routine will auto-flag any strategy with
+≥2 consistent failures per week as a proposal candidate.
+
+## 🟡 Operational questions for the next session
+
+1. **Re-register the four scheduled tasks dropped by the 14:31 reboot.**
+   Run all five `scripts/register_*.ps1` as Administrator. Verify with
+   `Get-ScheduledTask -TaskName Phoenix*`.
+2. **Verify Monday 06:30 morning_ritual** — look for
+   `out/morning_ritual/2026-04-27.md`, confirm verdict is
+   GREEN/AMBER (not RED), and confirm RED would have triggered
+   immediate Telegram.
+3. **Verify Monday 16:05 consolidated digest** — Telegram should
+   contain morning_ritual snippet + post_session_debrief in ONE
+   message.
+4. **First floor-kill test** — manually push a strategy to -$500
+   cumulative; validate halt + persistence + Telegram alert path.
+
+## ✅ Resolved this weekend (2026-04-25)
+
+### Weekend rebuild: Monday-ready?
+
+**RESOLVED** — yes. 1,221 tests passing, 6 strategy fixes locked in
+by 20 regression tests, defaults all SAFE, scheduled task lattice
+ready to be re-registered after reboot.
 
 ### Will simple_sizing satisfy without Kelly?
 
-Account at $300. Kelly math doesn't work below $1500 (can't fractionally size MNQ contracts). Replaced with `simple_sizing.py` reading `small_account_config.yaml`. When account grows, we can add Kelly. Until then, fixed 1-contract sizing.
+**RESOLVED** — yes for now. Account at $300, simple_sizing.py active.
+Kelly stays gated until account reaches $1,500. Sim bot uses fixed
+$2,000 × 16 strategies, not Kelly.
 
-### Should all 7 strategies stay active, or concentrate?
+### Should all 7 strategies stay active?
 
-User chose "informed generalist across 7 strategies" in earlier session. April 25 validation review will surface whether any strategies are dragging P&L (`high_precision_only` at conf=30 is a likely demotion candidate).
+**SUPERSEDED** — Phase C runs 10 strategies on 16 dedicated Sim
+accounts (some strategies route to multiple accounts for sub-flavors).
+Per-strategy halts make concentration unnecessary; bad strategies
+auto-disable themselves at -$500 cumulative.
 
-## 🟡 Deferred to April 25 session
+### Reflector agent (propose-only daily debrief)
 
-- Reflector agent (propose-only daily debrief)
-- Strategy concentration analysis (which strategies earn vs drag)
-- Kelly sizing activation gate (if account reaches $1500)
-- 2-week shadow validation review
+**RESOLVED via Phoenix Routines** — `tools/routines/post_session_debrief.py`
+fills this role with deterministic verdicts + AI commentary appendix.
 
-## 🟡 Deferred from roadmap v4 sprint (2026-04-19)
+### Strategy concentration analysis
 
-Items consciously skipped / simplified during the Apr 19 6-day condensed sprint.
-Updated 2026-04-19 after Option B ORB Chandelier implementation. All within the
-4%-deviation budget — flagged here so they don't get forgotten.
+**SUPERSEDED** — `tools/routines/weekly_evolution.py` does this
+automatically every Sunday. Aggregates week, flags consistent failures
+(≥ max(2, n_sessions // 2)), seeds proposals, AI reviews them, opens
+a `weekly-evolution/YYYY-MM-DD` branch (NEVER auto-pushed).
 
-1. **Non-conforming strategy rewrites (v2 adapter debt)** — multiple strategy
-   files have been rewritten as standalone classes that no longer inherit
-   `BaseStrategy` and emit their own Signal shape:
-   - `strategies/bias_momentum_v2.py` → `BiasMomentumV2Signal`
-   - `strategies/vwap_pullback.py` → `VWAPPullbackSignal`
-     (discovered 2026-04-19 when lab bot crashed on startup with
-     `AttributeError: 'VWAPPullback' object has no attribute 'validated'`).
+### Kelly sizing activation gate
 
-   The base_bot `load_strategies()` loader now **defensively skips** any class
-   that doesn't inherit `BaseStrategy` with a WARN log — the lab bot stays up
-   with the conforming strategies rather than crashing on startup. Any skipped
-   strategy is silently out of service until an adapter is written.
+**RESOLVED** — gate is account ≥ $1,500, hardcoded. Until then
+small_account_config applies.
 
-   **Promotion Gate (MUST READ before any v2 prod promotion):**
-   Before any of these v2 rewrites replaces its v1 in prod — or is re-enabled
-   in lab — a Signal adapter must be written that translates the v2 Signal
-   shape to the Phoenix canonical `Signal` (including `entry_type`, `stop_type`,
-   `target_type`, `entry_price`, `stop_price`, `target_price`, `scale_out_rr`,
-   `exit_trigger`, `trail_config`, `eod_flat_time_et`, `metadata`). Without
-   this, entry_type wiring silently breaks, bracket orders won't receive their
-   correct order types, and managed exits (Chandelier, Noise Area, universal
-   EoD) will never fire for these strategies' trades.
-   **Do not promote these without resolving this item.**
+### 2-week shadow validation review
 
-2. *(Removed 2026-04-19 — resolved by Option B Chandelier implementation.)*
-   ORB now runs the spec-accurate path: partial 50% at 1.0R (via Signal.scale_out_rr)
-   + Chandelier 3×ATR trail on runner (`core/chandelier_exit.py`) + universal EoD
-   flat hook. Verified by `tests/test_orb_chandelier.py` (18 tests).
+**SUPERSEDED** — replaced by the weekly_evolution routine + future
+CPCV/DSR/PBO harness.
 
-3. **Finnhub blackout window** — roadmap says "±2 min Tier-1 blackout"; existing
-   `core/calendar_risk.py` uses ±5 min (30min reduce / 5min block / 15min widen).
-   Functionally identical lock-out; not narrowing to ±2 min.
+### bias_momentum_v2 promotion gate
 
-   **Decision (2026-04-19):** Keep ±5min (wider is strictly safer). Revisit only
-   if trade log shows a pattern of would-have-won trades blocked by the wider
-   window. No action required pre-Monday.
+**RESOLVED** — bias_momentum LONG + SHORT mirror with VCR=1.2 is
+now the canonical implementation. v2 adapter debt cleared. Lock-in
+regression test in `tests/test_lock_in_epic_v1/`.
 
-4. **Unused warmup artifacts** — after switching to `tools/load_sigma_open_warmup.py`
-   + `data/sigma_open_table.json` (27 real MNQ 1m sessions), these became
-   unreferenced: `tools/warmup_noise_area.py`, `tools/backfill_noise_area.py`,
-   `memory/noise_area_warmup.json`. Moved to `archive/pre_load_sigma_open/`
-   2026-04-19. Safe to delete after 2 weeks of stable operation.
+### Finnhub blackout window (±2 vs ±5 min)
 
-5. **ORB missing v3 doc** — v3 roadmap referenced in v4 was missing. ORB built
-   from the PARAMS block + v4 matrix + `strategies/ib_breakout.py` precedent.
-   Audit against paper after first 10 live trades for spec drift.
+**KEEP ±5 min** — wider is strictly safer. Decision logged
+2026-04-19, no action required. Finnhub real client now active.
 
-6. **ORB clock anchor** — ORB uses "first 15 bars received" not a literal 9:30 ET
-   clock. Phoenix's session-window gate covers this indirectly, but ORB itself has
-   no clock guard. Audit if bot restart behavior ever violates this assumption.
+### ORB clock anchor / stop cap
 
-7. **ORB stop cap behavior** — Spec says 25pt stop is a CLAMP (clamp stop distance
-   to 25pt max, still take trade). Phoenix REJECTS the trade if stop > 25pt
-   (`orb.py:148-149`). More conservative but loses trades the paper would take on
-   gap/high-vol days. Revisit after 10+ live trades to see if we're missing
-   meaningful setups.
+**DEFERRED** — ORB now ATR-adaptive per §4 fixes. Audit after 10+
+live trades; not blocking.
 
-### Promotion runbook — add to any future runbook file
+### ANTHROPIC_API_KEY missing
 
-Before promoting ANY strategy from lab (`validated: False`) to prod
-(`validated: True`), review `memory/context/OPEN_QUESTIONS.md` and resolve any
-items tagged to that strategy. The bias_momentum_v2 gate (item #1 above) is the
-canonical example.
+**RESOLVED** — fixed 2026-04-21 via `load_dotenv override=True`.
 
 ## 🟢 Deferred to later weeks / months
 
@@ -102,7 +116,6 @@ canonical example.
 - Microstructure (tick rate, spread analysis, aggressor ratio deep)
 - Cross-asset composite score (NQ/ES spread, DXY inverse, yield curve)
 - CalendarRisk fetch fix + pre/post-event gates
-- agents/reflector.py
 - Regime-tagged memory buckets (need more data)
 - User dispute button (needs reflector live first)
 - UOA / options flow
@@ -110,10 +123,15 @@ canonical example.
 - SQLite migration of trade_memory.json
 - Weekly / multi-day context module
 - Unified feature pool across strategies (Renaissance-style)
+- NT8 SILENT_STALL auto-restart hook (currently watcher-only escalation)
+- TradeMarker.cs custom indicator (NT8 trade arrow display)
+- Phoenix-specific skills under `.claude/skills/` (§3.4 deferred)
 
 ## ❓ Questions for user at next morning check-in
 
-_(auto-populated by reflector when active; manual entries until then)_
-
-1. Did MQBridge redeploy successfully? Check `C:\temp\menthorq_levels.json` timestamp after NT8 restart.
-2. Are you seeing Telegram notifications reliably now (after HTML fix)?
+1. Did the four `register_*.ps1` scripts re-register cleanly? Confirm
+   `Get-ScheduledTask -TaskName Phoenix*` shows all six (PhoenixLearner,
+   PhoenixGrading, PhoenixRiskGate, PhoenixMorningRitual,
+   PhoenixPostSessionDebrief, PhoenixWeeklyEvolution).
+2. Is MQBridge alive? Check `C:\temp\menthorq_levels.json` timestamp.
+3. Are Telegram notifications reliable since the HTML fix?

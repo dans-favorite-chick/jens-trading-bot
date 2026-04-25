@@ -5,6 +5,61 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+### 2026-04-25 EOD — Sprint 2: Phoenix Routines + remaining §3 + git push (manual entry)
+
+**Why:** Capture the work that the auto-writeback's per-file lists don't tell
+the story of. Today was a two-phase Saturday rebuild day; this is the EOD
+narrative the next session will need.
+
+**Phase B+ skeleton sprint (morning):** 6 items shipped behind off-by-default
+flags — NT8 stream validator, fail-closed risk gate, FinBERT skeleton (real
+INT8 ONNX model now installed under `models/finbert_onnx_int8/`), Chicago
+VPS plan (later stricken), SKILLS auto-digest, dashboard Grades + Logs tabs.
+
+**Sprint 2 (afternoon → evening):**
+- §2.2 FRED macros — real client w/ regime-shift detection
+- §2.3 Finnhub real client — REST + WebSocket dual path; key already in `.env`
+- §3.1 TradingView webhook — **STRICKEN** ($59.95/mo Premium not approved)
+- §3.4 Phoenix-specific skills — **DEFERRED** (empty allowlisted dir)
+- §3.5 OIF kill-switch — `tools/oif_kill_switch.py` one-command halt
+- §3.6 Phoenix Routines — three deterministic routines:
+  morning_ritual / post_session_debrief / weekly_evolution. All ship with
+  verdict-deterministic logic, AI in appendix only, consolidated digest at
+  16:05, CPCV/DSR/PBO checkboxes enforced in weekly commit body.
+- §4.1 / 4.3 / 4.4 strategy fixes (A-F) — locked in via 20 regression tests
+  at `tests/test_lock_in_epic_v1/` (ORB ATR-adaptive, bias_momentum SHORT
+  mirror + VCR=1.2, noise_area band_mult=0.7, ib_breakout 10min,
+  compression min_squeeze_bars=12, spring_setup retired).
+
+**Scheduled task lattice (5 register scripts):**
+- `scripts/register_phoenix_grading_task.ps1` (16:00 CT Mon-Fri)
+- `scripts/register_risk_gate_task.ps1` (on-boot)
+- `scripts/register_morning_ritual_task.ps1` (06:30 CT Mon-Fri)
+- `scripts/register_post_session_debrief_task.ps1` (16:05 CT Mon-Fri)
+- `scripts/register_weekly_evolution_task.ps1` (Sun 18:00 CT)
+
+**Plugin install:** machine-learning-ops, incident-response, pyright-lsp,
+document-skills, example-skills (10 plugins / 72 skills total). SessionStart
+hook regenerates `SKILLS.md` from `tools/skills_digest.py`.
+
+**.gitignore hardened:** broad ignores + allowlist patterns for orchestrator,
+.claude/commands, .claude/skills, .claude/agents, settings.json, out/baselines.
+Re-ignore patterns prevent `__pycache__` from sneaking in via greedy `**`.
+
+**GitHub auth fixed:** Statechamp76 → dans-favorite-chick swap via
+`gh auth logout` + `gh auth login`. Push to `origin/main` succeeded.
+
+**Test count:** 989 (Friday EOD) → 1,081 (after morning skeleton) → **1,221
+passing / 0 failing** (Sprint 2 EOD).
+
+**Repo state:** HEAD `c2dcdc8` on `origin/main`, working tree clean.
+
+**Operational note:** 14:31 CDT TeamViewer-initiated reboot dropped four of
+the five newly registered scheduled tasks. Only `PhoenixLearner` survived.
+Next session must re-run all five `register_*.ps1` scripts as Administrator.
+
+---
+
 ### 2026-04-25 10:38 Central Daylight Time — Session changes: 26 files modified
 
 **Files changed:**

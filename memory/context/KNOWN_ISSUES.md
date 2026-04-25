@@ -2,110 +2,149 @@
 
 _Open issues that haven't been resolved yet. Resolved issues moved to semantic/lessons_learned.md._
 
+_Last refreshed: 2026-04-25 EOD._
+
 ## 🔴 OPEN
 
-### ANTHROPIC_API_KEY empty — Claude agents DEGRADED (2026-04-21 evening) — RESOLVED
+### NT8 SILENT_STALL pattern (data subscription freeze)
 
-**Status**: RESOLVED 2026-04-21 via commit `eac5ae4` (B42 `load_dotenv
-override=True`). Key was never missing — 108-char value on line 19 of
-`.env`. Root cause: host OS had `ANTHROPIC_API_KEY=""` set by Claude
-Code's OAuth shim; `load_dotenv()` default behavior skips any key already
-present in os.environ even if empty. Fix: `override=True` across all
-load_dotenv call sites. Direct Claude test post-fix returned "OK".
-Remaining text preserved for audit:
+**Symptom:** NT8 reports "connected" but forwards 0 ticks/second for an
+extended window. Bot's watchdog detects `NT8:live ticks:0/s` but only
+logs — does not currently restart NT8 or page the operator.
 
-**Symptom**: `.env` has `ANTHROPIC_API_KEY=` (name present, value empty).
-Every Claude call today returned `outcome: degraded, error_msg:
-"ANTHROPIC_API_KEY missing"`. Agents fall back to deterministic templates.
+**Status (2026-04-25):** WatcherAgent has an explicit escalation path
+for this pattern (60s threshold → Telegram, 5min threshold → Twilio
+SMS) that was added during the watcher build. That mitigates the
+"trader doesn't know" failure mode. The underlying NT8 freeze is still
+not auto-recovered; a clean restart of NT8 is the only fix. Logged
+here because it's still the highest-impact open reliability gap.
 
-**Affected agents**:
-- 4C Session Debriefer → emits fallback template (today's
-  `logs/ai_debrief/2026-04-21.md` header says "AI unavailable
-  (claude-returned-none); deterministic fallback emitted")
-- 4D Historical Learner → will emit empty recommendations list on
-  weekly run until fixed
+**Originally observed:** 2026-04-16 from 07:56 to 11:11 CDT, missed
+the entire primary trading window.
 
-**NOT affected**: Council Gate (4A), Pre-Trade Filter (4B), Adaptive
-Params (4E) — they use Gemini or are deterministic.
+**Action:** Dedicated session to add an NT8 auto-restart hook (kill +
+re-launch via shortcut) when stall exceeds 5 minutes. Not blocking
+anything today.
 
-**Fix**: Jennifer pastes a valid Anthropic API key into `.env` root
-under `ANTHROPIC_API_KEY=`. No bot restart required — agents re-read
-env on each call via safe_call / importlib path.
+### Scheduled task lattice partially registered (post-reboot)
 
-**Verification after fix**:
-```powershell
-python -c "from dotenv import load_dotenv; import os; load_dotenv(); print('ANTHROPIC_API_KEY chars:', len(os.environ.get('ANTHROPIC_API_KEY','')))"
-```
-Should print a number > 50.
+**Status (2026-04-25 EOD):** The 14:31 CDT TeamViewer-initiated reboot
+dropped four of the five newly registered Phoenix scheduled tasks.
+Currently registered: `PhoenixLearner` only.
 
----
+**Pending:**
+- `PhoenixGrading` (16:00 CT Mon-Fri)
+- `PhoenixRiskGate` (on-boot)
+- `PhoenixMorningRitual` (06:30 CT Mon-Fri)
+- `PhoenixPostSessionDebrief` (16:05 CT Mon-Fri)
+- `PhoenixWeeklyEvolution` (Sun 18:00 CT)
 
-### NT8 indicator install path discrepancy — RESOLVED 2026-04-18
+**Fix:** Re-run all `scripts/register_*.ps1` scripts as Administrator.
+Each is idempotent. Em-dash / schtasks / python-alias issues all fixed.
 
-CLAUDE.md says NT8 indicators folder is `C:\Users\Trading PC\AppData\Roaming\NinjaTrader 8\bin\Custom\Indicators\` but the active install on this machine is at `C:\Users\Trading PC\OneDrive\Documents\NinjaTrader 8\bin\Custom\Indicators\` (OneDrive path). All future NT8 indicator operations should use OneDrive path.
+## 🟡 LOW PRIORITY / WATCHLIST
 
-**Action:** Update CLAUDE.md at next convenient opportunity.
+### CPCV / DSR / PBO validation harness — Phase C dependency
 
-> **Update (2026-04-18):** RESOLVED. Two events closed this issue:
-> 1. NT8 data folder migrated out of OneDrive — active install is now at `C:\Users\Trading PC\Documents\NinjaTrader 8\bin\Custom\Indicators\` (not OneDrive, not AppData).
-> 2. CLAUDE.md updated in the same migration PR to reflect the current path. The earlier recommendation "use OneDrive path" no longer applies — use the `Documents\` path.
+**Status (2026-04-25):** `tools/routines/weekly_evolution.py` ships with
+a `VALIDATION_STATUS_TEMPLATE` constant that emits CPCV / DSR / PBO
+checkboxes reading "NOT YET RUN (Phase C dependency)" in every weekly
+commit body. Three unit tests enforce this in
+`tests/test_routines/test_weekly_evolution.py`.
 
-### Bias_momentum hotfix VERIFIED 2026-04-17 18:55
-
-**Confirmed working.** Post-hotfix log analysis:
-- 0 errors (was crashing every evaluation before)
-- 109 REJECTED messages with specific reasons (MOMENTUM score=13 need=20, price chasing, RANGE day suppression, CVD flow opposing)
-- 0 signals fired — correct behavior, no qualifying setups today
-- Lab bot bias_momentum also evaluating cleanly
-
-The hotfix (adding `price = market.get("close", 0.0)` and `vwap = market.get("vwap", 0.0)` near line 66) is solid. Zero signals ≠ silent failure — it's the gates working as designed.
-
-### Lab bot 18% win rate reality
-
-Actual lab stats: 10W / 45L across 55+ trades (~18% WR) but telegram showed mostly wins due to Markdown parse bug (now fixed).
-
-**Not actually bad** — avg win much larger than avg loss keeps P&L slightly green. But the `high_precision_only` strategy at conf=30 is generating mostly losing trades that are dragging the average. Candidate for demotion.
-
-**Action:** April 25 validation review session will analyze per-strategy P&L properly.
-
-### Level 2 depth — only summary forwarded
-
-**Status (2026-04-17 audit):** TickStreamer.cs tracks 5 bid + 5 ask levels via `OnMarketDepth`, but only sums them into `bid_stack`/`ask_stack` before sending (throttled 500ms). Per-level size over time NOT preserved → iceberg detection and deep footprint patterns limited.
-
-**Impact:** Sunday's footprint builder works with price + bid/ask + volume per tick (sufficient for aggressor classification), but per-level depth patterns (iceberg refills, stacked imbalance depth) require TickStreamer C# enhancement.
-
-**Action:** Enhance TickStreamer to send per-level DOM arrays in a later dedicated session. Non-blocking for weekend build.
-
-## 🟡 LOW PRIORITY
-
-### NT8 trade arrow display missing — DIAGNOSED 2026-04-17
-
-**Root cause:** Phoenix places orders via NT8's built-in ATI (reads OIFs from `incoming/`). ATI executes trades correctly but does NOT draw chart arrows. Arrows are normally drawn by a NinjaScript Strategy, not by ATI-placed external orders.
-
-**Fix option 1 (try first — zero code):** Right-click chart → Properties → enable "Show executions" checkbox. NT8 will display fill arrows for any execution regardless of source.
-
-**Fix option 2 (if option 1 insufficient):** Build custom `TradeMarker.cs` indicator that watches `outgoing/` folder for fills and draws green/red arrows. ~2 hours of work — deferred to a later session.
-
-**Not a blocker** — trades execute correctly, just a display issue.
+**Action:** When Phase C produces enough trades for statistical
+validation (rough heuristic: ~200 sim trades per strategy minimum), wire
+in actual CPCV folds + DSR p-value + PBO computation. Update the
+checkboxes to `[x]` once each metric is computed. DO NOT MERGE any
+weekly evolution PR with these still unchecked.
 
 ### CalendarRisk fetch consistently fails
 
-Log shows repeated warnings: `[CALENDAR] Fetch failed (non-blocking): No module named 'core.external_data'`. Calendar awareness is broken; bot operating without news event blackouts.
+Log shows repeated warnings: `[CALENDAR] Fetch failed (non-blocking): No
+module named 'core.external_data'`. Calendar awareness is broken; bot
+operating without news event blackouts.
 
-**Action:** Defer to next week. Non-blocking.
+**Action:** Defer. Non-blocking; Finnhub is now active and will catch
+Tier-1 events through the calendar window logic.
 
 ### COTFeed URL encoding error
 
-`[COT] CFTC API failed: URL can't contain control characters`. COT data not flowing.
+`[COT] CFTC API failed: URL can't contain control characters`. COT data
+not flowing.
 
 **Action:** Defer. Low value, high maintenance data source.
 
-### NT8 tick-stall silent failure mode
+### Level 2 depth — only summary forwarded
 
-On 2026-04-16 from 07:56 to 11:11 CDT, NT8 showed "connected" but was forwarding 0 ticks/second. Bot's watchdog detected `NT8:live ticks:0/s` but took no action — prod missed entire primary trading window. Bot kept running, waiting for ticks that never came.
+**Status (2026-04-17 audit):** TickStreamer.cs tracks 5 bid + 5 ask
+levels via `OnMarketDepth`, but only sums them into `bid_stack` /
+`ask_stack` before sending (throttled 500ms). Per-level size over time
+NOT preserved → iceberg detection and deep footprint patterns limited.
 
-**Action:** Planned for Saturday — circuit breaker anomaly detection module will catch this going forward.
+**Action:** Enhance TickStreamer to send per-level DOM arrays in a later
+dedicated session. Non-blocking.
 
-## ✅ RECENTLY RESOLVED (leave for reference, move to lessons_learned.md monthly)
+### NT8 trade arrow display missing — DIAGNOSED 2026-04-17
 
-_(none yet — this file seeded 2026-04-17)_
+**Root cause:** Phoenix places orders via NT8's built-in ATI (reads
+OIFs from `incoming/`). ATI executes trades correctly but does NOT draw
+chart arrows. Arrows are normally drawn by a NinjaScript Strategy, not
+by ATI-placed external orders.
+
+**Fix option 1 (try first — zero code):** Right-click chart →
+Properties → enable "Show executions" checkbox.
+
+**Fix option 2:** Build custom `TradeMarker.cs` indicator that watches
+`outgoing/` folder for fills and draws arrows. ~2 hours of work,
+deferred.
+
+**Not a blocker** — trades execute correctly, just a display issue.
+
+## ✅ RECENTLY RESOLVED
+
+### NT8 multi-stream issue — RESOLVED 2026-04-19 (Sunday diagnostic)
+
+Single client confirmed. `core/bridge/stream_validator.py` now ships as
+a defense-in-depth check (default OFF) for any future regression.
+
+### Phantom $40K trades (price-scale bug) — RESOLVED 2026-04-25 (morning)
+
+Built `PriceSanity` guard to catch corrupt 7,150 prices. Pre-OIF price
+sanity layer + FMP cross-check now intercept these before they reach
+NT8's ATI.
+
+### Spring_setup halt — RESOLVED 2026-04-25 (Sprint 2)
+
+Strategy retired per §4 fixes. No longer loads, no longer halts.
+
+### ANTHROPIC_API_KEY empty — RESOLVED 2026-04-21
+
+Resolved via commit `eac5ae4` (`load_dotenv override=True`). Key was
+never missing — 108-char value on line 19 of `.env`. Root cause: host
+OS had `ANTHROPIC_API_KEY=""` set by Claude Code's OAuth shim;
+`load_dotenv()` default behavior skips any key already present in
+`os.environ` even if empty. Fix: `override=True` across all
+`load_dotenv` call sites. Direct Claude test post-fix returned "OK".
+
+### NT8 indicator install path discrepancy — RESOLVED 2026-04-18
+
+NT8 data folder migrated out of OneDrive. Active install is now at
+`C:\Users\Trading PC\Documents\NinjaTrader 8\bin\Custom\Indicators\`.
+CLAUDE.md updated.
+
+### Bias_momentum hotfix — VERIFIED 2026-04-17
+
+The hotfix (adding `price = market.get("close", 0.0)` and
+`vwap = market.get("vwap", 0.0)` near line 66) is solid. Then
+re-validated 2026-04-25 with SHORT mirror + VCR=1.2 lock-in tests.
+
+### Lab bot 18% win rate reality — RESOLVED via decommission 2026-04-21
+
+Lab bot decommissioned 2026-04-21 15:38 CDT. `bots/lab_bot.py`
+preserved on disk as rollback safety net only. The 18% WR question is
+moot.
+
+### TradingView webhook ingestion — STRICKEN 2026-04-25
+
+Premium $59.95/mo not approved. §3.1 stricken from active roadmap.
+Existing HMAC-SHA256 scaffolding retained but not imported anywhere.

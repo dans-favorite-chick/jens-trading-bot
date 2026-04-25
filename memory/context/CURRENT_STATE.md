@@ -1,120 +1,182 @@
 # Phoenix Bot — Current State
 
-_Last updated: 2026-04-25 10:38 Central Daylight Time_
+_Last updated: 2026-04-25 EOD Central Daylight Time_
 _Next Claude session: read this FIRST for situational awareness_
 
-## Bot operational state (as of Tuesday afternoon, 2026-04-21)
+## Bot operational state (as of Saturday 2026-04-25 EOD)
 
-- **2026-04-25:** Phase B+ skeleton sprint -- six items shipped today (stream validator, risk gate, FinBERT, VPS plan, skills digest, dashboard tabs). Defaults remain SAFE (`PHOENIX_RISK_GATE=0`, `PHOENIX_STREAM_VALIDATOR=0`); no flag flips. See `memory/context/PHASE_B_PLUS_LOG.md`.
-- **Prod bot:** UP, flat, Sim101 account (LIVE_TRADING=False, ~28 hours uptime)
-- **Lab bot:** **DECOMMISSIONED** — paper-only flow ended 2026-04-21 15:38 CDT.
+- **Prod bot:** UP, flat, Sim101 account (LIVE_TRADING=False). PID and uptime
+  re-stabilized after the 14:31 CDT reboot (TeamViewer-initiated).
+- **Sim bot:** UP, Phase C live-sim execution on 16 dedicated NT8 Sim
+  accounts. 24/7 trading, per-strategy risk isolation, real OIF writes,
+  10 strategies loaded.
+- **Lab bot:** **DECOMMISSIONED** — paper-only flow ended 2026-04-21.
   `bots/lab_bot.py` preserved on disk as rollback safety net only.
-- **Sim bot:** **UP**, Phase C live-sim execution on 16 dedicated NT8 Sim accounts.
-  24/7 trading, per-strategy risk isolation, real OIF writes, 10 strategies loaded.
 - **Bridge:** UP on :8765 (NT8) + :8766 (bots) + :8767 (health)
-- **Dashboard:** UP on :5000, now with per-strategy risk panel
-- **Watchdog:** UP, tracks prod + sim (lab dropped from default on 2026-04-21)
-- **NT8:** live, MNQM6, ~5 ticks/s (afternoon session)
+- **Dashboard:** UP on :5000, with per-strategy risk panel, Grades tab,
+  Logs tab, and (new today) sentiment-flow surface.
+- **Watchdog:** UP, tracks prod + sim
+- **NT8:** live, MNQM6, single client confirmed (multi-stream issue
+  resolved per Sunday 2026-04-19 diagnostic).
 
-## Phase C deployment (2026-04-21 afternoon sprint)
+## Today's sprint summary (2026-04-25)
 
-Full transformation from lab paper-mode to sim live-trade-mode in a single
-sprint. Feature branch `feature/knowledge-injection-systems` merged to `main`
-at commit `4f444eb`.
+A two-phase Saturday rebuild day. **All work shipped to `origin/main` at
+commit `c2dcdc8`.** Defaults remain SAFE (`PHOENIX_RISK_GATE=0`,
+`PHOENIX_STREAM_VALIDATOR=0`, `SENTIMENT_FLOW_ACTIVE=false`).
 
-### New execution model
+### Phase B+ skeleton sprint (morning)
 
-- **16 strategies → 16 dedicated NT8 Sim accounts** via `config/account_routing.py`
-  (byte-exact NT8 display names; Sim101 = default fallback)
-- **Per-strategy risk isolation** via `core/strategy_risk_registry.py`
-  - $2,000 starting balance per strategy
-  - $200/day loss cap per strategy (resets daily)
-  - $1,500 floor → halt + alert, **manual re-enable only**
-  - Halt state persists to `logs/strategy_halts.json` across restarts
-- **Multi-position runtime** — `core/position_manager.py` refactored to
-  `dict[trade_id → Position]`. Multiple strategies can hold concurrent
-  positions. Legacy single-position API preserved for back-compat.
-- **4:00 PM CT daily flatten** — `bots/daily_flatten.py` closes all
-  positions at CME globex pause start; globex reopens 17:00 CT; overnight
-  holds OK during 17 CT → 16 CT next day globex session.
-- **Dashboard per-strategy panel** — `/api/strategy-risk` endpoint exposes
-  registry snapshot (balance / daily P&L / halted state) rendered as
-  sortable table with 2s poll, halted rows in red.
-- **Telegram per-strategy routing** — optional `TELEGRAM_STRATEGY_CHAT_OVERRIDES`
-  dict routes notifications to strategy-specific chat IDs; `[strategy]` tag
-  prepended to all notifications (controllable via `TELEGRAM_TAG_STRATEGY`).
+Six items shipped behind off-by-default flags:
 
-### Phase C test coverage added
+1. **NT8 stream validator** — `core/bridge/stream_validator.py` +
+   `tools/nt8_stream_quarantine.py`. Price-band / peer-MAD / tick-grid
+   checks. Gated by `PHOENIX_STREAM_VALIDATOR=1`.
+2. **Fail-closed risk gate** — `core/risk/risk_gate.py` +
+   `tools/risk_gate_runner.py` + `tools/watchdog_runner.py`. Named-pipe
+   gate (`\\.\pipe\phoenix_risk_gate`), OIFSink shim, atomic OIF writer,
+   heartbeat watchdog. Gated by `PHOENIX_RISK_GATE=1`.
+3. **FinBERT sentiment skeleton** — `core/sentiment_finbert.py` +
+   `agents/sentiment_flow_agent.py`. **Real INT8 ONNX model now installed
+   under `models/finbert_onnx_int8/`** (downloaded via optimum-cli;
+   gitignored). Council voter wired at `DEFAULT_WEIGHT = 0.0`.
+4. **Chicago VPS migration plan** — `docs/chicago_vps_migration_plan.md`
+   + `tools/verify_jsonl_continuity.py`. **STRICKEN per Jennifer
+   2026-04-25** — Phoenix stays on the Trading PC. Doc preserved for
+   reference; no infra moves planned.
+5. **SKILLS auto-digest** — `tools/skills_digest.py` generates
+   `SKILLS.md` and is wired into the SessionStart hook.
+6. **Dashboard Grades + Logs tabs** — surface `tools/grade_open_predictions.py`
+   output directly in the Flask dashboard.
 
-- 24 tests for `StrategyRiskRegistry` (init, isolation, balance, floor halt, persistence)
-- 13 tests for `DailyFlattener` (time gating, multi-position iteration, timezone)
-- 8 tests for Telegram routing (default, override, tagging, sub-strategy resolution)
-- 7 tests for `reenable_strategy.py` CLI (list, clear-one, --all, exit codes)
-- 18 tests for PositionManager multi-position (incl. concurrent strategies)
+### Phase B+ "remaining §3" sprint (afternoon → evening)
 
-Full suite: **566 passing** / 6 B15-backlog pre-existing failures (unchanged).
+After greenlight on §2.2 / §2.3 / §3.5 / §3.6 / §4.1 / §4.3 / §4.4:
+
+1. **§2.2 FRED macros** — real `core/fred_client.py` with regime-shift
+   detection on FFR / CPI / UNRATE / T10Y2Y; cached at
+   `data/cache/fred/`.
+2. **§2.3 Finnhub real client** — REST + WebSocket dual-path with token
+   bucket; key already present in `.env`.
+3. **§3.1 TradingView webhook** — **STRICKEN** (Premium $59.95/mo not
+   worth the cost). HMAC-SHA256 webhook scaffolding removed from active
+   roadmap; placeholder code retained but not imported anywhere.
+4. **§3.4 Phoenix-specific skills** — **DEFERRED**. `.claude/skills/`
+   directory created (empty), allowlisted in `.gitignore`, future-ready.
+5. **§3.5 OIF kill-switch** — `tools/oif_kill_switch.py`. One-command
+   manual halt: writes `outgoing/halt_all.json`, prod_bot watches for
+   it on every cycle, refuses new entries until cleared.
+6. **§3.6 Phoenix Routines** — three deterministic routines:
+   - `tools/routines/morning_ritual.py` (06:30 CT, Mon-Fri)
+   - `tools/routines/post_session_debrief.py` (16:05 CT, Mon-Fri,
+     chains PhoenixGrading at 16:00)
+   - `tools/routines/weekly_evolution.py` (Sun 18:00 CT)
+   - Shared `tools/routines/_shared.py` with: `RoutineReport`
+     (verdict-deterministic), `DigestQueue` (file-backed FIFO at
+     `out/digest_queue.jsonl`), AI wrappers (`call_claude` /
+     `call_gemini` fail-soft), Telegram dispatch
+     (`send_telegram_now` for RED, `send_consolidated_digest` for
+     EOD), PDF assembly via reportlab, `stack_health_snapshot()`.
+   - **Three Jennifer amendments locked in:**
+     - Verdict is computed from deterministic checks ONLY; AI commentary
+       is appendix and CANNOT influence GREEN/AMBER/RED.
+     - Every weekly_evolution commit body MUST include CPCV / DSR / PBO
+       checkboxes with status "NOT YET RUN (Phase C dependency)".
+     - All routine output is queued to `out/digest_queue.jsonl` and
+       drained as ONE consolidated Telegram at 16:05 (only RED-verdict
+       items fire an immediate interrupting Telegram).
+7. **§4.1 / 4.3 / 4.4 Strategy fixes (A-F)** — locked-in regression
+   tests committed at `tests/test_lock_in_epic_v1/` (20 new tests):
+   - ORB ATR-adaptive stops
+   - bias_momentum SHORT mirror + VCR=1.2 threshold
+   - noise_area silent cadence + band_mult=0.7
+   - ib_breakout 10-minute window
+   - compression min_squeeze_bars=12
+   - spring_setup retired
+
+### Tooling, infra, plugins
+
+- **Plugins installed:** machine-learning-ops, incident-response,
+  pyright-lsp, document-skills, example-skills (via `claude plugin
+  install` CLI subcommand). Total: **10 plugins / 72 skills indexed**.
+- **`.gitignore` hardened:** broad ignores for venv/.venv-ml/models/
+  out/.claude/ etc. with allowlist patterns for
+  `phoenix_bot/orchestrator/`, `.claude/commands/`, `.claude/skills/`,
+  `.claude/agents/`, `.claude/settings.json`, `out/baselines/`. Re-ignore
+  patterns to stop bytecode caches sneaking in via greedy `**` allowlists.
+- **GitHub auth fixed** — Statechamp76 → dans-favorite-chick mapping
+  via `gh auth logout` + `gh auth login`. Push to `origin/main`
+  succeeded at commit `c2dcdc8`.
+
+## Test count
+
+- **Before today:** 989 (Friday EOD 2026-04-24)
+- **After Phase B+ skeleton sprint:** 1,081
+- **After Routines + remaining §3 sprint:** **1,221 passing / 0 failing**
+
+## Scheduled task state (2026-04-25 EOD)
+
+After the 14:31 reboot, currently registered:
+
+| Task | Schedule | Status |
+|---|---|---|
+| `PhoenixLearner` | 23:30 CT daily | ✅ REGISTERED (survived reboot) |
+| `PhoenixGrading` | 16:00 CT Mon-Fri | ⏳ Script ready: `scripts/register_phoenix_grading_task.ps1` |
+| `PhoenixRiskGate` | on-boot | ⏳ Script ready: `scripts/register_risk_gate_task.ps1` |
+| `PhoenixMorningRitual` | 06:30 CT Mon-Fri | ⏳ Script ready: `scripts/register_morning_ritual_task.ps1` |
+| `PhoenixPostSessionDebrief` | 16:05 CT Mon-Fri | ⏳ Script ready: `scripts/register_post_session_debrief_task.ps1` |
+| `PhoenixWeeklyEvolution` | Sun 18:00 CT | ⏳ Script ready: `scripts/register_weekly_evolution_task.ps1` |
+
+**ACTION:** Re-run the four `register_*.ps1` scripts as Administrator
+to restore the full schedule. Each script is idempotent (replaces any
+existing task of the same name). The em-dash / schtasks / python-alias
+issues are all fixed in the current versions.
+
+## AI agent live status
+
+- **Gemini (Council, Pre-Trade Filter):** ACTIVE.
+- **Claude (Session Debriefer, Historical Learner):** ACTIVE — the
+  ANTHROPIC_API_KEY issue was resolved 2026-04-21 via commit `eac5ae4`
+  (`load_dotenv override=True`). The 108-char key has been verified
+  end-to-end.
 
 ## Account state
 
-- **Real live account balance:** $300 (too small for Kelly sizing; small_account_mode active)
-- **Live trading status:** PAUSED — prod stays Sim101 until account reaches $2,000
-- **Sim bot:** live-sim only, $2,000 × 16 strategies = $32,000 virtual pool across dedicated sub-accounts
+- **Real live account balance:** $300 (small_account_mode active)
+- **Live trading status:** PAUSED — prod stays Sim101 until account
+  reaches $2,000.
+- **Sim bot:** $2,000 × 16 strategies = $32,000 virtual pool.
 
-## Today's MenthorQ regime (2026-04-21)
+## Ground rules locked in this weekend
 
-- GEX: (Net GEX not in paste today — HVL proxy fallback active)
-- Call Resistance: 26,500 (monthly) / 26,800 (0DTE)
-- Put Support: 25,000 (monthly) / 26,560 (0DTE)
-- HVL: 25,275 (monthly) / 26,700 (0DTE)
-- 1D range: 26,421.44 – 27,076.06
-- Regime classification: **NEGATIVE_NORMAL** (price below 0DTE HVL by ~50+ ticks)
+- Phoenix stays on the Trading PC. No VPS migration.
+- TradingView Premium not approved. Stricken from roadmap.
+- Per-strategy risk isolation is the unit of accounting.
+- AI is **advisory only** — every routine verdict is deterministic.
+- Telegram is the ONLY runtime alert channel (Twilio SMS is escalation
+  only, behind WatcherAgent).
 
-## Phases E–H sprint (2026-04-21 evening) — merged to main + B41 hotfix
+## Repository state
 
-- **700 tests passing / 0 failing** (was 566 + 6 failing at sprint start)
-- **HEAD:** `94ee5f5` — merged E/F/G/H + B39/B40/B41 TIF fix + dashboard cleanup
-- Phase E (gamma rewire), Phase F (B15 backlog cleared), Phase G (B26/B37/B38), Phase H (5 agents + infra) — all shipped.
-- See `docs/phase-eh-deployment.md` for runbook.
+- Branch: `main`
+- HEAD: `c2dcdc8` (chore(gitignore): re-ignore __pycache__ in
+  allowlisted dirs; drop stale .pyc; add phoenix_bot/__init__.py)
+- Working tree: **clean**
+- Pushed to `origin/main`: ✅
+- 10 plugins installed via `claude plugin install`
+- 72 skills indexed via `tools/skills_digest.py` → `SKILLS.md`
 
-## B41 TIF fix (2026-04-21 ~19:00 CDT)
+## Immediate to-dos for the next session
 
-First live sim_bot run revealed entries using TIF=DAY were being silently
-rejected by the "My Coinbase"-style 24/7 connection. Stops/targets used
-GTC and landed, but entry orders died — creating phantom Python positions
-(B39). Fixed across entry + exit + close + partial paths via commits
-`65cc9d6` and `66a8e7a`. Validated with direct OIF injection on
-`SimBias Momentum` and `SimVwap Band Pullback` — both filled.
-
-## AI agent live status (2026-04-21 late evening)
-
-- **Gemini (Council, Pre-Trade Filter)**: ACTIVE — API key works, agents
-  making real calls.
-- **Claude (Session Debriefer, Historical Learner)**: **DEGRADED** —
-  `ANTHROPIC_API_KEY` is in `.env` but empty (0 chars). Agents emit
-  deterministic fallback templates, no crashes. Today's `logs/ai_debrief/
-  2026-04-21.md` says "AI unavailable (claude-returned-none); deterministic
-  fallback emitted."
-- **Required action**: Jennifer must paste a valid Anthropic API key into
-  `.env` to unlock Claude-powered debrief + learner.
-
-## Running process state (2026-04-21 ~19:20 CDT)
-
-- Bridge :8765/6/7 — PID 32232 (UP)
-- Dashboard :5000 — PID 50696 (UP, lab removed from UI, sim pill + tab added)
-- Watchdog :5001 — PID 10652 (UP, tracking prod+sim, 21 sim restarts lifetime)
-- Prod bot — PID 424 (UP)
-- Sim bot — PID 22624 (UP, 10 strategies → 16 account destinations, fresh code)
-- Daily learner — scheduled task `PhoenixLearner` registered, fires 23:30 CT daily (--days 7)
-
-## Immediate to-dos
-
-See `OPEN_QUESTIONS.md` and `memory/bugs/OPEN_BUGS.md` for deferred items.
-
-Priority follow-ups from Phase C afternoon sprint:
-1. Watch first-hour sim activity; verify per-strategy account routing in real NT8 output
-2. Populate `TELEGRAM_STRATEGY_CHAT_OVERRIDES` if per-strategy channels desired
-3. If MenthorQ publishes Net GEX today, update
-   `data/menthorq/gamma/2026-04-21_levels.txt` with `, Net GEX, <val>, Total GEX, <val>, IV, <pct>`
-   to switch from HVL proxy to authoritative regime
-4. First floor-kill test: manually trigger a strategy to -$500 cumulative to
-   validate halt + persistence + Telegram alert path
+1. Re-run all five `register_*.ps1` scripts as Administrator to restore
+   the scheduled task lattice after the 14:31 reboot.
+2. Verify `PhoenixMorningRitual` fires Monday 2026-04-27 at 06:30 CT —
+   look for `out/morning_ritual/2026-04-27.md` + a non-RED verdict.
+3. Verify `PhoenixPostSessionDebrief` consolidated digest arrives on
+   Telegram Monday 16:05 CT containing the morning_ritual snippet.
+4. First floor-kill test still pending — manually trigger a strategy
+   to -$500 cumulative to validate halt + persistence + Telegram alert
+   path.
+5. CPCV / DSR / PBO validation harness implementation when Phase C
+   data depth allows (currently the weekly_evolution checkboxes read
+   "NOT YET RUN").
