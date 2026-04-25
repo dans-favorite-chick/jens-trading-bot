@@ -1,0 +1,7 @@
+{
+  "_documented_2026_04_25": "Pre-fix (Apr 22-24, 2026) 48-hour rollup of warmup/skip + squeeze events. Used by graders/compression_squeeze.py to compute the % drop after Fix E (min_squeeze_bars 5->12).",
+  "compression_breakout_squeeze_not_held_per_session": 988,
+  "compression_breakout_total_evals_48h": 2926,
+  "warmup_skips_total_48h": 2167,
+  "_derivation": "1976 NO_SIGNAL squeeze_not_held_min_bars events / 2 sessions = 988 per session. Fix E sets min_squeeze_bars=12 (was 5); we predict the per-session count drops to <=692 (>=30% drop)."
+}

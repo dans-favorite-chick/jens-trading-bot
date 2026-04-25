@@ -82,9 +82,7 @@ data/**/*.parquet
 
 # === added 2026-04-25 — cruft that should never be tracked ===
 .venv-ml/
-.claude/
 bin/
-out/
 models/
 data/cache/
 data/regime_history.jsonl
@@ -93,5 +91,37 @@ heartbeat/
 *.pyc.*
 __pycache__/
 council/
-phoenix_bot/
 base_bot_check.pyc.*
+
+# Broad ignores for noisy auto-generated content WITH targeted allowlists
+# below for the parts of these trees that ARE source-controlled.
+.claude/
+out/
+phoenix_bot/
+
+# === 2026-04-25 allowlists — keep these committed despite broad ignores above ===
+# phoenix_bot/orchestrator/ holds the OIFSink Protocol — required when
+# PHOENIX_RISK_GATE=1 is enabled. base_bot.py imports from here.
+!phoenix_bot/
+!phoenix_bot/orchestrator/
+!phoenix_bot/orchestrator/**
+
+# .claude/commands/ — slash command contracts (phoenix-morning-ritual etc.)
+# .claude/skills/   — project-specific Phoenix skills (none yet, future-ready)
+# .claude/agents/   — project-specific agent prompts (future-ready)
+# .claude/settings.json — project-scoped Claude Code settings (enabledPlugins)
+!.claude/
+!.claude/commands/
+!.claude/commands/**
+!.claude/skills/
+!.claude/skills/**
+!.claude/agents/
+!.claude/agents/**
+!.claude/settings.json
+
+# out/baselines/ — pre-computed grader baselines (P5 squeeze_baseline.json etc.)
+# Other out/ subdirs (grades, morning_ritual, debrief, weekly_evolution, bench)
+# stay regenerable + ignored.
+!out/
+!out/baselines/
+!out/baselines/**

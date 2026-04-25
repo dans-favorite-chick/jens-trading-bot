@@ -1,0 +1,9 @@
+{
+  "enabledPlugins": {
+    "quantitative-trading@claude-code-workflows": true,
+    "python-development@claude-code-workflows": true,
+    "backend-development@claude-code-workflows": true,
+    "skill-creator@claude-plugins-official": true,
+    "observability-monitoring@claude-code-workflows": true
+  }
+}
