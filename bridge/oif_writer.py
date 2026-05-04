@@ -42,6 +42,89 @@ _PHOENIX_PID = os.getpid()
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# OIF pipeline health diagnostic (Sprint D, 2026-05-04)
+# ═══════════════════════════════════════════════════════════════════════
+
+def diagnose_oif_pipeline_health(stale_incoming_threshold_s: float = 300.0
+                                 ) -> dict:
+    """Read-only health check on the OIF folder pipeline.
+
+    Returns a dict shaped:
+        {"healthy": bool,
+         "reasons": [str, ...],   # human-readable failure descriptions
+         "metrics": {...}}
+
+    Designed to be called from base_bot's startup self-check and from
+    watcher_agent's periodic spot check. Anything > stale_incoming_threshold_s
+    in the incoming/ folder is a red flag — NT8 ATI normally consumes OIFs
+    within seconds.
+
+    Health failures:
+      - incoming or outgoing folder missing (NT8 install path drift)
+      - incoming has any file older than stale_incoming_threshold_s
+        (NT8 indicator off, ATI disabled, file watcher dead, or
+        PhoenixOIFGuard quarantining everything)
+
+    Metrics always reported (even if unhealthy):
+      - <folder>_count: file count
+      - <folder>_oldest_age_s: age of the oldest file in seconds
+                               (None if folder is empty)
+    """
+    from datetime import datetime as _dt
+    from pathlib import Path as _P
+    from zoneinfo import ZoneInfo as _ZI
+    _CT = _ZI("America/Chicago")
+
+    reasons: list[str] = []
+    metrics: dict = {}
+    healthy = True
+
+    folders = (("incoming", OIF_INCOMING), ("outgoing", OIF_OUTGOING))
+    for label, raw in folders:
+        if not raw:
+            reasons.append(f"{label} path is unset in config")
+            healthy = False
+            continue
+        p = _P(raw)
+        if not p.exists():
+            reasons.append(f"{label} folder missing: {p}")
+            healthy = False
+            metrics[f"{label}_count"] = None
+            metrics[f"{label}_oldest_age_s"] = None
+            continue
+        try:
+            files = [f for f in p.iterdir() if f.is_file()]
+        except OSError as e:
+            reasons.append(f"{label} folder unreadable: {e}")
+            healthy = False
+            continue
+        metrics[f"{label}_count"] = len(files)
+        if files:
+            try:
+                mtimes = [f.stat().st_mtime for f in files]
+            except OSError:
+                mtimes = []
+            if mtimes:
+                oldest_dt = _dt.fromtimestamp(min(mtimes), _CT)
+                age_s = (_dt.now(_CT) - oldest_dt).total_seconds()
+                metrics[f"{label}_oldest_age_s"] = round(age_s, 1)
+                if label == "incoming" and age_s > stale_incoming_threshold_s:
+                    reasons.append(
+                        f"{label} has stale file(s): oldest is "
+                        f"{age_s:.0f}s old (threshold {stale_incoming_threshold_s:.0f}s) "
+                        f"- NT8 ATI may be disabled or PhoenixOIFGuard "
+                        f"quarantining all writes"
+                    )
+                    healthy = False
+            else:
+                metrics[f"{label}_oldest_age_s"] = None
+        else:
+            metrics[f"{label}_oldest_age_s"] = None
+
+    return {"healthy": healthy, "reasons": reasons, "metrics": metrics}
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Low-level OIF line builders
 # ═══════════════════════════════════════════════════════════════════════
 
