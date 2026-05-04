@@ -236,3 +236,77 @@ class TestUnrealizedPnl:
 
     def test_unrealized_pnl_zero_when_flat(self, pm):
         assert pm.unrealized_pnl(current_price=18500.0) == 0.0
+
+
+# ─── exit_pending suppression in check_exits / check_exits_all ───────
+#
+# Fix (2026-05-03): the tick loop calls check_exits_all() on every tick
+# while the bot is not flat. Once a stop is hit and _exit_trade() sends
+# the EXIT command, the position is marked exit_pending but stays in
+# _positions until runtime reconciliation finalizes it (~30s later).
+# Without this guard, every subsequent tick where price <= stop_price
+# re-triggered the same stop_loss exit. The 2s _exit_trade debounce
+# turned the storm into "1 EXIT every 2s for ~20s = 5-9 redundant
+# EXIT commands per actual close" — visible in logs/trades.log on
+# 2026-05-03 for every dom_pullback stop-out.
+
+class TestExitPendingSuppression:
+
+    def test_check_exits_returns_none_for_pending_position(self, pm):
+        """Once the position is exit_pending, check_exits returns None
+        even if price is still past the stop."""
+        _open_long(pm, entry=18500.0, stop=18496.0)
+        # First trigger fires
+        assert pm.check_exits(current_price=18495.0) == "stop_loss"
+        # Mark exit pending (simulating _exit_trade having sent the WS)
+        pm.mark_exit_pending("test-001", exit_price=18495.0,
+                             exit_reason="stop_loss")
+        # Subsequent ticks at the same price MUST NOT re-trigger
+        assert pm.check_exits(current_price=18495.0) is None
+        assert pm.check_exits(current_price=18494.0) is None
+        assert pm.check_exits(current_price=18493.0) is None
+
+    def test_check_exits_all_skips_pending_positions(self, pm):
+        """check_exits_all (multi-position) skips exit_pending positions."""
+        # Two LONG positions on different strategies, both with stops above
+        pm.open_position(
+            trade_id="A", direction="LONG", entry_price=18500.0, contracts=1,
+            stop_price=18496.0, target_price=18508.0,
+            strategy="strat_a", reason="t",
+        )
+        pm.open_position(
+            trade_id="B", direction="LONG", entry_price=18500.0, contracts=1,
+            stop_price=18496.0, target_price=18508.0,
+            strategy="strat_b", reason="t",
+        )
+        # Price drops past both stops
+        triggers = pm.check_exits_all(current_price=18495.0)
+        assert sorted(t[0] for t in triggers) == ["A", "B"]
+        # A is sent + marked pending; B has no exit yet
+        pm.mark_exit_pending("A", exit_price=18495.0, exit_reason="stop_loss")
+        triggers2 = pm.check_exits_all(current_price=18495.0)
+        # Only B should re-trigger; A is pending and must be skipped
+        assert [t[0] for t in triggers2] == ["B"]
+
+    def test_check_exits_all_resilient_when_all_pending(self, pm):
+        """When every active position is pending, returns empty list."""
+        _open_long(pm, entry=18500.0, stop=18496.0)
+        pm.mark_exit_pending("test-001", exit_price=18495.0,
+                             exit_reason="stop_loss")
+        # Price keeps moving past stop — should NOT re-trigger.
+        assert pm.check_exits_all(current_price=18494.0) == []
+        assert pm.check_exits_all(current_price=18490.0) == []
+
+    def test_finalize_clears_pending_and_close_removes_position(self, pm):
+        """Sanity: after finalize_exit_pending, the position is gone, so
+        future check_exits returns None for that trade_id (idempotent
+        cleanup path — no exception, no lingering reference)."""
+        _open_long(pm, entry=18500.0, stop=18496.0)
+        pm.mark_exit_pending("test-001", exit_price=18495.0,
+                             exit_reason="stop_loss")
+        trade = pm.finalize_exit_pending("test-001")
+        assert trade is not None
+        assert trade["exit_reason"] == "stop_loss"
+        # Position is now closed; check_exits is a no-op
+        assert pm.check_exits(current_price=18490.0) is None
+        assert pm.check_exits_all(current_price=18490.0) == []

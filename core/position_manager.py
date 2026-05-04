@@ -694,18 +694,36 @@ class PositionManager:
         Returns exit reason string for the sole active position, or None.
         When multiple positions are open, caller should use check_exits_all()
         to iterate. If trade_id is supplied, checks that specific position.
+
+        Fix (2026-05-03): skip positions already marked exit_pending.
+        Otherwise the tick loop re-triggers stop_loss against the same
+        position every tick until runtime reconciliation finalizes it,
+        producing duplicate EXIT commands (5-9 per actual close in the
+        forensic trade log).
         """
         tid = self._resolve_trade_id(trade_id)
         if tid is None or tid not in self._positions:
             return None
-        return self._check_exit_one(self._positions[tid], current_price, max_hold_min)
+        pos = self._positions[tid]
+        if pos.exit_pending:
+            return None
+        return self._check_exit_one(pos, current_price, max_hold_min)
 
     def check_exits_all(self, current_price: float,
                         max_hold_min: float = None) -> list[tuple[str, str]]:
         """Multi-position exit check. Returns list of (trade_id, reason)
-        tuples for every position whose stop/target/time-stop triggered."""
+        tuples for every position whose stop/target/time-stop triggered.
+
+        Fix (2026-05-03): positions in exit_pending state are skipped.
+        Their EXIT command has already been sent to NT8; re-triggering
+        is the source of the duplicate-EXIT-command storm seen in
+        logs/trades.log between 2026-05-03 17:37 and 23:06 (4 of 4
+        dom_pullback trades emitted 5-9 redundant EXIT commands each).
+        """
         triggers: list[tuple[str, str]] = []
         for tid, pos in self._positions.items():
+            if pos.exit_pending:
+                continue
             reason = self._check_exit_one(pos, current_price, max_hold_min)
             if reason is not None:
                 triggers.append((tid, reason))
