@@ -21,6 +21,9 @@ from flask import Flask, render_template, jsonify, request
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from config.settings import DASHBOARD_PORT, HEALTH_HTTP_PORT
+from dashboard.trade_accessors import (
+    safe_pnl_net, safe_pnl_gross, safe_cost_total, is_post_b13,
+)
 
 app = Flask(__name__)
 logger = logging.getLogger("Dashboard")
@@ -508,6 +511,8 @@ def api_today_pnl():
     per_bot: dict = {}
     per_strategy: dict = {}
     session_rows = []
+    n_pre_b13 = 0   # B13: surface mix of pre/post cost-accounting eras
+    n_post_b13 = 0
     for t in rows:
         exit_ts = t.get("exit_time") or t.get("ts_exit")
         if exit_ts is None:
@@ -522,36 +527,70 @@ def api_today_pnl():
         session_rows.append(t)
         bot = t.get("bot_id") or "unknown"
         strat = t.get("strategy") or "unknown"
-        pnl = float(t.get("pnl_dollars") or 0.0)
+        # B13 backwards-compat: use safe accessors so pre-B13 trades
+        # (no pnl_dollars_gross / no cost_total_dollars) don't poison
+        # the aggregation with None values.
+        pnl   = safe_pnl_net(t)
+        gross = safe_pnl_gross(t)
+        cost  = safe_cost_total(t)
+        post_b13 = is_post_b13(t)
+        if post_b13:
+            n_post_b13 += 1
+        else:
+            n_pre_b13 += 1
         won = 1 if pnl > 0 else 0
         lost = 1 if pnl < 0 else 0
         # Per-bot
-        b = per_bot.setdefault(bot, {"pnl": 0.0, "trades": 0, "wins": 0, "losses": 0})
+        b = per_bot.setdefault(bot, {
+            "pnl": 0.0, "pnl_gross": 0.0, "cost_total": 0.0,
+            "trades": 0, "wins": 0, "losses": 0,
+            "n_pre_b13": 0, "n_post_b13": 0,
+        })
         b["pnl"] += pnl
+        b["pnl_gross"] += gross
+        b["cost_total"] += cost
         b["trades"] += 1
         b["wins"] += won
         b["losses"] += lost
+        b["n_pre_b13"]  += 0 if post_b13 else 1
+        b["n_post_b13"] += 1 if post_b13 else 0
         # Per-strategy (key on strategy + sub_strategy if present)
         sub = t.get("sub_strategy")
         key = f"{strat}.{sub}" if sub else strat
-        s = per_strategy.setdefault(key, {"pnl": 0.0, "trades": 0, "wins": 0, "losses": 0, "bot": bot})
+        s = per_strategy.setdefault(key, {
+            "pnl": 0.0, "pnl_gross": 0.0, "cost_total": 0.0,
+            "trades": 0, "wins": 0, "losses": 0, "bot": bot,
+            "n_pre_b13": 0, "n_post_b13": 0,
+        })
         s["pnl"] += pnl
+        s["pnl_gross"] += gross
+        s["cost_total"] += cost
         s["trades"] += 1
         s["wins"] += won
         s["losses"] += lost
+        s["n_pre_b13"]  += 0 if post_b13 else 1
+        s["n_post_b13"] += 1 if post_b13 else 0
     # Round for display
     for b in per_bot.values():
-        b["pnl"] = round(b["pnl"], 2)
-        b["win_rate"] = round(100 * b["wins"] / b["trades"], 1) if b["trades"] else 0.0
+        b["pnl"]        = round(b["pnl"], 2)
+        b["pnl_gross"]  = round(b["pnl_gross"], 2)
+        b["cost_total"] = round(b["cost_total"], 2)
+        b["win_rate"]   = round(100 * b["wins"] / b["trades"], 1) if b["trades"] else 0.0
     for s in per_strategy.values():
-        s["pnl"] = round(s["pnl"], 2)
-        s["win_rate"] = round(100 * s["wins"] / s["trades"], 1) if s["trades"] else 0.0
+        s["pnl"]        = round(s["pnl"], 2)
+        s["pnl_gross"]  = round(s["pnl_gross"], 2)
+        s["cost_total"] = round(s["cost_total"], 2)
+        s["win_rate"]   = round(100 * s["wins"] / s["trades"], 1) if s["trades"] else 0.0
 
     return safe_jsonify({
         "session_start_ts": session_start,
         "per_bot": per_bot,
         "per_strategy": per_strategy,
         "trade_count": len(session_rows),
+        # B13 data-quality indicator: how many trades in this window
+        # pre-date cost accounting? Frontend renders a badge when > 0.
+        "n_pre_b13":  n_pre_b13,
+        "n_post_b13": n_post_b13,
         "ts": time.time(),
     })
 
