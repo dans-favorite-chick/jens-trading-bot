@@ -504,8 +504,16 @@ class BaseBot:
     bot_name: str = "base"
     only_validated: bool = False  # Prod overrides to True
 
+    # 2026-05-04 (Sprint D F2): track the session date on which the
+    # RECOVERY MODE telegram has already fired. Reset to None at every
+    # daily-reset boundary so day N+1 can fire once, then quiet until
+    # the next reset. None at boot means "haven't paged yet today".
+    _recovery_alert_session_date = None
+
     def __init__(self):
         _validate_nt8_paths()
+        # Per-instance reset of the class-level recovery dedup state.
+        self._recovery_alert_session_date = None
         # B59: one-time startup banner documenting the live-account hard-guard.
         _live_guard = os.environ.get("LIVE_ACCOUNT", "").strip()
         if _live_guard:
@@ -2271,6 +2279,19 @@ class BaseBot:
         today = datetime.now().strftime("%Y-%m-%d")
         if self._current_date and today != self._current_date:
             logger.info(f"[DAILY RESET] New day: {today}")
+            # Sprint D F2: if we paged RECOVERY MODE today, fire the
+            # "EXITED RECOVERY" confirmation at the day boundary so the
+            # operator sees that yesterday's recovery state cleared.
+            if self._recovery_alert_session_date is not None:
+                try:
+                    asyncio.ensure_future(tg.notify_alert(
+                        "RECOVERY EXITED",
+                        f"Recovery mode cleared at session reset "
+                        f"(was active on {self._recovery_alert_session_date})"
+                    ))
+                except Exception:
+                    pass
+            self._recovery_alert_session_date = None
             self.risk.reset_daily()
             self._council_ran_today = False
             self._debrief_ran_today = False
@@ -4373,11 +4394,23 @@ class BaseBot:
                 except Exception:
                     pass
 
+            # Sprint D F2 (2026-05-04): RECOVERY MODE one-shot per day.
+            # Previously fired every loss after the threshold — ~5 pages
+            # per recovery day. Now fires ONCE on the first transition
+            # into recovery for a given session date, and an "EXITED
+            # RECOVERY" telegram fires once at the next daily reset.
             if self.risk.state.recovery_mode and trade["result"] == "LOSS":
-                asyncio.ensure_future(tg.notify_alert(
-                    "RECOVERY MODE",
-                    f"Daily P&L: ${self.risk.state.daily_pnl:.2f}\n"
-                    f"Size reduced 50% until daily reset"))
+                today = datetime.now().date()
+                if self._recovery_alert_session_date != today:
+                    asyncio.ensure_future(tg.notify_alert(
+                        "RECOVERY MODE",
+                        f"Daily P&L: ${self.risk.state.daily_pnl:.2f}\n"
+                        f"Size reduced 50% until daily reset"))
+                    self._recovery_alert_session_date = today
+                    logger.info(
+                        f"[RECOVERY_ALERT] one-shot fired for {today}; "
+                        f"daily P&L=${self.risk.state.daily_pnl:.2f}"
+                    )
 
             logger.info(f"[EXIT:{tid}] P&L=${trade['pnl_dollars']:.2f} reason={reason} "
                          f"exit_sent={'OK' if exit_sent else 'FAILED'}")
