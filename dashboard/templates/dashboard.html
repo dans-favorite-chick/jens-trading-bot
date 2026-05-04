@@ -96,6 +96,16 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
 .toggle::after { content:''; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%; background:#fff; transition:0.2s; }
 .toggle.on::after { left:18px; }
 
+/* Sprint I: opening_session sub-row expansion (visual indent + status badges) */
+.sub-row { display:flex; align-items:center; gap:10px; padding:3px 0 3px 28px; font-size:12px; }
+.sub-row .sub-name { min-width:160px; color:var(--text); font-family:var(--mono); }
+.sub-row .sub-window { min-width:120px; color:var(--text-dim); font-family:var(--mono); font-size:11px; }
+.sub-badge { font-size:10px; padding:2px 8px; border-radius:8px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; }
+.sub-badge.in-window { background:#0d2818; color:var(--green); border:1px solid var(--green); }
+.sub-badge.closed { background:#2a1818; color:var(--text-dim); border:1px solid var(--border); }
+.sub-row .sub-count { margin-left:auto; color:var(--text-dim); font-family:var(--mono); font-size:11px; }
+.sub-row .sub-count .has-trades { color:var(--green); font-weight:600; }
+
 /* ===== SECTION: Trade Log ===== */
 .trade-table { width:100%; border-collapse:collapse; font-size:12px; font-family:var(--mono); }
 .trade-table th { text-align:left; padding:6px 8px; color:var(--text-dim); border-bottom:1px solid var(--border); font-size:11px; }
@@ -772,7 +782,7 @@ async function poll() {
       ['market',    () => renderMarket(bot.market || {})],
       ['stats',     () => renderStats(bot.risk || {})],
       ['trades',    () => renderTrades(bot.trades || [])],
-      ['strategies',() => renderStrategies(bot.strategies || [])],
+      ['strategies',() => renderStrategies(bot.strategies || [], bot.trades || [])],
       ['position',  () => renderPosition(bot.position || {})],
       ['controls',  () => renderBotControls(status.bot_processes || {})],
       ['signals',   () => renderSignalActivity(bot)],
@@ -915,14 +925,74 @@ function renderMarket(m) {
 }
 
 // ── Strategies ─────────────────────────────────────────────────────
-function renderStrategies(strats) {
+// Sprint I: opening_session expands into 6 sub-strategy rows so the
+// dashboard surfaces which sub is active right now + per-sub trade count.
+// Windows mirror strategies/opening_session.py:evaluate() dispatch order.
+const OPENING_SUBS = [
+  { name: 'premarket_breakout', start: '08:30', end: '08:45', gate: 'any opening_type' },
+  { name: 'open_drive',         start: '08:35', end: '09:00', gate: 'OPEN_DRIVE only' },
+  { name: 'open_test_drive',    start: '08:30', end: '09:00', gate: 'OPEN_TEST_DRIVE only' },
+  { name: 'orb',                start: '08:45', end: '14:30', gate: 'any opening_type' },
+  { name: 'open_auction_out',   start: '08:45', end: '11:00', gate: 'OPEN_AUCTION_OUT only' },
+  { name: 'open_auction_in',    start: '08:45', end: '11:00', gate: 'OPEN_AUCTION_IN only' },
+];
+
+function _nowCtMinutes() {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Chicago', hour12: false, hour: '2-digit', minute: '2-digit',
+  }).formatToParts(new Date());
+  let h = 0, m = 0;
+  for (const p of parts) {
+    if (p.type === 'hour')   h = parseInt(p.value, 10);
+    if (p.type === 'minute') m = parseInt(p.value, 10);
+  }
+  // Intl returns "24" at midnight on some browsers — normalize.
+  return ((h === 24 ? 0 : h) * 60) + m;
+}
+
+function _hhmmToMinutes(s) {
+  const [h, m] = s.split(':').map(n => parseInt(n, 10));
+  return h * 60 + m;
+}
+
+function _countTradesForSub(trades, subName) {
+  // Match strategies/opening_session.py: trades log strategy='opening_session'
+  // and metadata-derived sub_strategy=<sub>.
+  return trades.filter(t =>
+    t.strategy === 'opening_session' && t.sub_strategy === subName
+  ).length;
+}
+
+function renderStrategies(strats, trades) {
   const container = el('strategy-toggles');
-  container.innerHTML = strats.map(s =>
-    `<div class="toggle-row">
-      <button class="toggle ${s.enabled ? 'on' : ''}" onclick="toggleStrategy('${esc(s.name)}', ${!s.enabled})"></button>
-      <label>${esc(s.name)} ${s.validated ? '(validated)' : '(lab)'}</label>
-    </div>`
-  ).join('');
+  trades = trades || [];
+  const curMin = _nowCtMinutes();
+  container.innerHTML = strats.map(s => {
+    const umbrella =
+      `<div class="toggle-row">
+        <button class="toggle ${s.enabled ? 'on' : ''}" onclick="toggleStrategy('${esc(s.name)}', ${!s.enabled})"></button>
+        <label>${esc(s.name)} ${s.validated ? '(validated)' : '(lab)'}</label>
+      </div>`;
+    if (s.name !== 'opening_session') return umbrella;
+    // Expand opening_session into its 6 sub-strategy rows.
+    const subRows = OPENING_SUBS.map(sub => {
+      const startMin = _hhmmToMinutes(sub.start);
+      const endMin = _hhmmToMinutes(sub.end);
+      const inWin = curMin >= startMin && curMin <= endMin;
+      const count = _countTradesForSub(trades, sub.name);
+      const badge = inWin
+        ? `<span class="sub-badge in-window">in window</span>`
+        : `<span class="sub-badge closed">closed</span>`;
+      const countCls = count > 0 ? 'has-trades' : '';
+      return `<div class="sub-row" title="${esc(sub.gate)}">
+        <span class="sub-name">${esc(sub.name)}</span>
+        <span class="sub-window">${esc(sub.start)}–${esc(sub.end)} CT</span>
+        ${badge}
+        <span class="sub-count">trades today: <span class="${countCls}">${count}</span></span>
+      </div>`;
+    }).join('');
+    return umbrella + subRows;
+  }).join('');
 }
 
 // ── Trade Log ──────────────────────────────────────────────────────
