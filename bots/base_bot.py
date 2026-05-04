@@ -113,6 +113,25 @@ except ImportError:
 logger = logging.getLogger("Bot")
 
 
+def should_suppress_trend_stall(held_s: float, grace_s: int) -> bool:
+    """Fix A (2026-05-03): trend_stall grace period.
+
+    Returns True when the position has been held for less than the
+    configured grace window — the trend_stall exit should be SUPPRESSED.
+
+    Returns False when:
+      - grace_s <= 0 (feature disabled / legacy behavior), OR
+      - held_s >= grace_s (grace elapsed)
+
+    Forensic context: 12 of the 71 audit trades exited at duration_s ≤ 0
+    via trend_stall — entry-vs-exit gates disagreed on the same bar's
+    data. A grace window prevents this instant unwind.
+    """
+    if grace_s <= 0:
+        return False
+    return held_s < grace_s
+
+
 def _validate_nt8_paths():
     """
     Verify NT8-dependent paths exist on disk before the bot starts any work.
@@ -1589,7 +1608,29 @@ class BaseBot:
 
                             # Stall detector drives exit — check every tick (already rate-limited inside)
                             stall = self._stall_detector.check(snapshot, pos.direction)
-                            if stall["exit_signal"]:
+                            # Fix A (2026-05-03): trend_stall grace period.
+                            # The audit found 12+ duration=0 trades exiting via
+                            # trend_stall on the same tick as entry. Per-strategy
+                            # config knob `trend_stall_grace_s` (default 60) blocks
+                            # the stall exit for the first N seconds of a position.
+                            _grace_s = 0
+                            for _strat in self.strategies:
+                                if getattr(_strat, "name", None) == pos.strategy:
+                                    _grace_s = int(_strat.config.get("trend_stall_grace_s", 0) or 0)
+                                    break
+                            _held_s = time.time() - getattr(pos, "entry_time", time.time())
+                            if stall["exit_signal"] and should_suppress_trend_stall(_held_s, _grace_s):
+                                # Within grace window — log once-per-position and
+                                # skip the exit. _trend_stall_grace_logged flag
+                                # avoids spamming the log every tick.
+                                if not getattr(pos, "_trend_stall_grace_logged", False):
+                                    logger.debug(
+                                        f"[STALL_GRACE:{pos.trade_id}] trend_stall "
+                                        f"suppressed — held {_held_s:.1f}s < grace {_grace_s}s "
+                                        f"(strategy={pos.strategy})"
+                                    )
+                                    pos._trend_stall_grace_logged = True
+                            elif stall["exit_signal"]:
                                 logger.info(f"[RIDER:{pos.trade_id}] Trend stall STRONG "
                                             f"— exiting runner. Reasons: {stall['reasons']}")
                                 await self._exit_trade(ws, price, "trend_stall",
