@@ -599,3 +599,98 @@ showing only 2 prod strategies is **expected behavior, not a bug**.
 currently auto-demotes a strategy whose post-promotion data shows
 KILL_CANDIDATE characteristics (Sprint G candidate after tier-
 persistence data accumulates).
+
+## Sprint G — Dashboard Permanent Fix (2026-05-04)
+
+Three commits:
+- `0b4a9db` feat(diagnose): tools/diagnose_dashboard.py
+- `cbaddb7` fix(dashboard): permanent fix for $0 + missing strategies
+- (this) docs: Sprint G + operator verification checklist
+
+### The two persistent dashboard issues, finally diagnosed
+
+**1. Dashboard shows $0 P&L despite ~$238 in actual trades**
+
+  Root cause (NOT a bug — UX defaults misleading):
+  - `let activeBot = 'prod'` was the default tab
+  - prod_bot only runs `validated=True` strategies (currently 2:
+    bias_momentum + ib_breakout)
+  - Prod bot legitimately has 0 trades on most days during the
+    validation phase
+  - The actual trades happen on sim_bot, which was on the inactive
+    second tab
+  - `/api/today-pnl` always returned correct data; the operator never
+    saw it because they were looking at the prod tab
+
+**2. Dashboard shows only 2 strategies**
+
+  Root cause (also UX, also correct prod behavior):
+  - prod_bot's strategy roster IS 2 (validated=True && enabled=True =
+    bias_momentum + ib_breakout)
+  - sim_bot's roster is 10 strategies (everything in `config.strategies`)
+  - Operator was viewing the prod tab and seeing prod's correct count
+
+### The fix — UX correction, NO trading-code change
+
+`dashboard/templates/dashboard.html` only:
+
+1. **New combined both-bots summary card above the tabs.** Always shows
+   BOTH sim + prod P&L / trades / WR simultaneously, fetched from
+   `/api/today-pnl`. Independent of which tab is active.
+
+2. **Default tab changed from prod → sim.** Sim is where validation
+   activity happens — that's the bot the operator wants to see first.
+
+3. **Inline help text on the summary card** explaining the validated
+   filter and pointing at `config/strategies.py` for promotion. Stops
+   the "why is prod $0?" question recurring.
+
+4. **`refreshBothBotsSummary()` JS function** called per poll cycle
+   parallel to the existing `/api/status` fetch. Best-effort — failure
+   won't break the main poll.
+
+### New diagnostic tool
+
+```bash
+python tools/diagnose_dashboard.py
+```
+
+Read-only audit of dashboard backend + frontend state. Run any time
+the operator suspects a display bug. Output:
+`out/dashboard_diagnostic_<today>.md` — covers all backend routes,
+frontend fetch calls, render references, live API responses, validated
+flags, per-bot loaded strategies.
+
+### Operator verification checklist
+
+After the dashboard restart Sprint G triggered:
+
+1. **Hard-reload browser** (Ctrl+Shift+R or Cmd+Shift+R) — Flask
+   sometimes serves cached templates AND browsers cache HTML
+2. Confirm the "Today (CME Globex)" card appears ABOVE the bot tabs
+   showing both sim + prod current P&L
+3. Confirm "Sim Bot" tab is active by default (was prod)
+4. Click "Prod Bot" tab — confirm it correctly shows the 2-strategy
+   subset (this is BY DESIGN, not a bug)
+
+If dashboard ever shows $0 again on the sim tab when trades happened:
+**rerun `python tools/diagnose_dashboard.py` first**, before
+shipping any "fix". The diagnostic catches all 6 known causes
+(wrong endpoint, wrong field, date filter, hardcoded filter,
+prod-only endpoint, expectation mismatch).
+
+### What's NOT in this sprint
+
+- No live trading code touched (base_bot, position_manager,
+  risk_manager, strategy code all untouched)
+- No strategies auto-promoted to prod (promotion remains an operator
+  decision after lab validation per discipline)
+- No backend API contract changes (`/api/today-pnl`, `/api/status`,
+  `/api/strategies` all return identical shapes — frontend just reads
+  them now)
+
+### Test suite delta
+
+Sprint F final:  1,484 passing
+Sprint G final:  1,494 passing (+10)
+0 failing, 4 skipped throughout.
