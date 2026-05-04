@@ -122,20 +122,22 @@ class TestFallbackAndEdges:
         # opening_session (6 subs, all distinct accounts):
         #   SimOpenDrive, SimOpen Test Drive, SimOpen Auction In Range,
         #   SimOpen Auction Out of Range, SimPremarket Breakout, SimORB
-        # Flat strategies (10, all distinct):
+        # Flat strategies (11, all distinct):
         #   SimBias Momentum, SimSpring Setup, SimVWapp Pullback,
-        #   SimVwap Band Pullback, SimDom Pull Back, SimIB Breakout,
+        #   SimVwap Band Pullback, SimVwap Reversion (added 2026-05-03),
+        #   SimDom Pull Back, SimIB Breakout,
         #   SimCompression Breakout, SimCompression Break out 30 MIN,
         #   SimNoise Area, SimStand alone ORB
-        # + Sim101 default = 17 unique NT8 accounts.
+        # + Sim101 default = 18 unique NT8 accounts.
         accounts = validate_account_map()
-        assert len(accounts) == 17
+        assert len(accounts) == 18
         # Spot-check a few known members.
         assert "Sim101" in accounts
         assert "SimOpenDrive" in accounts
         assert "SimORB" in accounts
         assert "SimStand alone ORB" in accounts
         assert "SimCompression Break out 30 MIN" in accounts
+        assert "SimVwap Reversion" in accounts  # 2026-05-03 new strategy
 
 
 # ═══════════════════════════════════════════════════════════════════

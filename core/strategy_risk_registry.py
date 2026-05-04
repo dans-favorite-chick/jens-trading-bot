@@ -50,6 +50,7 @@ STRATEGY_KEYS: list[str] = [
     "spring_setup",
     "vwap_pullback",
     "vwap_band_pullback",
+    "vwap_band_reversion",
     "dom_pullback",
     "ib_breakout",
     "compression_breakout",

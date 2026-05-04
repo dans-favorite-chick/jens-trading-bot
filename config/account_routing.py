@@ -56,6 +56,7 @@ STRATEGY_ACCOUNT_MAP: Dict[str, Union[str, Dict[str, str]]] = {
     "spring_setup":              "SimSpring Setup",
     "vwap_pullback":             "SimVWapp Pullback",
     "vwap_band_pullback":        "SimVwap Band Pullback",
+    "vwap_band_reversion":       "SimVwap Reversion",
     "dom_pullback":              "SimDom Pull Back",
     "ib_breakout":               "SimIB Breakout",
     "compression_breakout_15m":  "SimCompression Breakout",

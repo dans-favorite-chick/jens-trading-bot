@@ -373,6 +373,31 @@ STRATEGIES = {
         "max_stop_ticks": 120,
         "max_hold_min": 60,
     },
+    "vwap_band_reversion": {
+        # 2026-05-03: NEW pure mean-reversion strategy at 2.1σ. Distinct from
+        # vwap_band_pullback (which is trend-aligned pullback into the 1σ
+        # zone). This strategy SHORTs at upper-band touch and LONGs at lower-
+        # band touch with bar-confirmation, regardless of HTF trend — but
+        # SKIPS on TREND days (price walks one band, reversion fails).
+        # Per operator request; lab-only until 50+ trades validate.
+        # See strategies/vwap_band_reversion.py docstring for research basis.
+        "enabled": True,
+        "validated": False,   # Lab only
+        "sigma": 2.1,                    # entry-band sigma
+        "outer_sigma": 2.5,              # stop is just beyond this
+        "atr_stop_buffer": 0.5,          # multiplier on ATR added to outer band
+        "atr_period": 14,
+        "min_bars": 30,
+        "min_volume_ratio": 0.7,         # looser than band_pullback's 0.8
+        "min_stop_ticks": 30,            # NQ noise floor (looser; reversion entries are tight)
+        "max_stop_ticks": 100,           # ceiling — skip if natural stop wider
+        "target_rr": 1.5,                # fallback when target_at_vwap=False
+        "target_at_vwap": True,          # default: target VWAP itself, not opposite band
+        # Time-of-day block (CT). 08:30-09:30 = open volatility (per
+        # bias_momentum forensic finding §4 in trade_analysis_2026-05-03.md).
+        "block_windows": [("08:30", "09:30")],
+        "max_hold_min": 30,
+    },
 }
 
 # Backfill default ai_filter_mode="advisory" on every strategy that
