@@ -19,6 +19,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from pathlib import Path
 
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -69,6 +70,62 @@ trade_log.propagate = False
 _th = logging.FileHandler(os.path.join(LOG_DIR, "trades.log"))
 _th.setFormatter(logging.Formatter("%(asctime)s  %(message)s"))
 trade_log.addHandler(_th)
+
+
+# ─── Sprint H v3: volumetric bar handling ──────────────────────────
+# Tests monkeypatch _VOLUMETRIC_ROOT via setattr; production callers
+# leave it at the project root.
+_VOLUMETRIC_ROOT = Path(__file__).resolve().parent.parent
+
+# Required keys on a "volumetric_bar" message (a malformed message —
+# missing any of these — gets dropped without corrupting the latest
+# file). Schema matches strategies/footprint_cvd_reversal.py reader.
+VOLUMETRIC_REQUIRED = frozenset({
+    "type", "ts", "instrument",
+    "open", "high", "low", "close",
+    "delta", "total_volume", "buy_volume", "sell_volume",
+    "poc", "imbalances", "stacked_buy", "stacked_sell",
+    "cvd_session",
+})
+
+
+async def _handle_volumetric_bar(msg: dict, root: Path | None = None) -> None:
+    """Persist a volumetric bar from TickStreamer to disk.
+
+    Atomic write to data/volumetric_latest.json (.tmp -> rename so a
+    malformed second message never corrupts the previous good one) and
+    append to logs/volumetric_history.jsonl.
+
+    Strategy `footprint_cvd_reversal` reads both files. Until
+    TickStreamer.cs (Sprint H Phase 2a) starts emitting these messages
+    the strategy logs DATA_NOT_AVAILABLE and stays dormant.
+
+    Args:
+        msg:  parsed JSON dict from the TCP message router (must
+              include all keys in VOLUMETRIC_REQUIRED).
+        root: project-root override (tests pass tmp_path; production
+              leaves None and uses _VOLUMETRIC_ROOT).
+    """
+    if not VOLUMETRIC_REQUIRED.issubset(msg.keys()):
+        missing = VOLUMETRIC_REQUIRED - set(msg.keys())
+        logger.warning(
+            f"[VOLUMETRIC] dropped malformed bar — missing {sorted(missing)}"
+        )
+        return
+
+    base = Path(root) if root is not None else _VOLUMETRIC_ROOT
+
+    latest = base / "data" / "volumetric_latest.json"
+    latest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = latest.with_suffix(".tmp")
+    payload = json.dumps(msg)
+    tmp.write_text(payload, encoding="utf-8")
+    tmp.replace(latest)
+
+    history = base / "logs" / "volumetric_history.jsonl"
+    history.parent.mkdir(parents=True, exist_ok=True)
+    with history.open("a", encoding="utf-8") as f:
+        f.write(payload + "\n")
 
 
 class BridgeServer:
@@ -364,6 +421,15 @@ class BridgeServer:
                     self.dom_last_update = time.time()
                     await self._broadcast_to_bots(json.dumps(data))
                     await asyncio.sleep(0)
+
+                elif msg_type == "volumetric_bar":
+                    # Sprint H v3: 1,500-tick volumetric bar from
+                    # TickStreamer.cs (Order Flow+ data). Persisted to
+                    # disk for strategies/footprint_cvd_reversal.py to
+                    # read on each evaluate(). Fire-and-forget — the
+                    # handler swallows malformed messages without
+                    # corrupting the previous good latest file.
+                    await _handle_volumetric_bar(data)
 
         except asyncio.IncompleteReadError:
             pass
