@@ -909,20 +909,44 @@ class BaseBot:
             age_s = now - pos.exit_pending_since
             from bridge.oif_writer import write_oif as _write_oif
             try:
-                # Directional cover order — opposite side of pos.direction.
-                # SHORT pos → BUY 1 to cover; LONG pos → SELL 1 to flatten.
-                cover_action = "BUY" if pos.direction == "SHORT" else "SELL"
+                # 2026-05-04 fix: cover action MUST be derived from NT8's
+                # ACTUAL direction (nt8_state[0]), NOT pos.direction.
+                # Forensic: at 08:01 today the bot kept submitting
+                # SELL 1 MARKET on SimBias Momentum because pos.direction
+                # said LONG, but NT8 actually held a phantom SHORT 1
+                # (CLOSEPOSITION-vs-OCO race had flipped the position).
+                # NT8 correctly rejected each SELL ("Exceeds account's
+                # maximum position quantity") because SELL on SHORT 1
+                # would mean SHORT 2. Trust NT8's reported state — it's
+                # the authoritative source for what we need to flatten.
+                #
+                # nt8_state is (direction, qty, avg_price) — direction
+                # is "LONG" or "SHORT". Cover is the opposite side.
+                nt8_dir = nt8_state[0]
+                nt8_qty = int(nt8_state[1] or 1)
+                cover_action = "BUY" if nt8_dir == "SHORT" else "SELL"
                 _write_oif(
                     cover_action,
-                    qty=int(pos.contracts or 1),
+                    qty=nt8_qty,
                     account=pos.account,
                     order_type="MARKET",
                     trade_id=f"{pos.trade_id}_retry{int(age_s)}",
                 )
+                # Log when Python and NT8 disagree on direction — that's a
+                # state-desync bug worth investigating, even though the
+                # retry now does the right thing regardless.
+                if pos.direction != nt8_dir:
+                    logger.warning(
+                        f"[EXIT_RETRY:{pos.trade_id}] STATE DESYNC: "
+                        f"Python pos.direction={pos.direction!r} but NT8 "
+                        f"shows {nt8_dir!r} — using NT8 direction for cover. "
+                        f"Likely CLOSEPOSITION-vs-OCO race created phantom "
+                        f"reverse position."
+                    )
                 logger.warning(
                     f"[EXIT_RETRY:{pos.trade_id}] {pos.account} still "
-                    f"{nt8_state[0]} {nt8_state[1]}@{nt8_state[2]} after "
-                    f"{age_s:.0f}s — re-sent {cover_action} 1 MARKET to "
+                    f"{nt8_dir} {nt8_qty}@{nt8_state[2]} after "
+                    f"{age_s:.0f}s — sent {cover_action} {nt8_qty} MARKET to "
                     f"flatten (attempt at age={age_s:.0f}s)"
                 )
             except Exception as _e:

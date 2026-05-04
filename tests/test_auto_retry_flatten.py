@@ -202,6 +202,87 @@ def test_halt_fires_after_escalation_window(fake_bot):
     assert mock_tg.called, "telegram must fire past 5-minute escalation window"
 
 
+# ─── direction is taken from NT8, NOT Python state (desync safety) ────
+
+def test_cover_action_uses_nt8_direction_when_python_says_long(fake_bot):
+    """REGRESSION: 2026-05-04 08:01 — Python pos.direction was LONG but
+    NT8 actually held SHORT 1 (phantom from CLOSEPOSITION-vs-OCO race).
+    Old code computed `cover = "SELL"` from pos.direction, which NT8
+    rejected (`Exceeds account's maximum position quantity` — SELL on
+    top of SHORT 1 would mean SHORT 2). New code uses NT8's reported
+    direction, so phantom SHORT → BUY 1 MARKET (correct cover)."""
+    from bots.base_bot import BaseBot
+    pm = fake_bot.positions
+    # Python state says LONG (the ORIGINAL position before the race).
+    pm.open_position(
+        trade_id="desync1", direction="LONG", entry_price=27800.0,
+        contracts=1, stop_price=27775.0, target_price=27825.0,
+        strategy="bias_momentum", reason="t", account="SimBias Momentum",
+    )
+    pm.mark_exit_pending("desync1", exit_price=27775.0, exit_reason="stop_loss")
+    pm.get_position("desync1").exit_pending_since = time.time() - 70.0
+
+    # NT8 says SHORT (the phantom flip).
+    with patch("bridge.oif_writer.write_oif") as mock_write, \
+         patch("core.startup_reconciliation._read_position_file",
+               return_value=("SHORT", 1, 27802.25)):
+        BaseBot._resolve_exit_pending_positions(fake_bot)
+
+    assert mock_write.called
+    action = mock_write.call_args.args[0] if mock_write.call_args.args \
+             else mock_write.call_args.kwargs.get("action")
+    # Critical: must be BUY (covers SHORT), NOT SELL (which NT8 rejected)
+    assert action == "BUY", (
+        f"phantom SHORT must be covered with BUY, not {action!r} — "
+        f"sending SELL on top of SHORT 1 triggers NT8's max-position "
+        f"rejection (the exact bug seen in production at 08:01:06)"
+    )
+    assert mock_write.call_args.kwargs.get("account") == "SimBias Momentum"
+
+
+def test_cover_action_uses_nt8_direction_when_python_says_short(fake_bot):
+    """Mirror case: Python SHORT, NT8 actually LONG → SELL 1 MARKET."""
+    from bots.base_bot import BaseBot
+    pm = fake_bot.positions
+    pm.open_position(
+        trade_id="desync2", direction="SHORT", entry_price=27800.0,
+        contracts=1, stop_price=27825.0, target_price=27775.0,
+        strategy="bias_momentum", reason="t", account="SimX",
+    )
+    pm.mark_exit_pending("desync2", exit_price=27825.0, exit_reason="stop_loss")
+    pm.get_position("desync2").exit_pending_since = time.time() - 70.0
+
+    with patch("bridge.oif_writer.write_oif") as mock_write, \
+         patch("core.startup_reconciliation._read_position_file",
+               return_value=("LONG", 1, 27802.25)):
+        BaseBot._resolve_exit_pending_positions(fake_bot)
+
+    action = mock_write.call_args.args[0] if mock_write.call_args.args \
+             else mock_write.call_args.kwargs.get("action")
+    assert action == "SELL"
+
+
+def test_cover_qty_uses_nt8_qty_not_python_qty(fake_bot):
+    """If NT8 reports SHORT 2 (somehow ended up oversized), cover should
+    BUY 2, not BUY 1 — flatten the WHOLE actual NT8 position."""
+    from bots.base_bot import BaseBot
+    pm = fake_bot.positions
+    pm.open_position(
+        trade_id="oversize1", direction="LONG", entry_price=27800.0,
+        contracts=1, stop_price=27775.0, target_price=27825.0,
+        strategy="bias_momentum", reason="t", account="SimX",
+    )
+    pm.mark_exit_pending("oversize1", exit_price=27775.0, exit_reason="stop_loss")
+    pm.get_position("oversize1").exit_pending_since = time.time() - 70.0
+
+    with patch("bridge.oif_writer.write_oif") as mock_write, \
+         patch("core.startup_reconciliation._read_position_file",
+               return_value=("SHORT", 2, 27802.25)):  # 2 contracts in NT8
+        BaseBot._resolve_exit_pending_positions(fake_bot)
+
+    assert mock_write.call_args.kwargs.get("qty") == 2
+
+
 # ─── happy path: NT8 confirmed FLAT cleans up normally ────────────────
 
 def test_finalize_when_nt8_confirms_flat(fake_bot):
