@@ -84,3 +84,40 @@ pip install -r requirements.txt   # websockets, flask, numpy, aiofiles, python-d
 - Recovery mode: -$30 daily → 50% size reduction
 - Primary session: 8:30-10:00 AM CST
 - Base RR: 1.5:1
+
+## Daily Monitoring Workflow (Sprint C)
+
+All four tools are read-only and write to `out/`. Run from project root.
+
+| When | Command | Reads | Writes |
+|------|---------|-------|--------|
+| After each session | `python tools/daily_session_summary.py` | `logs/history/<today>_<bot>.jsonl` | `out/daily_summary_<today>.md` |
+| Weekly (or after risk-code changes) | `python tools/verify_halt_signatures.py` | (synthetic triggers) | `out/halt_verify_<today>.md` |
+| Weekly | `python tools/validation_tracker.py --post-b13-only` | `logs/trade_memory.json` | `out/validation_status_<today>.md` |
+| As needed | `python tools/backfill_commissions.py` | `logs/trade_memory.json` | `out/historical_pnl_recompute_<today>.md` |
+
+### Statistical tier reference
+
+| Tier | Trades | Confidence | Decisions Allowed |
+|------|-------:|-----------:|---|
+| INSUFFICIENT_SAMPLE | < 30 | none | WATCH only |
+| PRELIMINARY | 30–99 | ~70% | WATCH or KILL if PF<0.7 |
+| TENTATIVE | 100–384 | ~90% | + GRADUATE candidate |
+| VALIDATED | 385–665 | ~95% | + SCALE candidate |
+| HIGH_CONFIDENCE | 666+ | ~99% | full confidence |
+
+Phoenix's project 50-trade graduation gate sits inside PRELIMINARY —
+enough to start making directional decisions, NOT enough to bet the
+farm on. The validation_tracker tool surfaces this uncertainty
+explicitly via Wilson 95% CI on win rate.
+
+### Anomaly detection (daily_session_summary.py)
+
+After each session, the tool flags two kinds of anomaly vs the
+trailing 7-day baseline:
+
+- `signal_volume_drop`: today's signals < 40% of the strategy's
+  trailing average. **Early warning that a Sprint A gate may be
+  rejecting too aggressively.**
+- `silent_strategy`: trailing avg ≥ 1/day, today = 0. **Critical —
+  investigate before next session.**

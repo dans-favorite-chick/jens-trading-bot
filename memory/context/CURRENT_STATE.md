@@ -351,3 +351,93 @@ issues are all fixed in the current versions.
 5. CPCV / DSR / PBO validation harness implementation when Phase C
    data depth allows (currently the weekly_evolution checkboxes read
    "NOT YET RUN").
+
+## Sprint C — Observability + Validation Hardening (2026-05-03)
+
+Six commits shipped on top of Sprint A:
+
+| Commit  | Tool / change |
+|---------|---------------|
+| `c78d6f6` | feat(b13-stats): backfill quality assessment |
+| `e56c522` | fix(dashboard): pre/post-B13 backwards-compat |
+| `2d216a1` | feat(daily): tools/daily_session_summary.py |
+| `05d2af4` | feat(validation): tools/validation_tracker.py |
+| `f3d73d3` | feat(halt-verify): tools/verify_halt_signatures.py |
+| (this)    | docs: update CURRENT_STATE + CLAUDE.md |
+
+### New tools (all read-only, all produce markdown reports in out/)
+
+- `python tools/backfill_commissions.py` — historical net-P&L recompute
+  + baseline quality flags. Run once, then again any time
+  trade_memory.json grows significantly. Output:
+  `out/historical_pnl_recompute_<today>.md`.
+- `python tools/daily_session_summary.py [--date YYYY-MM-DD] [--bot sim|prod|both]`
+  — daily heartbeat. Run after every session. Includes 7-day-baseline
+  anomaly detection (silent strategies, signal volume drops). Output:
+  `out/daily_summary_<today>.md`.
+- `python tools/validation_tracker.py [--since YYYY-MM-DD] [--post-b13-only]`
+  — statistical-tier decision support. Wilson 95% CI on WR. Run weekly.
+  Output: `out/validation_status_<today>.md`.
+- `python tools/verify_halt_signatures.py` — synthetic halt path
+  end-to-end test. Run after any risk_manager / registry change.
+  Output: `out/halt_verify_<today>.md`.
+
+### Statistical tier reference (key insight)
+
+Phoenix's project 50-trade graduation gate is **PRELIMINARY** by
+published research standards:
+
+| Tier | Trades | Confidence |
+|---|---:|---:|
+| INSUFFICIENT_SAMPLE | < 30 | none |
+| PRELIMINARY | 30–99 | ~70% |
+| TENTATIVE | 100–384 | ~90% |
+| VALIDATED | 385–665 | ~95% |
+| HIGH_CONFIDENCE | 666+ | ~99% |
+
+`validation_tracker.py` surfaces this in the Decision column —
+GRADUATE / SCALE recommendations require TENTATIVE tier (n ≥ 100)
+at minimum, KILL_CANDIDATE only fires at PF < 0.7 with n ≥ 30.
+
+### Live findings from first Sprint C run
+
+Backfill (1,105 trades, 20-day span):
+- Avg `|gross|/trade` = $108.45 with 1.00 contracts/trade — strongly
+  suggests legacy NQ data has been mixed into the baseline (1 NQ tick
+  = $5 vs 1 MNQ tick = $0.50). **Use `--post-b13-only` for clean
+  validation comparisons** once enough post-B13 trades accumulate.
+- `_reconciled` strategy n=3, net=−$80,216 — manual cleanup outliers,
+  not real strategy trades. Excluded from validation comparisons.
+
+Validation tracker:
+- `high_precision_only` n=557 VALIDATED tier: WR 29% (CI 25–33%) — at
+  KILL_CANDIDATE threshold.
+- `bias_momentum` n=225 TENTATIVE: WR 28% (22–34%) — Sprint A's gate
+  fixes (skip_on_stop_clamp, rsi_div_hard_gate, trend_stall_grace_s)
+  should improve this on go-forward data; track via `--post-b13-only`.
+
+Halt verification: ALL 4 SIGNATURES PASS — Sprint A's Fix E logging
+reaches the production call chain end-to-end.
+
+### Daily / weekly workflow during validation window
+
+```
+Morning (pre-session, optional):
+  python tools/validation_tracker.py --post-b13-only
+
+After session close:
+  python tools/daily_session_summary.py
+  # Read out/daily_summary_<today>.md
+  # If anomalies present -> investigate before next session
+
+Weekly:
+  python tools/backfill_commissions.py     # refresh historical baseline
+  python tools/verify_halt_signatures.py   # re-confirm halt paths intact
+  python tools/validation_tracker.py --post-b13-only
+```
+
+### Test suite delta
+
+Sprint A baseline: 1,295 passing
+Sprint C final:    1,339 passing (+44)
+0 failing, 4 skipped throughout.
