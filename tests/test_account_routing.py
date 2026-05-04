@@ -117,20 +117,22 @@ class TestFallbackAndEdges:
         assert get_account_for_signal("opening_session", "made_up_sub") == "Sim101"
 
     def test_validate_account_map_returns_expected_count(self):
-        # Post-f5ee73f (byte-exact + compression split + top-level orb):
+        # Post-Sprint-H-v3 (byte-exact + compression split + top-level orb
+        # + footprint_cvd_reversal):
         #
         # opening_session (6 subs, all distinct accounts):
         #   SimOpenDrive, SimOpen Test Drive, SimOpen Auction In Range,
         #   SimOpen Auction Out of Range, SimPremarket Breakout, SimORB
-        # Flat strategies (11, all distinct):
+        # Flat strategies (12, all distinct):
         #   SimBias Momentum, SimSpring Setup, SimVWapp Pullback,
         #   SimVwap Band Pullback, SimVwap Reversion (added 2026-05-03),
         #   SimDom Pull Back, SimIB Breakout,
         #   SimCompression Breakout, SimCompression Break out 30 MIN,
-        #   SimNoise Area, SimStand alone ORB
-        # + Sim101 default = 18 unique NT8 accounts.
+        #   SimNoise Area, SimStand alone ORB,
+        #   SimFootprintchart (Sprint H v3, 2026-05-04)
+        # + Sim101 default = 19 unique NT8 accounts.
         accounts = validate_account_map()
-        assert len(accounts) == 18
+        assert len(accounts) == 19
         # Spot-check a few known members.
         assert "Sim101" in accounts
         assert "SimOpenDrive" in accounts

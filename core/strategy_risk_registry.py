@@ -58,6 +58,9 @@ STRATEGY_KEYS: list[str] = [
     "compression_breakout_30m",
     "noise_area",
     "orb",
+    # Sprint H v3 (2026-05-04) — institutional 4-confluence reversal.
+    # Lab-only (validated=False); routes to SimFootprintchart.
+    "footprint_cvd_reversal",
     # Parent key for sub-strategy dispatch (opening_session evaluates all 6 subs)
     "opening_session",
 ]

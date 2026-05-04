@@ -408,6 +408,54 @@ STRATEGIES = {
         "block_windows": [("08:30", "09:30")],
         "max_hold_min": 30,
     },
+    # ─── Sprint H v3 (2026-05-04): Footprint + CVD Reversal ────
+    # Institutional 4-confluence reversal at MenthorQ HTF levels.
+    # Operates on a 1,500-tick volumetric stream from NT8 (Order
+    # Flow+ data emitted by TickStreamer.cs and persisted by
+    # bridge_server.py:_handle_volumetric_bar).
+    #
+    # Stays DORMANT logging DATA_NOT_AVAILABLE until TickStreamer.cs
+    # ships the volumetric emitter on the NT8 side. Lab-only until
+    # 50+ trades + PF > 1.3.
+    "footprint_cvd_reversal": {
+        "enabled": True,
+        "validated": False,           # LAB ONLY
+        # HTF level confluence
+        "level_buffer_ticks": 8,
+        "require_menthorq_level": True,
+        # CVD divergence
+        "divergence_lookback_bars": 10,
+        # Footprint
+        "oversized_imbalance_ratio": 10.0,
+        "absorption_min_delta": 50.0,
+        "absorption_max_range_ticks": 10.0,
+        # Compression (5 sub-dimensions × 5pts each)
+        "compression_lookback_bars": 3,
+        "compression_baseline_bars": 20,
+        "compression_size_threshold": 0.6,    # < 0.6× baseline = compressing
+        "compression_volume_floor": 0.8,      # >= 0.8× baseline = volume holding
+        "compression_effort_threshold": 1.5,  # > 1.5× baseline = effort spike
+        # Entry
+        "entry_threshold_iqs": 70,            # raise = pickier; lower = more signals
+        # Stops / targets
+        "stop_buffer_ticks": 4,
+        "max_stop_ticks": 60,
+        "target_t1_rr": 1.0,                  # 50% scale-out
+        "target_t2_rr": 2.0,                  # final target
+        "scale_out_pct": 0.5,
+        "time_stop_bars": 20,
+        # Gates (lists in JSON; tuples internally)
+        "lunch_block_start_ct": [10, 0],
+        "lunch_block_end_ct":   [13, 29],
+        "session_open_ct":      [8, 30],
+        "session_close_ct":     [15, 0],
+        "session_open_skip_min": 5,
+        "session_close_skip_min": 5,
+        "block_negative_strong_long": True,
+        "block_positive_strong_short": True,
+        "data_freshness_sec": 90,
+        "min_history_bars": 25,
+    },
 }
 
 # Backfill default ai_filter_mode="advisory" on every strategy that

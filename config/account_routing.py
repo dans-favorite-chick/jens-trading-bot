@@ -64,6 +64,13 @@ STRATEGY_ACCOUNT_MAP: Dict[str, Union[str, Dict[str, str]]] = {
     "noise_area":                "SimNoise Area",
     "orb":                       "SimStand alone ORB",
 
+    # Sprint H v3 (2026-05-04): institutional 4-confluence reversal
+    # on a 1,500-tick volumetric stream. Lab-only (validated=False)
+    # until 50+ trades + PF > 1.3. Operator must create this account
+    # in NT8 ATI before signals will fill — meanwhile, signals route
+    # but get dropped at the NT8 side.
+    "footprint_cvd_reversal":    "SimFootprintchart",
+
     # Fallback — lands here on any unmapped strategy or sub_strategy.
     "_default":                  _DEFAULT_ACCOUNT,
 }
