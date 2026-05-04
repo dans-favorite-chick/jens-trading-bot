@@ -441,3 +441,90 @@ Weekly:
 Sprint A baseline: 1,295 passing
 Sprint C final:    1,339 passing (+44)
 0 failing, 4 skipped throughout.
+
+## Sprint D — Stuck-exit fixes + alert noise reduction (2026-05-04)
+
+Six commits over the morning:
+- `e6129d8` fix(stuck-position): bulletproof auto-retry flatten + OIF guard
+- `9c3e74b` fix(stuck-position): cover-action uses NT8 direction, not Python
+- `2a7aae6` fix(exits): defensive observability + reconciliation tools
+- `00e5a68` fix(alerts): EXIT_TIMEOUT one-shot + hourly rollup + RESOLVED
+- `c7486c7` fix(alerts): RECOVERY MODE one-shot per session day
+- `7b5144e` fix(alerts): watchdog 60s disconnect grace + restart threshold
+- `1c39b8b` feat(alerts): low-priority alert digest (4h or 10-msg flush)
+
+Estimated alert noise reduction: ~30/day → ~5-7 actionable/day.
+
+## Sprint E — Daily roadmap calibration + indicator audit (2026-05-04)
+
+Two commits:
+- `9cf9b70` feat(quin): tools/quin_roadmap_log.py — daily roadmap capture
+  + post-session calibration. Read-only labeled-dataset builder for
+  regime-conditional gating evaluation. After 10-15 days of calibration
+  data with avg score >= 0.70 → regime classifier earns authority over
+  strategy gating (Sprint F territory).
+- `561e61d` feat(audit): tools/indicator_audit.py — predictive-value ranking
+
+### New tool: indicator_audit
+
+`python tools/indicator_audit.py [--discover] [--post-b13-only]
+[--since YYYY-MM-DD] [--strategy NAME] [--min-sample N]`
+
+Reads logs/trade_memory.json. Computes per-indicator lift over base rate
+with Wilson 95% CIs and significance flags. Writes
+`out/indicator_audit_<today>.md`.
+
+**Two design choices worth knowing:**
+
+1. `result` and `exit_reason` are EXCLUDED from feature extraction —
+   they're post-hoc outcomes, not pre-trade predictors. Including them
+   yielded tautological 100% lift rows.
+2. Boolean confluence features (e.g. `conf:VWAP reclaim`) are compared
+   "with feature vs without feature at all" (different populations)
+   instead of the within-feature pivot, which collapses to nothing for
+   binary-presence features.
+
+### Interpretation guide
+
+1. **Top Predictive** — confluences/features that fire more on winning
+   trades, statistically significant. Boost weight or make required.
+2. **Top Contra-Indicators** — fire MORE on losing trades. Either remove
+   as confluences (noise) or invert sign (bot was reading backwards).
+3. **Tier Classifier Validation** — verifies whether A++/A/B/C ordering
+   matches outcome. If NOT predictive → defer Sprint B's tier-sizing
+   proposal; tier feature is currently noise, not signal.
+4. **Per-Strategy** — drives strategy-specific config decisions.
+5. **Per-Regime** — evidence for regime-conditional gating (Sprint F+).
+
+### Workflow
+
+```bash
+# Weekly during validation window:
+python tools/validation_tracker.py --post-b13-only
+python tools/indicator_audit.py --post-b13-only
+
+# Run full lifecycle once enough post-B13 data exists:
+python tools/indicator_audit.py             # all data (quick view)
+python tools/indicator_audit.py --post-b13-only  # clean baseline
+```
+
+Findings at PRELIMINARY tier are *hypotheses*. Findings at TENTATIVE+
+with non-overlapping CIs are *evidence*. Don't act on hypotheses.
+
+### Live audit findings on current trade_memory (1,123 trades, mixed eras)
+
+All findings at PRELIMINARY tier — informational only:
+- `market.pivot_s2=Q1` → WR 54.5% (lift +36.7pp, n=55)
+- `account=SimBias Momentum` → WR 16.5% (lift -29.9pp, n=91)
+  - Consistent with Sprint C validation_tracker flagging bias_momentum
+    as KILL_CANDIDATE territory.
+
+Post-B13-only run yielded 17 trades — too few for significance. The
+audit will sharpen as the validation window fills.
+
+### Test suite delta
+
+Sprint C final:  1,339 passing
+Sprint D final:  1,418 passing (+79)
+Sprint E final:  1,468 passing (+50)
+0 failing, 4 skipped throughout.
