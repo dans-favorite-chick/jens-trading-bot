@@ -113,6 +113,41 @@ except ImportError:
 logger = logging.getLogger("Bot")
 
 
+def should_reject_on_rsi_div(
+    signal_direction: str,
+    div_type: str,
+    div_strength: float,
+    hard_gate_enabled: bool,
+    min_strength: float = 20,
+) -> bool:
+    """Fix (2026-05-03): rsi_div_hard_gate evaluator.
+
+    Returns True when the signal should be REJECTED due to opposing
+    RSI divergence on a strategy that has the hard-gate enabled.
+
+    Conditions for rejection (all must hold):
+      - hard_gate_enabled is True (per-strategy config)
+      - div_strength >= min_strength (otherwise too weak to act on)
+      - divergence direction OPPOSES the signal direction:
+          bullish-div + LONG = aligned (no rejection)
+          bullish-div + SHORT = opposing (REJECT)
+          bearish-div + LONG = opposing (REJECT)
+          bearish-div + SHORT = aligned (no rejection)
+
+    Forensic basis: opposing RSI div appeared in 6 losers / 0 winners
+    in the bias_momentum dataset.
+    """
+    if not hard_gate_enabled:
+        return False
+    if div_strength < min_strength:
+        return False
+    aligned = (
+        (div_type == "bullish" and signal_direction == "LONG")
+        or (div_type == "bearish" and signal_direction == "SHORT")
+    )
+    return not aligned
+
+
 def should_suppress_trend_stall(held_s: float, grace_s: int) -> bool:
     """Fix A (2026-05-03): trend_stall grace period.
 
@@ -2841,13 +2876,40 @@ class BaseBot:
                         logger.info(f"[RSI DIV BOOST] +{div_boost} confidence -> "
                                      f"{best_signal.confidence:.0f} ({rsi_div['type']})")
                     else:
-                        # Opposing divergence — log but don't block
-                        best_signal.confluences.append(
-                            f"Warning: opposing RSI {rsi_div['type']} div "
-                            f"(RSI={rsi_div['rsi_current']:.0f})")
-                        logger.info(f"[RSI DIV] Opposing {rsi_div['type']} divergence "
-                                     f"(observation only, not blocking)")
-                    self._last_eval["rsi_divergence"] = rsi_div
+                        # 2026-05-03 fix(rsi): opposing-RSI-div is now a hard
+                        # gate when the source strategy has rsi_div_hard_gate=True.
+                        # Forensic audit: this confluence appeared in 6 losers /
+                        # 0 winners in bias_momentum dataset. Research-backed —
+                        # regular RSI divergence during established trend is a
+                        # documented ~65%+ accurate momentum-exhaustion signal
+                        # (tradealgo.com, alchemymarkets.com).
+                        _hard_gate = False
+                        for _strat in self.strategies:
+                            if getattr(_strat, "name", None) == best_signal.strategy:
+                                _hard_gate = bool(_strat.config.get("rsi_div_hard_gate", False))
+                                break
+                        if _hard_gate:
+                            logger.info(
+                                f"[REJECT:{best_signal.strategy}] opposing RSI "
+                                f"{rsi_div['type']} divergence — hard gate "
+                                f"(was 0W/6L empirically; trend-tiring signal)"
+                            )
+                            self._last_eval["rsi_divergence"] = rsi_div
+                            self._last_eval["hard_gate_rejected"] = (
+                                f"opposing RSI {rsi_div['type']} div"
+                            )
+                            # Early return — short-circuits the rest of the
+                            # eval pipeline. No entry will fire for this tick.
+                            return
+                        else:
+                            # Legacy soft-warning behavior (flag disabled)
+                            best_signal.confluences.append(
+                                f"Warning: opposing RSI {rsi_div['type']} div "
+                                f"(RSI={rsi_div['rsi_current']:.0f})")
+                            logger.info(f"[RSI DIV] Opposing {rsi_div['type']} divergence "
+                                         f"(observation only, not blocking)")
+                    if best_signal is not None:
+                        self._last_eval["rsi_divergence"] = rsi_div
             except Exception as e:
                 logger.debug(f"[RSI DIV] Error (non-blocking): {e}")
 
