@@ -323,6 +323,17 @@ def _stage_oif(cmd: str, trade_id: str, suffix: str = "") -> tuple[str, str]:
     # prefix (P0.2/6aabbe0) caused ~33 hours of phantom trades before NT8's
     # rejection was noticed. Keep the author tag embedded further into the
     # name so PhoenixOIFGuard can still match `_phoenix_\d+_`.
+    #
+    # 2026-05-04 fix: PhoenixOIFGuard regex `(^phoenix_\d+_)|(_phoenix_\d+_)`
+    # REQUIRES a trailing underscore after the PID. When trade_id and suffix
+    # are both empty, the previous `oif{N}_phoenix_{pid}.txt` failed the regex
+    # (digits followed by `.` not `_`) and the file was quarantined as ROGUE.
+    # That quarantined every CLOSEPOSITION-without-trade_id call, including
+    # the runtime-reconciliation flatten retries — leaving stuck positions
+    # silently un-closeable. Force a stable suffix when both are empty so the
+    # guard regex always matches.
+    if not tag and not sfx:
+        sfx = "_op"  # "operator/orphan" — always-trailing token, regex-safe
     fname = f"oif{_oif_counter}_phoenix_{_PHOENIX_PID}{tag}{sfx}.txt"
     final_path = os.path.join(OIF_INCOMING, fname)
     # Return same path for both — _commit_staged becomes a no-op for the

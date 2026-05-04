@@ -232,15 +232,20 @@ class TestRuntimeResolution:
     def test_timeout_fires_critical_and_halts_strategy(
         self, tmp_path, monkeypatch, caplog,
     ):
-        """After EXIT_PENDING_TIMEOUT_S with NT8 still non-flat, CRITICAL
-        log + strategy halt."""
+        """After RETRY_ESCALATE_S (5min) with NT8 still non-flat,
+        CRITICAL log + strategy halt fire.
+
+        2026-05-04: behavior changed from "halt immediately at 60s" to
+        "retry every cycle, escalate to CRITICAL+halt only after 5min
+        of failed retries". Test bumps age to past escalation window."""
         import logging
 
         pm = PositionManager()
         _open_test_position(pm, tid="t1", account="SimORB")
         pm.mark_exit_pending("t1", 22010.0, "target_hit")
-        # Backdate the exit_pending_since so the timeout has already hit.
-        pm.get_position("t1").exit_pending_since = time.time() - 120
+        # Backdate exit_pending_since past the 5min escalation window
+        # (300s) so CRITICAL + halt fire (not just a retry).
+        pm.get_position("t1").exit_pending_since = time.time() - 400
 
         # NT8 file still shows the position — not flat.
         fname = tmp_path / "MNQM6 Globex_SimORB_position.txt"
@@ -250,19 +255,60 @@ class TestRuntimeResolution:
         monkeypatch.setattr("config.settings.INSTRUMENT", "MNQM6")
 
         bot = self._build_bot_for_resolve(pm, str(tmp_path))
-        bot.EXIT_PENDING_TIMEOUT_S = 60.0  # 120s old > 60s timeout
+        bot.EXIT_PENDING_TIMEOUT_S = 60.0  # 400s old >> 60s timeout >> 300s esc
 
         with caplog.at_level(logging.CRITICAL, logger="base_bot"):
             bot._resolve_exit_pending_positions()
 
-        # CRITICAL logged with the timeout tag
+        # CRITICAL logged with the timeout tag (escalation fired)
         assert any(
             "EXIT_PENDING_TIMEOUT" in rec.getMessage()
             for rec in caplog.records
         )
         # Position still in pending state (we don't force-finalize on
-        # timeout — operator must flatten manually and reconcile).
+        # timeout — auto-retry continues; operator may also intervene).
         assert pm.get_position("t1").exit_pending is True
+
+    def test_retry_fires_at_60s_without_critical(
+        self, tmp_path, monkeypatch, caplog,
+    ):
+        """2026-05-04 new behavior: at age past EXIT_PENDING_TIMEOUT_S but
+        before RETRY_ESCALATE_S (5min), retry fires (WARNING) but CRITICAL
+        does NOT — operator hasn't been paged yet."""
+        import logging
+
+        pm = PositionManager()
+        _open_test_position(pm, tid="t1", account="SimORB")
+        pm.mark_exit_pending("t1", 22010.0, "target_hit")
+        # 120s = past 60s timeout, before 300s escalation.
+        pm.get_position("t1").exit_pending_since = time.time() - 120
+
+        fname = tmp_path / "MNQM6 Globex_SimORB_position.txt"
+        fname.write_text("LONG;1;22000.0\n")
+
+        monkeypatch.setattr("config.settings.OIF_OUTGOING", str(tmp_path))
+        monkeypatch.setattr("config.settings.INSTRUMENT", "MNQM6")
+
+        bot = self._build_bot_for_resolve(pm, str(tmp_path))
+        bot.EXIT_PENDING_TIMEOUT_S = 60.0
+
+        with caplog.at_level(logging.DEBUG, logger="Bot"):
+            bot._resolve_exit_pending_positions()
+
+        # CRITICAL NOT logged (within retry window)
+        critical_msgs = [
+            r.getMessage() for r in caplog.records
+            if r.levelname == "CRITICAL" and "EXIT_PENDING_TIMEOUT" in r.getMessage()
+        ]
+        assert critical_msgs == [], (
+            f"CRITICAL fired too early (within 5min retry window): {critical_msgs}"
+        )
+        # WARNING for the retry attempt
+        retry_msgs = [
+            r.getMessage() for r in caplog.records
+            if "EXIT_RETRY" in r.getMessage()
+        ]
+        assert retry_msgs, "expected an EXIT_RETRY warning at age past timeout"
 
 
 if __name__ == "__main__":

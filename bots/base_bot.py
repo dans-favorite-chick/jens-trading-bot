@@ -887,28 +887,71 @@ class BaseBot:
                         logger.error(f"[EXIT_FINALIZE] _on_trade_closed failed: {_e!r}")
                 continue
 
-            # NT8 still shows a position on this account. Check timeout.
+            # NT8 still shows a position on this account. Auto-retry the
+            # flatten before escalating. 2026-05-04 fix: previously this
+            # path just logged CRITICAL + halted the strategy and demanded
+            # an "operator flatten". Forensic: 2 stuck SHORT positions
+            # (SimDom Pull Back, SimVWapp Pullback) on 2026-05-03/04 were
+            # NOT recoverable for hours because the bot only logged and
+            # gave up. Root causes were a CLOSEPOSITION-vs-OCO-stop race
+            # (NT8 opens a fresh reverse position when CLOSEPOSITION arrives
+            # at the same moment the OCO stop fills) AND PhoenixOIFGuard
+            # quarantining filenames without a trailing `_<word>` token.
+            # Both are now mitigated upstream, but this loop must also
+            # retry instead of giving up.
+            #
+            # Retry strategy: write a directional MARKET order (BUY-to-cover
+            # SHORT, SELL-to-flatten LONG) every reconciliation cycle. This
+            # bypasses CLOSEPOSITION entirely so the OCO race cannot
+            # double-fill into a reverse position. After RETRY_ESCALATE_S
+            # seconds of retries we ALSO fire the telegram (deduped) so the
+            # operator knows something is wrong — but we keep retrying.
             age_s = now - pos.exit_pending_since
-            if age_s > self.EXIT_PENDING_TIMEOUT_S:
+            from bridge.oif_writer import write_oif as _write_oif
+            try:
+                # Directional cover order — opposite side of pos.direction.
+                # SHORT pos → BUY 1 to cover; LONG pos → SELL 1 to flatten.
+                cover_action = "BUY" if pos.direction == "SHORT" else "SELL"
+                _write_oif(
+                    cover_action,
+                    qty=int(pos.contracts or 1),
+                    account=pos.account,
+                    order_type="MARKET",
+                    trade_id=f"{pos.trade_id}_retry{int(age_s)}",
+                )
+                logger.warning(
+                    f"[EXIT_RETRY:{pos.trade_id}] {pos.account} still "
+                    f"{nt8_state[0]} {nt8_state[1]}@{nt8_state[2]} after "
+                    f"{age_s:.0f}s — re-sent {cover_action} 1 MARKET to "
+                    f"flatten (attempt at age={age_s:.0f}s)"
+                )
+            except Exception as _e:
+                logger.error(
+                    f"[EXIT_RETRY:{pos.trade_id}] retry write_oif failed: {_e!r}"
+                )
+
+            # Escalate to telegram + strategy halt only AFTER the
+            # escalation window. Keep retrying every cycle regardless.
+            RETRY_ESCALATE_S = 5 * 60   # 5 minutes of retries before paging
+            if age_s > RETRY_ESCALATE_S:
                 msg = (
                     f"[EXIT_PENDING_TIMEOUT:{pos.trade_id}] {pos.account} "
                     f"still shows {nt8_state[0]} {nt8_state[1]}@{nt8_state[2]} "
                     f"after {age_s:.0f}s — Python thinks flat but NT8 is not. "
-                    f"CLOSEPOSITION OIF likely never filled. Halting "
-                    f"strategy '{pos.strategy}' — operator flatten required."
+                    f"Bot is auto-retrying directional flatten every cycle. "
+                    f"Halting strategy '{pos.strategy}' until resolved."
                 )
                 logger.critical(msg)
                 try:
                     from core.telegram_notifier import send_sync
                     send_sync(
                         f"🚨 [EXIT_TIMEOUT] {pos.account} stuck exit_pending "
-                        f"{age_s:.0f}s — {msg}",
+                        f"{age_s:.0f}s — bot is auto-retrying flatten. {msg}",
                         dedup_key=f"exit_pending_timeout:{pos.trade_id}",
                     )
                 except Exception:
                     pass
-                # Strategy halt hook — existing StrategyRiskRegistry has a
-                # halt_strategy method; best-effort.
+                # Strategy halt hook — only after the escalation window.
                 try:
                     from core.strategy_risk_registry import StrategyRiskRegistry
                     reg = getattr(self, "_conflict_reg", None) or StrategyRiskRegistry()
