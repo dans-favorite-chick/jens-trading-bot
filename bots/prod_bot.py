@@ -1,8 +1,21 @@
 """
-Phoenix Bot — Production Bot
+Phoenix Bot — Paper-Trading Tester (named "prod" historically)
 
-Runs validated strategies only during defined trading windows.
-Tight risk limits, no experiments.
+Despite the "prod" name, this bot is the paper-trading tester:
+single-account harness pinned to Sim101 for simple P&L tracking and
+strategy-behavior verification. The actual multi-strategy validation
+work runs in sim_bot, which routes per-strategy across the dedicated
+Sim* accounts in config/account_routing.py:STRATEGY_ACCOUNT_MAP.
+
+Operational role
+----------------
+- prod_bot  → Sim101 paper account; tester / smoke-test harness
+- sim_bot   → multi-account lab; the real strategy validation work
+
+The historical "production" docstring (validated only / tight limits)
+no longer matches the operator's current usage — Sprint H opened it
+up to all strategies + all hours for debug visibility. It remains a
+single-account tester regardless.
 """
 
 import asyncio
@@ -24,53 +37,38 @@ logger = logging.getLogger("ProdBot")
 class ProdBot(BaseBot):
     bot_name = "prod"
 
-    # Sprint H (2026-05-04): only_validated set UNCONDITIONALLY to False
-    # at operator request. Pre-Sprint-H, prod loaded only validated=True
-    # strategies — currently 2 (bias_momentum, ib_breakout) — making prod
-    # nearly silent. Operator wants full strategy roster on prod for
-    # debug visibility before going live.
+    # Sprint H (2026-05-04): only_validated=False — prod loads every
+    # enabled strategy regardless of `validated` flag. Pre-Sprint-H,
+    # prod ran only validated=True strategies (2 of 10), making the
+    # paper-trading harness nearly silent. Operator opened it up so
+    # all 10 strategies emit signals through the Sim101 tester for
+    # behavioral debug visibility.
     #
-    # ⚠️  LIVE-MODE SAFETY IMPLICATION (operator-acknowledged):
-    # When LIVE_TRADING=True is flipped, prod will fire ALL 10 enabled
-    # strategies on real money — including 7 strategies that have NOT
-    # passed the project discipline (50+ trades / PF>1.3 in lab). Some
-    # are KILL_CANDIDATEs per Sprint C/F validation_tracker findings.
-    #
-    # BEFORE going live, operator should EITHER:
-    #   (a) audit each strategy's lab data and either disable
-    #       (`enabled=False` in config/strategies.py) or accept the risk
-    #   (b) restore the validated gate by changing this back to
-    #       `only_validated = True` (or use the conditional pattern:
-    #       `@property def only_validated(self): return LIVE_TRADING`)
-    #
-    # The safety gate is now off by operator decision (2026-05-04).
+    # If/when prod is ever pointed at a real-money account (e.g. via a
+    # different FORCE_ACCOUNT below), revisit this gate first — either
+    # set `only_validated = True` or use a conditional pattern like
+    # `@property def only_validated(self): return LIVE_TRADING`.
     only_validated = False
 
-    # Sprint I (2026-05-03): FORCE_ACCOUNT removed at operator request.
-    # Pre-Sprint-I (B57 2026-04-22), prod pinned EVERY signal to Sim101
-    # for clean single-account P&L. With Sprint H expanding the strategy
-    # roster from 2 → 10, that pin became a single-account bottleneck:
-    # only ONE position could be open across the whole prod bot at a
-    # time, while sim_bot ran all 10 concurrently on per-strategy
-    # accounts.
+    # B57 (2026-04-22) — restored 2026-05-03 after operator clarified:
+    # prod_bot IS the paper-trading tester. Every signal is pinned to
+    # the Sim101 paper account so P&L attribution stays trivial and
+    # there's no risk of a stray test signal landing on a real account.
     #
-    # FORCE_ACCOUNT=None → routing falls through to
-    # config/account_routing.py:get_account_for_signal(), which uses
-    # STRATEGY_ACCOUNT_MAP (per-strategy NT8 account). Prod now mirrors
-    # sim_bot's per-strategy account topology: each strategy fires on
-    # its own dedicated Sim* account, so concurrent positions across
-    # strategies are possible.
+    # The multi-account per-strategy routing (one Sim* account per
+    # strategy via config/account_routing.py:STRATEGY_ACCOUNT_MAP) is
+    # the JOB of sim_bot, not prod_bot. Prod stays single-account on
+    # purpose — concurrent positions across strategies happen on sim.
     #
-    # ⚠️  LIVE-MODE SAFETY IMPLICATION (operator-acknowledged):
-    # When LIVE_TRADING=True is flipped, EVERY strategy in
-    # STRATEGY_ACCOUNT_MAP routes to its mapped account. Operator must
-    # audit STRATEGY_ACCOUNT_MAP before go-live and either:
-    #   (a) confirm each mapped account is the intended live-money
-    #       destination
-    #   (b) restore the single-account pin by setting FORCE_ACCOUNT to
-    #       the desired live-money account name (e.g. the real funded
-    #       account)
-    FORCE_ACCOUNT = None
+    # Trade-off acknowledged: only ONE position at a time across all
+    # 10 strategies on prod. That's expected; prod is for verifying
+    # individual signals fire correctly, not for measuring full-roster
+    # throughput.
+    #
+    # If prod is ever repurposed for a different account, change this
+    # value (do NOT set to None unless the operator wants per-strategy
+    # routing fall-through).
+    FORCE_ACCOUNT = "Sim101"
 
 
 def main():
