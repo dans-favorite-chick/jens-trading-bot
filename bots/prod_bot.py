@@ -46,18 +46,31 @@ class ProdBot(BaseBot):
     # The safety gate is now off by operator decision (2026-05-04).
     only_validated = False
 
-    # B57 2026-04-22: ProdBot routes EVERY signal to Sim101 (single-account
-    # mode). This is the first go-live candidate bot — keeping it on one
-    # account makes P&L tracking clean and prevents collisions with
-    # sim_bot's 16 per-strategy accounts. To change, set FORCE_ACCOUNT=None
-    # which falls back to config/account_routing.py map resolution.
+    # Sprint I (2026-05-03): FORCE_ACCOUNT removed at operator request.
+    # Pre-Sprint-I (B57 2026-04-22), prod pinned EVERY signal to Sim101
+    # for clean single-account P&L. With Sprint H expanding the strategy
+    # roster from 2 → 10, that pin became a single-account bottleneck:
+    # only ONE position could be open across the whole prod bot at a
+    # time, while sim_bot ran all 10 concurrently on per-strategy
+    # accounts.
     #
-    # NOTE: With Sprint H's expanded strategy roster, FORCE_ACCOUNT="Sim101"
-    # creates a single-account bottleneck — only ONE position can be open
-    # at a time on prod. This is intentional (mirrors live-money model).
-    # Sim_bot has per-strategy accounts so all 10 can hold concurrent
-    # positions simultaneously.
-    FORCE_ACCOUNT = "Sim101"
+    # FORCE_ACCOUNT=None → routing falls through to
+    # config/account_routing.py:get_account_for_signal(), which uses
+    # STRATEGY_ACCOUNT_MAP (per-strategy NT8 account). Prod now mirrors
+    # sim_bot's per-strategy account topology: each strategy fires on
+    # its own dedicated Sim* account, so concurrent positions across
+    # strategies are possible.
+    #
+    # ⚠️  LIVE-MODE SAFETY IMPLICATION (operator-acknowledged):
+    # When LIVE_TRADING=True is flipped, EVERY strategy in
+    # STRATEGY_ACCOUNT_MAP routes to its mapped account. Operator must
+    # audit STRATEGY_ACCOUNT_MAP before go-live and either:
+    #   (a) confirm each mapped account is the intended live-money
+    #       destination
+    #   (b) restore the single-account pin by setting FORCE_ACCOUNT to
+    #       the desired live-money account name (e.g. the real funded
+    #       account)
+    FORCE_ACCOUNT = None
 
 
 def main():
