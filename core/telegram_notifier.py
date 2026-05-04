@@ -246,12 +246,48 @@ async def notify_alert(alert_type: str, message: str,
 
     B54: alerts are deduped for 15 minutes per (alert_type, strategy) key.
     Repeated same-type alerts within the window are suppressed server-side.
+
+    Sprint D F4 (2026-05-04): low-priority categories (NEWS_EVENT,
+    SCALE_OUT, STRATEGY_DECAY_WARNING, BREAKER_OBSERVE, FRED_REGIME_SHIFT)
+    are buffered into a 4h/10-msg digest instead of pinging immediately.
+    Real-time categories (HALT, KILL_SWITCH, EXIT_TIMEOUT*, BOT_FAILED,
+    RECOVERY_MODE, BRIDGE_DOWN, DESYNC, STRATEGY_DECAY_CRITICAL) bypass
+    the digest. Unknown categories default to real-time (fail-safe).
     """
     msg = f"\U000026A0 <b>ALERT: {_esc(alert_type)}</b>\n{_esc(message)}"
     dedup_key = f"alert:{alert_type}:{strategy or ''}"
-    # Async send wrapper does its own executor dispatch of send_sync;
-    # send_sync honors dedup_key. Do the same here via the sync path.
     loop = asyncio.get_event_loop()
+
+    # Digest classifier — fail-soft if module load fails (always fall
+    # back to immediate send in that case).
+    try:
+        from core.telegram_digest import classify_alert, get_digest
+        category = classify_alert(alert_type)
+    except Exception:
+        category = "unknown"
+
+    if category == "digest":
+        try:
+            digest = get_digest()
+            flush_text = digest.queue_alert(alert_type, message, strategy or "")
+        except Exception:
+            flush_text = None
+        if flush_text is None:
+            return  # buffered, will fire on next flush trigger
+        # Flush triggered — send the formatted digest, NOT the
+        # individual alert (the digest already wraps everything).
+        await loop.run_in_executor(
+            None,
+            lambda: send_sync(
+                _apply_tag(flush_text, strategy),
+                chat_id=_resolve_chat_id(strategy),
+                # No dedup on digest flushes — they're already
+                # batched, dedup'ing them would drop a real flush.
+            ),
+        )
+        return
+
+    # Real-time path (also the unknown-category fail-safe path).
     await loop.run_in_executor(
         None,
         lambda: send_sync(
