@@ -53,6 +53,16 @@ DASHBOARD_TIMEOUT_S = 3    # HTTP timeout for dashboard API
 FORENSICS_MAX = 500        # Max disconnect events to keep in memory
 STALE_BOT_THRESHOLD_S = 20 # Bot considered dead if no state push in this window
 
+# Sprint D F3 (2026-05-04): disconnect alert grace.
+# Operator-initiated bot restarts (deployment, code update) complete in
+# 5-15s. Without a grace window, every restart pages a DISCONNECTED +
+# RECONNECTED telegram pair → ops noise. Genuine NT8 outages persist
+# minutes. 60s threshold separates the two.
+DISCONNECT_TG_GRACE_S = 60
+# Don't fire "bot restarted" telegram on the first 1-2 attempts; only
+# escalate when restart loop is genuinely struggling.
+RESTART_ALERT_THRESHOLD = 3
+
 # ─── Logging ───────────────────────────────────────────────────────
 LOG_DIR = os.path.join(os.path.dirname(__file__), "..", "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -152,6 +162,12 @@ class BotTracker:
         self.uptime_start = 0.0           # When current uptime period started
         self.disconnect_history: deque = deque(maxlen=FORENSICS_MAX)
         self._was_connected = False       # For edge detection
+        # Sprint D F3: telegram grace state. disconnect_alert_sent stays
+        # True until the matching reconnect; on reconnect we fire the
+        # paired "RECONNECTED" telegram only if we previously alerted.
+        # Operator restarts that complete in <60s never fire either.
+        self.disconnect_alert_sent: bool = False
+        self._last_disconnect_reason: str = ""
 
     def mark_connected(self):
         now = time.time()
@@ -166,6 +182,16 @@ class BotTracker:
                     "downtime_s": round(downtime, 1),
                     "restart_attempts": self.restart_count,
                 })
+                # Sprint D F3: only fire the RECONNECTED telegram if we
+                # previously alerted on the disconnect. Short blips that
+                # never crossed the 60s grace window are silent in both
+                # directions — pure ops noise reduction.
+                if self.disconnect_alert_sent:
+                    _send_telegram(
+                        f"✅ {self.name} bot RECONNECTED after "
+                        f"{downtime:.0f}s (was {self._last_disconnect_reason})"
+                    )
+                    self.disconnect_alert_sent = False
             self.uptime_start = now
             self.restart_count = 0  # Reset consecutive restart counter
         self._was_connected = True
@@ -175,7 +201,9 @@ class BotTracker:
     def mark_disconnected(self, reason: str = "unknown"):
         now = time.time()
         if self._was_connected:
-            # Transition: connected → disconnected
+            # Transition: connected → disconnected. We log + record
+            # forensics immediately, but the TELEGRAM is now gated by
+            # the 60s grace window — see check_disconnect_grace().
             uptime = now - self.uptime_start if self.uptime_start else 0
             self.total_disconnects += 1
             logger.warning(f"[{self.name}] DISCONNECTED — reason={reason}, "
@@ -194,10 +222,37 @@ class BotTracker:
                 "reason": reason,
                 "uptime_s": uptime,
             })
-            _send_telegram(f"{self.name} bot DISCONNECTED (#{self.total_disconnects}) — {reason}")
+            self._last_disconnect_reason = reason
+            # NOTE: telegram NOT sent here. Gated by grace window in
+            # check_disconnect_grace(). If the bot reconnects within 60s
+            # (operator restart, network blip), both DISCONNECT and
+            # RECONNECT pages stay silent.
         self._was_connected = False
         self.connected = False
         self.last_disconnect_ts = now
+
+    def check_disconnect_grace(self):
+        """Sprint D F3: fire the DISCONNECTED telegram only after the
+        bot has been disconnected for DISCONNECT_TG_GRACE_S seconds AND
+        we haven't already alerted for this disconnect window.
+
+        Called from the main watchdog poll loop on every cycle. Operator
+        restarts that complete inside the grace window stay silent on
+        both sides; genuine outages get the page once."""
+        if self.connected:
+            return
+        if self.last_disconnect_ts <= 0:
+            return
+        if self.disconnect_alert_sent:
+            return
+        downtime = time.time() - self.last_disconnect_ts
+        if downtime < DISCONNECT_TG_GRACE_S:
+            return
+        _send_telegram(
+            f"🚨 {self.name} bot DISCONNECTED for {downtime:.0f}s "
+            f"(#{self.total_disconnects}) — {self._last_disconnect_reason}"
+        )
+        self.disconnect_alert_sent = True
 
     def should_restart(self) -> bool:
         """Should we attempt a restart now?"""
@@ -321,6 +376,10 @@ class Watchdog:
                 elif tick_age > 30:
                     reason = f"nt8_stale_{tick_age:.0f}s"
                 tracker.mark_disconnected(reason)
+            # Sprint D F3: each cycle, give every (still-disconnected)
+            # tracker a chance to fire its grace-gated DISCONNECT page.
+            # Operator restarts that complete in <60s never trip this.
+            tracker.check_disconnect_grace()
 
     def restart_bot(self, name: str):
         """Attempt to restart a bot via dashboard API."""
@@ -345,7 +404,16 @@ class Watchdog:
         if result and result.get("ok"):
             pid = result.get("pid", "?")
             logger.info(f"[{name}] Restart command sent — PID={pid}")
-            _send_telegram(f"{name} bot restarted (attempt #{tracker.restart_count}, PID={pid})")
+            # Sprint D F3: only page on restart attempts >= threshold.
+            # Operator deployments + transient bridge blips reliably
+            # restart on attempt 1; if we're on attempt 3+, the bot is
+            # genuinely struggling and the operator wants to know.
+            if tracker.restart_count >= RESTART_ALERT_THRESHOLD:
+                _send_telegram(
+                    f"⚠ {name} bot restarted (attempt "
+                    f"#{tracker.restart_count}, PID={pid}) — restart "
+                    f"loop is struggling, investigate."
+                )
         elif result:
             error = result.get("error", "unknown")
             logger.warning(f"[{name}] Restart failed: {error}")
