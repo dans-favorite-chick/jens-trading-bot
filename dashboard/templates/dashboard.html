@@ -328,12 +328,46 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
   </div>
 </div>
 
+<!-- ===== SECTION: Combined Both-Bots Summary (Sprint G 2026-05-04) =====
+     Shows BOTH bots' P&L + trade counts simultaneously so the operator
+     never gets misled by viewing the inactive tab. Pulls from
+     /api/today-pnl which aggregates per_bot data across both. -->
+<div class="card" id="both-bots-summary" style="margin-bottom:12px;">
+  <div style="display:flex; gap:24px; align-items:center; flex-wrap:wrap;">
+    <h3 style="margin:0; flex:0 0 auto;">Today (CME Globex)</h3>
+    <div style="display:flex; gap:24px; flex:1; flex-wrap:wrap;">
+      <div class="stat" style="text-align:left;">
+        <div class="label">Sim Bot</div>
+        <div class="val" id="bb-sim-pnl" style="font-size:18px;">—</div>
+        <div style="font-size:11px; color:var(--text-dim);">
+          <span id="bb-sim-trades">0</span> trades ·
+          <span id="bb-sim-winrate">0%</span> WR
+        </div>
+      </div>
+      <div class="stat" style="text-align:left;">
+        <div class="label">Prod Bot</div>
+        <div class="val" id="bb-prod-pnl" style="font-size:18px;">—</div>
+        <div style="font-size:11px; color:var(--text-dim);">
+          <span id="bb-prod-trades">0</span> trades ·
+          <span id="bb-prod-winrate">0%</span> WR
+        </div>
+      </div>
+      <div style="font-size:11px; color:var(--text-dim); align-self:center; max-width:280px;">
+        Prod bot only runs <code>validated=True</code> strategies
+        (currently 2 enabled). Sim bot runs all strategies for
+        validation. <strong>This is by design</strong> — see
+        <code>config/strategies.py</code>.
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ===== SECTION: Bot Tabs ===== -->
 <div class="tab-bar">
-  <button class="tab-btn active" id="tab-prod" onclick="switchBot('prod', this)">Prod Bot</button>
-  <button class="tab-btn" id="tab-sim" onclick="switchBot('sim', this)">Sim Bot</button>
+  <button class="tab-btn" id="tab-prod" onclick="switchBot('prod', this)">Prod Bot</button>
+  <button class="tab-btn active" id="tab-sim" onclick="switchBot('sim', this)">Sim Bot</button>
   <div class="bot-controls">
-    <span class="bot-proc-status" id="bot-proc-label">Prod: stopped</span>
+    <span class="bot-proc-status" id="bot-proc-label">Sim: stopped</span>
     <button class="bot-btn bot-btn-start" id="bot-start-btn" onclick="startBot()">Start</button>
     <button class="bot-btn bot-btn-stop" id="bot-stop-btn" onclick="stopBot()">Stop</button>
   </div>
@@ -674,7 +708,12 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
 <!-- ===== SECTION: JavaScript ===== -->
 <script>
 const POLL_MS = 2000;
-let activeBot = 'prod';
+// Sprint G (2026-05-04): default to 'sim' tab. Sim bot runs all
+// strategies (validation phase); prod bot is gated to validated=True
+// (currently 2 strategies). Defaulting to prod historically misled
+// the operator into thinking the bot wasn't trading when in fact sim
+// was active. Operator can still click "Prod Bot" tab any time.
+let activeBot = 'sim';
 let lastNt8Status = 'dead';
 let alertPlayed = false;
 function esc(s) {
@@ -683,8 +722,37 @@ function esc(s) {
   return d.innerHTML;
 }
 
+// ── Sprint G: refresh combined-both-bots summary from /api/today-pnl
+//    Independent of the active-tab poll so operator always sees both.
+async function refreshBothBotsSummary() {
+  try {
+    const res = await fetch('/api/today-pnl');
+    if (!res.ok) return;
+    const d = await res.json();
+    const perBot = d.per_bot || {};
+    for (const which of ['sim', 'prod']) {
+      const data = perBot[which] || {pnl: 0, trades: 0, win_rate: 0};
+      const pnl = data.pnl || 0;
+      const cls = pnl >= 0 ? 'pnl-positive' : 'pnl-negative';
+      const elPnl = document.getElementById(`bb-${which}-pnl`);
+      if (elPnl) {
+        elPnl.textContent = `$${pnl.toFixed(2)}`;
+        elPnl.className = `val ${cls}`;
+      }
+      const elT = document.getElementById(`bb-${which}-trades`);
+      if (elT) elT.textContent = data.trades || 0;
+      const elW = document.getElementById(`bb-${which}-winrate`);
+      if (elW) elW.textContent = `${(data.win_rate || 0).toFixed(0)}%`;
+    }
+  } catch (e) {
+    // Best-effort — don't let summary failure break main poll.
+  }
+}
+
 // ── Polling ────────────────────────────────────────────────────────
 async function poll() {
+  // Sprint G: refresh both-bots summary in parallel with main poll.
+  refreshBothBotsSummary();
   try {
     // Single API call — /api/status has bridge health + connection log + bot state
     const res = await fetch('/api/status');
