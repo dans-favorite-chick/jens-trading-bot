@@ -84,12 +84,22 @@ STRATEGIES = {
         #   08:30-08:59:  1W/9L = 10% WR  (open volatility trap)
         #   10:00-13:29:  0W/7L = 0% WR   (mid-day chop)
         #   13:30+:       4W/1L = 80% WR  (afternoon momentum re-engages)
-        # Block the two losing windows; keep 09:00-09:59 + 13:30+ open.
-        # Empty list disables the filter entirely.
-        "session_block_windows": [
-            ("08:30", "08:59"),
-            ("10:00", "13:29"),
-        ],
+        #
+        # ⚠️  Sprint H (2026-05-04): EMPTIED at operator request — they
+        # want bias_momentum trading "all hours" for prod debug visibility.
+        # The forensic data showing 10:00-13:29 = 0W/7L still holds; we're
+        # accepting that loss exposure in exchange for activity. Pre-Sprint-H
+        # blocked windows are preserved in this comment so they can be
+        # restored before going live (or after operator changes their mind):
+        #     "session_block_windows": [
+        #         ("08:30", "08:59"),
+        #         ("10:00", "13:29"),
+        #     ],
+        # ⚠️  LIVE-MODE IMPLICATION: when LIVE_TRADING=True is flipped,
+        # bias_momentum will trade during the historically-losing windows
+        # on real money. Operator should restore the windows above before
+        # going live, or explicitly accept the risk.
+        "session_block_windows": [],
         # 2026-05-03 fix B: SHORT-asymmetric quality requirement.
         # Bot-wide SHORT WR was 9% over 11 trades (NQ structural long-bias drift
         # makes symmetric momentum strategies underperform on the short side).

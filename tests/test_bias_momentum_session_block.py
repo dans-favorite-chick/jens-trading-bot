@@ -64,13 +64,23 @@ def test_session_block_empty_list_never_blocks():
 # ─── Fix C: config validates the documented blocking windows ──────────
 
 def test_bias_momentum_config_has_session_block_windows():
-    """Config must include the documented loss-window blocks."""
+    """Config must declare the session_block_windows key.
+
+    Sprint H (2026-05-04): operator emptied this list to allow
+    bias_momentum to trade all hours for prod debug visibility. The
+    pre-Sprint-H windows ([08:30-08:59], [10:00-13:29]) are documented
+    in config/strategies.py for restoration before go-live.
+
+    This test now asserts the key EXISTS (not what it contains) so
+    the runtime filter `_ct_in_block_window` always has something to
+    iterate. Operator can restore the windows by editing the config;
+    `test_no_session_block_windows_re_added_silently` in the
+    Sprint H test file will fail loudly when that happens, prompting
+    a deliberate review."""
     cfg = STRATEGY_CONFIG["bias_momentum"]
     assert "session_block_windows" in cfg
     windows = cfg["session_block_windows"]
-    # Forensic: 08:30-08:59 (open volatility) + 10:00-13:29 (mid-day chop)
-    assert ("08:30", "08:59") in windows
-    assert ("10:00", "13:29") in windows
+    assert isinstance(windows, list)  # empty list allowed (Sprint H)
 
 
 # ─── Fix B: SHORT-asymmetric quality requirement ──────────────────────
