@@ -112,8 +112,21 @@ AGENT_DEBRIEF_ENABLED = True        # End-of-session coaching debrief
 AGENT_MODEL = "gemini-2.5-flash"    # Model for all agents
 
 # ─── Commission & Execution ─────────────────────────────────────────
-COMMISSION_PER_SIDE = 0.86      # $ per contract per side (NT8 Sim101 / Rithmic rate)
-                                 # Derivation: $531.25 gap / 310 trades / 2 sides ≈ $0.855
+# B13 (2026-05-03): all values per CONTRACT, per SIDE (entry or exit).
+# Round-turn fees = (COMMISSION + EXCHANGE_FEES) * 2.
+# Slippage applied separately on each fill.
+#
+# COMMISSION_PER_SIDE: keeping operator's actual broker rate (Rithmic
+# $0.86/side, derived from $531.25 gap / 310 trades / 2 sides ≈ $0.855).
+# Prompt's reference value for NT8 Free Lifetime is $1.29/side; we use
+# the empirically-derived rate from this account's actual statements.
+#
+# EXCHANGE_FEES_PER_SIDE / SLIPPAGE_TICKS_PER_SIDE are NEW (added in
+# B13). Override from your actual broker statement after live trading.
+# Total round-turn cost ≈ 2*(0.86+0.55) + 2*2*0.50 = $4.82 per contract.
+COMMISSION_PER_SIDE     = 0.86   # $/contract/side, brokerage (Rithmic)
+EXCHANGE_FEES_PER_SIDE  = 0.55   # $/contract/side, CME + NFA + clearing
+SLIPPAGE_TICKS_PER_SIDE = 2      # ticks of slippage per fill (RTH)
 
 # Entry order type: "LIMIT" fills at your price (no slippage), "MARKET" fills immediately
 ENTRY_ORDER_TYPE = "LIMIT"       # Recommended: LIMIT reduces slippage to ~0

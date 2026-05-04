@@ -20,12 +20,39 @@ from typing import Optional
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from config.settings import TICK_SIZE, COMMISSION_PER_SIDE
+from config.settings import (
+    TICK_SIZE,
+    COMMISSION_PER_SIDE,
+    EXCHANGE_FEES_PER_SIDE,
+    SLIPPAGE_TICKS_PER_SIDE,
+)
 
 logger = logging.getLogger("PositionManager")
 
 # MNQ: each tick (0.25) = $0.50
 DOLLAR_PER_TICK = TICK_SIZE * 2
+
+
+def compute_trade_costs(contracts: int) -> dict:
+    """B13: total cost for one round-turn (entry + exit) of N contracts.
+
+    Returns commission, exchange fees, slippage breakdown plus
+    aggregated `fees_dollars` and `cost_total_dollars`.
+
+    All multipliers are *2 (round-turn = entry + exit).
+    """
+    commission_total = 2 * COMMISSION_PER_SIDE * contracts
+    exchange_total   = 2 * EXCHANGE_FEES_PER_SIDE * contracts
+    slippage_total   = 2 * SLIPPAGE_TICKS_PER_SIDE * DOLLAR_PER_TICK * contracts
+    fees_total       = commission_total + exchange_total
+    cost_total       = fees_total + slippage_total
+    return {
+        "commission_dollars":    round(commission_total, 2),
+        "exchange_fees_dollars": round(exchange_total, 2),
+        "slippage_dollars":      round(slippage_total, 2),
+        "fees_dollars":          round(fees_total, 2),
+        "cost_total_dollars":    round(cost_total, 2),
+    }
 
 # ── P0.1: Trade memory persistence path (D13 fix) ────────────────────
 # Resolved against project root (same directory layout used by
@@ -433,8 +460,10 @@ class PositionManager:
             ticks_pnl = (pos.entry_price - exit_price) / TICK_SIZE
 
         gross_pnl = ticks_pnl * DOLLAR_PER_TICK * pos.contracts
-        commission = COMMISSION_PER_SIDE * 2 * pos.contracts  # Round-trip: entry + exit
-        dollar_pnl = gross_pnl - commission
+        # B13 (2026-05-03): full cost accounting via central calculator.
+        # Replaces old commission-only calc. Slippage + exchange fees added.
+        costs = compute_trade_costs(pos.contracts)
+        net_pnl = gross_pnl - costs["cost_total_dollars"]
         hold_time = time.time() - pos.entry_time
 
         trade = {
@@ -446,10 +475,21 @@ class PositionManager:
             "stop_price": pos.stop_price,
             "target_price": pos.target_price,
             "pnl_ticks": round(ticks_pnl, 1),
-            "pnl_dollars": round(dollar_pnl, 2),      # Net P&L (after commission)
-            "gross_pnl": round(gross_pnl, 2),          # Gross P&L (before commission)
-            "commission": round(commission, 2),         # Commission deducted
-            "result": "WIN" if dollar_pnl > 0 else "LOSS",
+            # B13: pnl_dollars defaults to NET (after all costs). Halt
+            # thresholds, weekly caps, and floor checks all read this field.
+            "pnl_dollars":           round(net_pnl, 2),
+            "pnl_dollars_gross":     round(gross_pnl, 2),
+            "pnl_dollars_net":       round(net_pnl, 2),
+            "commission_dollars":    costs["commission_dollars"],
+            "exchange_fees_dollars": costs["exchange_fees_dollars"],
+            "slippage_dollars":      costs["slippage_dollars"],
+            "fees_dollars":          costs["fees_dollars"],
+            "cost_total_dollars":    costs["cost_total_dollars"],
+            # Legacy field aliases retained so existing consumers don't
+            # break. Both reference the SAME values as the new B13 fields.
+            "gross_pnl":             round(gross_pnl, 2),
+            "commission":            costs["commission_dollars"],
+            "result": "WIN" if net_pnl > 0 else "LOSS",
             "hold_time_s": round(hold_time, 1),
             "strategy": pos.strategy,
             "sub_strategy": pos.sub_strategy,
@@ -576,8 +616,9 @@ class PositionManager:
             ticks_pnl = (pos.entry_price - exit_price) / TICK_SIZE
 
         gross_pnl = ticks_pnl * DOLLAR_PER_TICK * n_contracts
-        commission = COMMISSION_PER_SIDE * 2 * n_contracts  # Round-trip for this portion
-        dollar_pnl = gross_pnl - commission
+        # B13 (2026-05-03): full cost accounting for partial exits too.
+        costs = compute_trade_costs(n_contracts)
+        net_pnl = gross_pnl - costs["cost_total_dollars"]
 
         partial_trade = {
             "trade_id":      pos.trade_id + "_scale1",
@@ -586,10 +627,17 @@ class PositionManager:
             "exit_price":    exit_price,
             "contracts":     n_contracts,
             "pnl_ticks":     round(ticks_pnl, 1),
-            "pnl_dollars":   round(dollar_pnl, 2),
-            "gross_pnl":     round(gross_pnl, 2),
-            "commission":    round(commission, 2),
-            "result":        "WIN" if dollar_pnl > 0 else "LOSS",
+            "pnl_dollars":           round(net_pnl, 2),
+            "pnl_dollars_gross":     round(gross_pnl, 2),
+            "pnl_dollars_net":       round(net_pnl, 2),
+            "commission_dollars":    costs["commission_dollars"],
+            "exchange_fees_dollars": costs["exchange_fees_dollars"],
+            "slippage_dollars":      costs["slippage_dollars"],
+            "fees_dollars":          costs["fees_dollars"],
+            "cost_total_dollars":    costs["cost_total_dollars"],
+            "gross_pnl":             round(gross_pnl, 2),  # legacy alias
+            "commission":            costs["commission_dollars"],  # legacy alias
+            "result":        "WIN" if net_pnl > 0 else "LOSS",
             "hold_time_s":   round(time.time() - pos.entry_time, 1),
             "strategy":      pos.strategy,
             "sub_strategy":  pos.sub_strategy,
@@ -609,7 +657,7 @@ class PositionManager:
         self.trade_history.append(partial_trade)
 
         logger.info(f"[SCALE_OUT:{pos.trade_id}] Exited {n_contracts}x @ {exit_price:.2f} "
-                    f"P&L=${dollar_pnl:.2f} ({ticks_pnl:.1f}t) | "
+                    f"P&L=${net_pnl:.2f} ({ticks_pnl:.1f}t) | "
                     f"{pos.contracts}x still open")
         return partial_trade
 

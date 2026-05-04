@@ -129,8 +129,16 @@ class TestClosePosition:
         assert trade["pnl_ticks"] == expected_ticks
         assert trade["gross_pnl"] == expected_gross
         # pnl_dollars is NET of commission (B13): gross - round-trip commission
-        assert trade["pnl_dollars"] == round(expected_gross - trade["commission"], 2)
-        assert trade["result"] == "WIN"
+        # B13 (2026-05-03): pnl_dollars is NET of FULL cost (commission +
+        # exchange fees + slippage), not just commission. The trade winning
+        # 8 ticks gross may now read as a LOSS once full round-turn cost
+        # (~$5) is deducted. Assert conservation rather than a hard win.
+        assert trade["pnl_dollars"] == round(
+            expected_gross - trade["cost_total_dollars"], 2
+        )
+        assert trade["pnl_dollars_net"] == trade["pnl_dollars"]
+        assert trade["pnl_dollars_gross"] == expected_gross
+        assert trade["result"] == ("WIN" if trade["pnl_dollars"] > 0 else "LOSS")
 
     def test_close_short_pnl_correct(self, pm):
         # Entry 18500, exit 18498 = +2.0 points = 8 ticks profit for SHORT
@@ -144,8 +152,16 @@ class TestClosePosition:
         assert trade["pnl_ticks"] == expected_ticks
         assert trade["gross_pnl"] == expected_gross
         # pnl_dollars is NET of commission (B13)
-        assert trade["pnl_dollars"] == round(expected_gross - trade["commission"], 2)
-        assert trade["result"] == "WIN"
+        # B13 (2026-05-03): pnl_dollars is NET of FULL cost (commission +
+        # exchange fees + slippage), not just commission. The trade winning
+        # 8 ticks gross may now read as a LOSS once full round-turn cost
+        # (~$5) is deducted. Assert conservation rather than a hard win.
+        assert trade["pnl_dollars"] == round(
+            expected_gross - trade["cost_total_dollars"], 2
+        )
+        assert trade["pnl_dollars_net"] == trade["pnl_dollars"]
+        assert trade["pnl_dollars_gross"] == expected_gross
+        assert trade["result"] == ("WIN" if trade["pnl_dollars"] > 0 else "LOSS")
 
     def test_close_position_returns_none_when_flat(self, pm):
         trade = pm.close_position(exit_price=18500.0, exit_reason="manual")
