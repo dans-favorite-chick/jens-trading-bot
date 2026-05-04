@@ -172,8 +172,12 @@ class StrategyRiskRegistry:
             return
         self._halted.add(key)
         self._halt_reasons[key] = reason
+        # Fix E (2026-05-03): use [HALT:<strategy>] signature so
+        # watcher_agent's grep can detect halts. Previous format
+        # `[HALT] strategy '<key>' halted` didn't match the watcher's
+        # expected `[HALT:` prefix.
         logger.critical(
-            "[HALT] strategy '%s' halted — %s. Manual re-enable required "
+            "[HALT:%s] floor reached: %s. Manual re-enable required "
             "(tools/reenable_strategy.py).",
             key, reason,
         )

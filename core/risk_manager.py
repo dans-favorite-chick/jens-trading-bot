@@ -50,6 +50,11 @@ class RiskState:
     last_trade_time: float = 0.0    # timestamp: last completed trade (for spacing)
     killed: bool = False
     kill_reason: str = ""
+    # Fix E (2026-05-03): once-per-state-transition logging flags so
+    # we don't spam [CAP:...] log lines on every can_trade() poll.
+    _daily_cap_logged: bool = False
+    _weekly_cap_logged: bool = False
+    _kill_logged: bool = False
 
 
 class RiskManager:
@@ -83,18 +88,41 @@ class RiskManager:
         self._spacing_min = minutes
 
     # ─── Pre-Trade Checks ───────────────────────────────────────────
-    def can_trade(self, vix: float = 0.0) -> tuple[bool, str]:
+    def can_trade(self, vix: float = 0.0, account: str = "default") -> tuple[bool, str]:
         """
         Check all risk gates before entering a trade.
         Returns (allowed: bool, reason: str).
+
+        Fix E (2026-05-03): emits `[CAP:daily:<account>]` and
+        `[CAP:weekly:<account>]` log signatures at CRITICAL level when
+        the corresponding cap is first breached. Watcher_agent greps
+        these signatures to surface halts to the operator. The
+        once-per-state-transition flags prevent log spam on each poll.
         """
         if self.state.killed:
+            if not self.state._kill_logged:
+                logger.critical(
+                    "[HALT:bot] kill switch engaged: %s", self.state.kill_reason,
+                )
+                self.state._kill_logged = True
             return False, f"Kill switch: {self.state.kill_reason}"
 
         if self.state.daily_pnl <= -self._daily_limit:
+            if not self.state._daily_cap_logged:
+                logger.critical(
+                    "[CAP:daily:%s] daily cap reached: pnl=$%.2f cap=$-%.2f",
+                    account, self.state.daily_pnl, self._daily_limit,
+                )
+                self.state._daily_cap_logged = True
             return False, f"Daily loss limit hit (${self.state.daily_pnl:.2f} / -${self._daily_limit:.2f})"
 
         if self.state.weekly_pnl <= -WEEKLY_LOSS_LIMIT:
+            if not self.state._weekly_cap_logged:
+                logger.critical(
+                    "[CAP:weekly:%s] weekly cap reached: pnl=$%.2f cap=$-%.2f",
+                    account, self.state.weekly_pnl, WEEKLY_LOSS_LIMIT,
+                )
+                self.state._weekly_cap_logged = True
             return False, f"Weekly loss limit hit (${self.state.weekly_pnl:.2f} / -${WEEKLY_LOSS_LIMIT:.2f})"
 
         if self.state.trades_today >= self._max_trades:
