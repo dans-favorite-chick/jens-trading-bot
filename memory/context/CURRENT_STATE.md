@@ -527,4 +527,75 @@ audit will sharpen as the validation window fills.
 Sprint C final:  1,339 passing
 Sprint D final:  1,418 passing (+79)
 Sprint E final:  1,468 passing (+50)
-0 failing, 4 skipped throughout.
+Sprint F final:  1,484 passing (+16)
+
+Test count: **1,484 passing, 4 skipped, 0 failing** (post-Sprint-F)
+
+## Sprint F — Collision Forensic + Tier Persistence (2026-05-04)
+
+Two commits shipped:
+- `3b5ea7f` feat(diagnose): tools/diagnose_account_collisions.py
+- `d4a59ba` fix(observability): persist tier field at exit
+
+Phase 3 (cap reset) was HALTED — premise was wrong. bias_momentum was
+not halted at weekly cap; the schema the prompt assumed didn't match
+reality. The autonomous tool correctly refused to mutate against a
+fictional schema. No commit shipped for Phase 3.
+
+### Account routing audit findings
+
+- 0 shared accounts in `STRATEGY_ACCOUNT_MAP` — each strategy maps to
+  its own unique `Sim*` account.
+- 3-strategy bot overlap (sim_bot + prod_bot can both load the same
+  strategy) but routing-side separation prevents OIF collision.
+- 0 collision evidence in last 72h of logs.
+- Re-audit only if `config/account_routing.py` changes structurally:
+  `python tools/diagnose_account_collisions.py --hours 72`.
+
+### Tier persistence
+
+`Position.tier` now propagates from signal through close into the
+trade record (and through `scale_out_partial` for partial exits).
+Sprint E's `indicator_audit.py` "Tier Classifier Validation" section
+will populate within ~30-60 trades, answering empirically whether
+A++/A/B/C ordering predicts outcome.
+
+### bias_momentum current state (as of 2026-05-04)
+
+bias_momentum is **NOT halted** (correcting any prior assumption). As
+of Sprint F's audit on 2026-05-04, it is the top-performing strategy
+this week: **+$142.62 net P&L across 9 trades** (33% WR — runner-mode
+wins masking lower WR).
+
+Active gates (post-Sprint-A):
+- `session_block_windows` (08:30-08:59 + 10:00-13:29 CT blocked)
+- `short_extra_gates` (requires both 1m + 5m bearish bias for SHORT)
+- `target_rr=2.5`
+- `rsi_div_hard_gate=True`
+- `skip_on_stop_clamp=True`
+- `trend_stall_grace_s=60`
+
+Sprint E's indicator audit (2026-05-04) flagged
+`account=SimBias Momentum` at WR 16.5% / lift -29.9pp at PRELIMINARY
+tier (n=91). This is an *informational* finding at PRELIMINARY
+confidence — re-check at TENTATIVE tier (n>=100) with non-overlapping
+CIs before any kill decision.
+
+**Discipline:** always check
+`python tools/validation_tracker.py --post-b13-only` for current
+strategy state. This memory file is historical context, not live truth.
+
+### Why prod dashboard shows only 2 strategies
+
+`prod_bot.only_validated=True` filters strategies by
+`config['validated']`. Currently 2 of 10 pass:
+- `bias_momentum` (validated=True)
+- `ib_breakout`   (validated=True)
+
+The other 8 strategies are in lab/sim validation. The dashboard
+showing only 2 prod strategies is **expected behavior, not a bug**.
+
+`validated=True` is a sticky flag set at promotion time. Nothing
+currently auto-demotes a strategy whose post-promotion data shows
+KILL_CANDIDATE characteristics (Sprint G candidate after tier-
+persistence data accumulates).
