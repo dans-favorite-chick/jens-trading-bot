@@ -954,6 +954,28 @@ class TickAggregator:
                       f"ATR_5m={self.atr['5m']:.2f} ATR_tick={self.atr['tick']:.2f} "
                       f"EMA9={self.ema9:.2f} VWAP={self.vwap:.2f} CVD={self.cvd:.0f} "
                       f"TF={self.tf_bias} TF_tick={self.tf_bias_tick}")
+
+            # Sprint I (2026-05-03): Replay restored 1m/5m bars through
+            # session_levels so RTH-window aggregation (rth_open_price,
+            # rth_15min_high/low, rth_5min_close_last, etc.) is backfilled.
+            # Without this, opening_session._evaluate_orb perma-skips with
+            # 'missing_fields' for the entire session whenever the bot
+            # restarts after the 8:30-8:45 RTH OR window has closed.
+            if self.session_levels is not None:
+                try:
+                    n_replayed = self.session_levels.replay_from_bars(
+                        bars_1m=list(self.bars_1m.completed),
+                        bars_5m=list(self.bars_5m.completed),
+                    )
+                    if n_replayed:
+                        _log.info(
+                            f"[RESTORE] session_levels replayed {n_replayed} "
+                            f"bars (RTH backfill complete)"
+                        )
+                except Exception as e:
+                    _log.warning(
+                        f"[RESTORE] session_levels replay failed: {e!r}"
+                    )
             return True
 
         except Exception as e:

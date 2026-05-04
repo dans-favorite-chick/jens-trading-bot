@@ -473,6 +473,68 @@ class SessionLevelsAggregator:
             self.orb_first_break_direction = "SHORT"
 
     # ═══════════════════════════════════════════════════════════════
+    # Replay (post-restart RTH backfill)
+    # ═══════════════════════════════════════════════════════════════
+    def replay_from_bars(
+        self,
+        bars_1m: list[Any] | None = None,
+        bars_5m: list[Any] | None = None,
+    ) -> int:
+        """Replay completed bars through update() to backfill RTH levels.
+
+        Sprint I (2026-05-03): bot restart populates aggregator.bars_1m
+        and bars_5m via TickAggregator.restore_state(), but
+        session_levels.update() was NEVER called for those restored
+        bars (it only fires on live bar completion via _on_bar_complete).
+        Without this replay, rth_open_price / rth_15min_high/low /
+        rth_5min_close_last stay None for the day, and
+        opening_session._evaluate_orb perma-skips with 'missing_fields'
+        until the next day reset.
+
+        Bars must duck-type with `open/high/low/close/volume/end_time`.
+        Bars with end_time == 0 (incomplete or missing) are skipped.
+        Sorts by end_time and dispatches in order, 1m first then 5m
+        for any tied timestamp (matches live ordering, since 5m bars
+        complete after the 1m bars they contain).
+
+        Returns the number of bar events replayed.
+        """
+        events: list[tuple[float, str, Any]] = []
+        for b in bars_1m or []:
+            et = float(getattr(b, "end_time", 0) or 0)
+            if et > 0:
+                events.append((et, "1m", b))
+        for b in bars_5m or []:
+            et = float(getattr(b, "end_time", 0) or 0)
+            if et > 0:
+                events.append((et, "5m", b))
+        events.sort(key=lambda x: (x[0], 0 if x[1] == "1m" else 1))
+
+        for et, tf, bar in events:
+            try:
+                now_ct = datetime.fromtimestamp(et)
+                self.update(
+                    now_ct=now_ct,
+                    bar_1m=bar if tf == "1m" else None,
+                    bar_5m=bar if tf == "5m" else None,
+                )
+            except Exception as e:
+                logger.warning(
+                    "[REPLAY] %s bar et=%s skipped: %s", tf, et, e,
+                )
+
+        if events:
+            logger.info(
+                "[REPLAY] session_levels backfilled from %d bars "
+                "(rth_open=%s, rth_15m_hi=%s, rth_15m_lo=%s, "
+                "rth_5m_close_last=%s)",
+                len(events),
+                self.rth_open_price, self.rth_15min_high,
+                self.rth_15min_low, self.rth_5min_close_last,
+            )
+        return len(events)
+
+    # ═══════════════════════════════════════════════════════════════
     # Public snapshot accessor
     # ═══════════════════════════════════════════════════════════════
     def get_levels_dict(self) -> dict:

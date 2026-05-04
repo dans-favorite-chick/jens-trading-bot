@@ -758,9 +758,22 @@ class OpeningSessionStrategy(BaseStrategy):
         # 5-min close that broke the 15-min OR today. None = no break yet.
         first_break = market.get("orb_first_break_direction")
 
-        required = (or_high, or_low, rth_open, last_5m_close, price)
-        if any(v is None for v in required):
-            self._log_eval(f"SKIP {sub} missing_fields")
+        # Sprint I: name the missing fields so production log surfaces
+        # WHICH RTH level is None (not just "something is None"). Most
+        # common cause: bot started after 08:45 CT, so the 15-min OR
+        # window was missed and rth_15min_high/low never populated.
+        # Replay-from-restored-bars (TickAggregator.restore_state) is
+        # the structural fix; this log makes regressions visible.
+        required = {
+            "rth_15min_high": or_high,
+            "rth_15min_low": or_low,
+            "rth_open_price": rth_open,
+            "rth_5min_close_last": last_5m_close,
+            "price": price,
+        }
+        missing = [k for k, v in required.items() if v is None]
+        if missing:
+            self._log_eval(f"SKIP {sub} missing_fields={','.join(missing)}")
             return None
 
         or_size = or_high - or_low
