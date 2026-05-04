@@ -3827,6 +3827,12 @@ class BaseBot:
             trail_config=getattr(signal, "trail_config", None),
             account=_account,
             sub_strategy=_sub_strategy,
+            # Sprint F: persist tier classifier through to the closed-trade
+            # record so indicator_audit can rank A++/A/B/C predictive value.
+            # signal.tier preferred; fall back to metadata['tier'] for older
+            # strategies that stuff it into the metadata dict.
+            tier=(getattr(signal, "tier", None)
+                  or (getattr(signal, "metadata", {}) or {}).get("tier")),
         )
 
         # Fix A: entry actually filled (direct fill path) — clear any

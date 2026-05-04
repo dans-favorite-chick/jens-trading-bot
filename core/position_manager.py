@@ -135,6 +135,13 @@ class Position:
     # reconcile time + DailyFlattener. Operator closes them manually.
     reconciled: bool = False
 
+    # ── Sprint F (2026-05-04): tier classifier persistence ────────────
+    # The signal-time tier ("A++"/"A"/"B"/"C") flowing through to the
+    # closed-trade record so the indicator audit can answer empirically:
+    # "does the A++/A/B/C ordering predict outcome?" Pre-Sprint-F trades
+    # carry tier=None and remain backward-compatible.
+    tier: Optional[str] = None
+
     # ── B76 stop-modify via cancel+replace (2026-04-21) ─────────────────
     # NT8-assigned order_ids captured by
     # bridge.oif_writer.scan_outgoing_for_order_id after bracket/protect
@@ -371,7 +378,8 @@ class PositionManager:
                       metadata: dict = None,
                       scale_out_rr: float = None, trail_config: dict = None,
                       account: str = "Sim101", sub_strategy: str | None = None,
-                      reconciled: bool = False):
+                      reconciled: bool = False,
+                      tier: str | None = None):
         """Open a new position.
 
         Rejects if a position already exists with the same trade_id OR
@@ -423,6 +431,7 @@ class PositionManager:
             account=account,
             sub_strategy=sub_strategy,
             reconciled=reconciled,
+            tier=tier,
         )
         self._positions[trade_id] = pos
         self._open_order.append(trade_id)
@@ -508,6 +517,10 @@ class PositionManager:
             "entry_time": pos.entry_time,
             "exit_time": time.time(),
             "market_snapshot": pos.market_snapshot,
+            # Sprint F (2026-05-04): tier persisted from entry signal so
+            # the indicator audit can rank A++/A/B/C predictive value.
+            # Pre-Sprint-F trades have tier=None.
+            "tier": pos.tier,
         }
 
         self.trade_history.append(trade)
@@ -657,6 +670,8 @@ class PositionManager:
             "exit_time":     time.time(),
             "partial":       True,
             "market_snapshot": pos.market_snapshot,
+            # Sprint F: tier persists on partials too (see open/close hooks)
+            "tier":          pos.tier,
         }
 
         # Reduce live position by exited contracts
