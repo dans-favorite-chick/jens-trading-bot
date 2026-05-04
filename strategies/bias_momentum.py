@@ -704,19 +704,51 @@ class BiasMomentumFollow(BaseStrategy):
         confluences.append(f"Momentum: {momentum_score}")
 
         # B14: NQ-calibrated ATR-anchored stop (replaces fixed stop_ticks=20).
-        from strategies._nq_stop import compute_atr_stop
+        from strategies._nq_stop import (
+            compute_atr_stop,
+            compute_natural_stop_ticks,
+            was_clamped_from_above,
+        )
         from config.settings import TICK_SIZE as _ts_stop
         atr_5m = market.get("atr_5m", 0) or 0
         last_5m = bars_5m[-1] if bars_5m else (bars_1m[-1] if bars_1m else None)
+        _entry_for_stop = price if price > 0 else market.get("price", 0)
+        _max_st = self.config.get("max_stop_ticks", 120)
+
+        # 2026-05-03: skip_on_stop_clamp wire-up. Forensic audit found that
+        # bias_momentum trades with stops clamped DOWN from a wider natural
+        # ATR distance were 0W/5L. The vol regime asked for a wider stop than
+        # the strategy's risk tier allows; clamping created an undersized stop
+        # that got hit. Better to skip the trade entirely.
+        if self.config.get("skip_on_stop_clamp", True):
+            _raw_ticks = compute_natural_stop_ticks(
+                direction=direction,
+                entry_price=_entry_for_stop,
+                last_5m_bar=last_5m,
+                atr_5m_points=atr_5m,
+                tick_size=_ts_stop,
+                stop_atr_mult=self.config.get("stop_atr_mult", 2.0),
+            )
+            if _raw_ticks > _max_st:
+                self._last_reject = (
+                    f"BIAS_MOM: stop_clamp skip — natural ATR stop "
+                    f"{_raw_ticks}t > max {_max_st}t. Vol regime mismatch."
+                )
+                logger.info(
+                    f"[SKIP:{self.name}] stop_clamp: natural={_raw_ticks}t "
+                    f"max={_max_st}t — vol regime mismatch"
+                )
+                return None
+
         stop_ticks, stop_price, atr_override, stop_note = compute_atr_stop(
             direction=direction,
-            entry_price=price if price > 0 else market.get("price", 0),
+            entry_price=_entry_for_stop,
             last_5m_bar=last_5m,
             atr_5m_points=atr_5m,
             tick_size=_ts_stop,
             stop_atr_mult=self.config.get("stop_atr_mult", 2.0),
             min_stop_ticks=self.config.get("min_stop_ticks", 40),
-            max_stop_ticks=self.config.get("max_stop_ticks", 120),
+            max_stop_ticks=_max_st,
             stop_fallback_ticks=self.config.get("stop_fallback_ticks", 64),
         )
         confluences.append(stop_note)

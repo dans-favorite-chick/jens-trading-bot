@@ -73,4 +73,46 @@ def compute_atr_stop(
     note = (f"ATR stop: {stop_atr_mult}×ATR5m({atr_5m_points:.1f}pt) "
             f"= {stop_ticks}t"
             + (f" [clamped from {raw_ticks}t]" if raw_ticks != stop_ticks else ""))
+    # 4-tuple kept for backward compat with existing callers; the `raw_ticks`
+    # value can be derived by callers that need to detect upper-bound clamping
+    # (raw_ticks > max_stop_ticks) without re-doing the math.
     return (stop_ticks, stop_price, True, note)
+
+
+def was_clamped_from_above(raw_ticks: int, stop_ticks: int, max_stop_ticks: int) -> bool:
+    """Fix (2026-05-03): True when natural ATR stop exceeded max_stop_ticks
+    and was forcibly clamped down. This is the 'vol regime mismatch' case
+    where the strategy is asking for a wider stop than its risk-tier
+    allows. Forensic: clamped-from-above stops were 0W/5L in audit data.
+    Use with `skip_on_stop_clamp` config flag.
+
+    Returns False when:
+      - clamp was upward (raw < min_stop_ticks): low-vol day, fine
+      - no clamp at all (raw == stop_ticks): natural stop was in range
+    """
+    return raw_ticks > max_stop_ticks and stop_ticks == max_stop_ticks
+
+
+def compute_natural_stop_ticks(direction: str, entry_price: float,
+                                last_5m_bar, atr_5m_points: float,
+                                tick_size: float, stop_atr_mult: float = 2.0) -> int:
+    """Fix (2026-05-03): return the UNCLAMPED ATR-derived tick count, so
+    a caller can decide whether to skip on clamp. Returns 0 when ATR
+    unavailable. Mirrors compute_atr_stop's anchor logic.
+    """
+    if not atr_5m_points or atr_5m_points <= 0:
+        return 0
+    if last_5m_bar is not None:
+        anchor_low = last_5m_bar.low
+        anchor_high = last_5m_bar.high
+    else:
+        anchor_low = anchor_high = entry_price
+    if direction == "LONG":
+        stop_price = anchor_low - (stop_atr_mult * atr_5m_points)
+        stop_distance = entry_price - stop_price
+    else:
+        stop_price = anchor_high + (stop_atr_mult * atr_5m_points)
+        stop_distance = stop_price - entry_price
+    if stop_distance <= 0:
+        return 0
+    return int(stop_distance / tick_size)
