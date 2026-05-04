@@ -694,3 +694,68 @@ prod-only endpoint, expectation mismatch).
 Sprint F final:  1,484 passing
 Sprint G final:  1,494 passing (+10)
 0 failing, 4 skipped throughout.
+
+## L2 Data Subscription Decision (2026-05-04)
+
+Audit run via `python tools/audit_l2_roi.py` against current
+trade_memory (1,126 trades, 21 days). Full report:
+`out/l2_roi_audit_2026-05-04.md`. **Verdict: KEEP — re-audit weekly.**
+
+### Three views, one decision
+
+**View 1 — Statistical lift:** 8 DOM fields captured at VALIDATED tier
+(n=1,091, well past 666 threshold). Best lift `dom_ask_heavy` = +5.6pp
+WR but **not significant** (Wilson 95% CIs overlap). All other DOM
+fields show <6pp lift, also non-significant. **DOM does not predict
+outcome on its own with current data.**
+
+**View 2 — Architectural dependency:** 7 strategies reference DOM/CVD
+in code; 3 are heavy users (>5 lines of decision code):
+
+| Strategy | DOM/CVD refs |
+|---|---:|
+| `bias_momentum` | 18 |
+| `ib_breakout` | 11 |
+| `spring_setup` | 7 |
+| `high_precision` | 5 |
+| `vwap_pullback` | 5 |
+| `dom_pullback` | 4 |
+| `base_strategy` | 1 |
+
+**View 3 — Economic ROI:** $100/mo over ~1,609 trades/month = **$0.06
+per trade**. ~22% of trades had a DOM-keyword in entry_reason or
+confluences ($0.28 per DOM-tagged trade). No significant edge
+detected, so the cost is essentially defensive — paying for the
+strategies' input feed even though it isn't statistically proven yet.
+
+### Why KEEP despite no proven edge
+
+The audit's hard rule: *"Don't recommend cancellation if any strategy
+is hard-dependent."* Cancelling L2 right now would break or degrade
+`bias_momentum` and `ib_breakout` — both currently `validated=True`
+in prod. That's an unacceptable trade for $100/month savings, even
+without proven edge.
+
+### Re-audit cadence + cancel criteria
+
+Weekly:
+```bash
+python tools/audit_l2_roi.py --post-b13-only
+```
+
+The L2 subscription becomes a CANCEL candidate when EITHER:
+1. **No strategy code references DOM** (operator manually refactored
+   bias_momentum + ib_breakout off DOM), OR
+2. **DOM features show statistically significant NEGATIVE lift** at
+   TENTATIVE+ tier (DOM is actively misleading), OR
+3. **30 days pass without lift reaching significant + TENTATIVE
+   POSITIVE** AND operator decides the lock-in is acceptable to break.
+
+Until then, the $100/month is the cost of keeping the decision space
+open.
+
+### Test suite delta
+
+Sprint G final:  1,494 passing
+L2 audit added:  1,511 passing (+17)
+0 failing, 4 skipped throughout.
