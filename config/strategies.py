@@ -67,14 +67,47 @@ STRATEGIES = {
         "min_stop_ticks": 40,        # 10 points floor (NQ noise)
         "max_stop_ticks": 120,       # 30 points cap (high-vol days)
         "stop_fallback_ticks": 64,   # 16 points if ATR unavailable
-        # 5:1 RR minimum → 100 ticks = 25 points = $50. Aligns with 20-80 pt goal.
-        # Only worthwhile if the setup is a genuine strong trend day.
-        "target_rr": 5.0,
+        # 2026-05-03 RECALIBRATION: was 5.0 (5:1 RR). Of 71 audit trades only
+        # 9 hit target_hit. Most bias_momentum exits are managed (ema_dom_exit)
+        # not target. 5×stop puts TP at 200-600 ticks (50-150 pts) — rarely
+        # reached. Lowered to 2.5:1 — still aggressive but achievable. At
+        # observed 38% LONG WR, 2.5:1 RR yields E[V] = 0.38×2.5 - 0.62 = +0.33
+        # per trade (profitable). Evidence: out/bias_momentum_research_2026-05-03.md
+        "target_rr": 2.5,
         # Defaults (regime overrides in bias_momentum.py typically take precedence)
         # Direction gate: 15m + 5m + 1m must ALL align (see bias_momentum.py evaluate())
         "min_confluence": 5.5,
         "max_hold_min": 60,   # Give it room to run — strong trends last 30-60 min
         "min_momentum": 80,
+        # 2026-05-03 fix C: session-window block (CT, inclusive HH:MM ranges).
+        # Forensic evidence (out/bias_momentum_research_2026-05-03.md §1):
+        #   08:30-08:59:  1W/9L = 10% WR  (open volatility trap)
+        #   10:00-13:29:  0W/7L = 0% WR   (mid-day chop)
+        #   13:30+:       4W/1L = 80% WR  (afternoon momentum re-engages)
+        # Block the two losing windows; keep 09:00-09:59 + 13:30+ open.
+        # Empty list disables the filter entirely.
+        "session_block_windows": [
+            ("08:30", "08:59"),
+            ("10:00", "13:29"),
+        ],
+        # 2026-05-03 fix B: SHORT-asymmetric quality requirement.
+        # Bot-wide SHORT WR was 9% over 11 trades (NQ structural long-bias drift
+        # makes symmetric momentum strategies underperform on the short side).
+        # When True, SHORT entries require BOTH 1m AND 5m tf_bias = BEARISH
+        # (in addition to standard EMA-stack + VWAP-side gate). LONG retains
+        # current looser gate.
+        "short_extra_gates": True,
+        # 2026-05-03 fix A: prevent trend_stall exit from firing within N
+        # seconds of entry. 12 trades had duration_s ≤ 0 (entry/exit gates
+        # disagree on the same bar's data). 60s grace prevents instant unwind.
+        "trend_stall_grace_s": 60,
+        # 2026-05-03: skip signals when natural ATR stop would exceed
+        # max_stop_ticks (forced clamping). Forensic evidence: clamped stops
+        # were 0W/5L. Vol regime mismatch — better to skip than clamp.
+        "skip_on_stop_clamp": True,
+        # 2026-05-03: convert RSI bearish-divergence "warning" into a hard
+        # gate. Evidence: opposing-RSI-div appears in 6 losers / 0 winners.
+        "rsi_div_hard_gate": True,
         # 2026-04-24: Explosive bypass thresholds. The VWAP gate rejected 99% of
         # bias_momentum signals in the 48h prior because VCR rarely cleared the
         # 1.5x bar (and the close-position requirement of >=0.75 / <=0.25 was

@@ -9,11 +9,26 @@ to maximize signal generation when edge is highest.
 """
 
 import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from strategies.base_strategy import BaseStrategy, Signal
 from core.candlestick_patterns import CandlestickAnalyzer, get_pattern_confluence
 
 logger = logging.getLogger(__name__)
+
+_CT = ZoneInfo("America/Chicago")
+
+
+def _ct_in_block_window(now_ct: datetime, windows: list) -> tuple[bool, str]:
+    """Return (blocked, matched_range_str). 2026-05-03 fix C helper."""
+    if not windows:
+        return False, ""
+    hhmm = now_ct.strftime("%H:%M")
+    for start, end in windows:
+        if start <= hhmm <= end:
+            return True, f"{start}-{end}"
+    return False, ""
 
 # Regime-specific overrides — BE AGGRESSIVE in golden windows
 # Non-golden regimes use strategy config defaults (tighter gates)
@@ -71,6 +86,22 @@ class BiasMomentumFollow(BaseStrategy):
                     f"{_orig_rr:.1f} -> {target_rr:.1f} "
                     f"(regime={_adv.get('market_regime')})"
                 )
+
+        # 2026-05-03 fix C: session-window block. Reject signals during
+        # configured CT time windows. Forensic: 17 of 34 dataset losses
+        # occurred during 08:30-08:59 + 10:00-13:29 CT (50% of all losses).
+        # See out/bias_momentum_research_2026-05-03.md §1.
+        _block_windows = self.config.get("session_block_windows", [])
+        if _block_windows:
+            _now_ct = datetime.now(_CT)
+            _blocked, _rng = _ct_in_block_window(_now_ct, _block_windows)
+            if _blocked:
+                self._last_reject = (
+                    f"BIAS_MOM: session block window {_rng} CT — "
+                    f"forensic data shows this window is unprofitable"
+                )
+                logger.debug(f"[EVAL] {self.name}: BLOCKED gate:session_window {_rng}")
+                return None
 
         # Minimal warmup — only need 1 bar to have data, use what we have
         if len(bars_1m) < 1:
@@ -214,6 +245,22 @@ class BiasMomentumFollow(BaseStrategy):
                         f"no explosive bypass active (VCR={_vcr:.1f}, delta={_bar_delta:+.0f})")
                     logger.debug(f"[EVAL] {self.name}: BLOCKED gate:vwap_short")
                     return None
+
+        # 2026-05-03 fix B: SHORT-asymmetric quality requirement. Bot-wide
+        # SHORT WR was 9% over 11 trades — NQ structural long-bias drift hurts
+        # symmetric momentum strategies on the short side. When config
+        # `short_extra_gates=True` (default), SHORT entries require BOTH 1m
+        # AND 5m tf_bias = BEARISH on top of the standard EMA-stack gate.
+        # See out/bias_momentum_research_2026-05-03.md §2.
+        if direction == "SHORT" and self.config.get("short_extra_gates", True):
+            if bias_1m != "BEARISH" or bias_5m != "BEARISH":
+                self._last_reject = (
+                    f"BIAS_MOM: SHORT extra-gate — both 1m AND 5m bias must be "
+                    f"BEARISH (1m={bias_1m}, 5m={bias_5m}). NQ long-bias drift "
+                    f"requires stronger conviction for SHORT entries."
+                )
+                logger.debug(f"[EVAL] {self.name}: BLOCKED gate:short_extra_gates")
+                return None
 
         # ── CVD Gate — afternoon/chop regimes (HARD BLOCK) ──────────────────
         # Direction is now known. Check institutional flow in chop windows.
