@@ -857,6 +857,12 @@ class BaseBot:
             nt8_state = _read_position_file(OIF_OUTGOING, INSTRUMENT, pos.account)
             if nt8_state is None:
                 # FLAT or unreadable → treat as confirmed-closed; finalize.
+                # Sprint D F1 (2026-05-04): if we previously paged the
+                # operator about this stuck position, fire ONE RESOLVED
+                # confirmation now that NT8 is FLAT. Captured BEFORE the
+                # finalize_exit_pending() call removes the Position record.
+                _was_alerted = bool(getattr(pos, "_exit_timeout_alerted", False))
+                _resolved_age_s = now - pos.exit_pending_since
                 trade = self.positions.finalize_exit_pending(pos.trade_id)
                 logger.info(
                     f"[EXIT_FINALIZED:{pos.trade_id}] NT8 confirmed FLAT "
@@ -864,6 +870,23 @@ class BaseBot:
                     f"{pos.pending_exit_price:.2f} "
                     f"reason={pos.pending_exit_reason}"
                 )
+                if _was_alerted:
+                    try:
+                        from core.telegram_notifier import send_sync
+                        send_sync(
+                            f"✅ [EXIT_TIMEOUT_RESOLVED] {pos.account} "
+                            f"({pos.strategy}) flattened after "
+                            f"{_resolved_age_s:.0f}s of retries.",
+                            dedup_key=f"exit_resolved:{pos.trade_id}",
+                        )
+                        logger.info(
+                            f"[EXIT_TIMEOUT_RESOLVED:{pos.trade_id}] "
+                            f"closed after {_resolved_age_s:.0f}s of "
+                            f"alerted-stuck — operator paged on initial "
+                            f"escalation, now resolved."
+                        )
+                    except Exception:
+                        pass
                 # Propagate to risk / tracker / trade_memory / circuit
                 # breakers — same post-close hooks that _exit_trade used
                 # to fire synchronously before P0.6 moved the finalize
@@ -954,37 +977,87 @@ class BaseBot:
                     f"[EXIT_RETRY:{pos.trade_id}] retry write_oif failed: {_e!r}"
                 )
 
-            # Escalate to telegram + strategy halt only AFTER the
-            # escalation window. Keep retrying every cycle regardless.
+            # Telegram + strategy halt: Sprint D F1 (2026-05-04) — one-shot
+            # at first crossing of RETRY_ESCALATE_S, then hourly rollup if
+            # still stuck. Previous behavior dispatched a deduped telegram
+            # every cycle past the threshold; the dedup TTL was 15 minutes
+            # but the same condition kept re-firing each window — 26
+            # duplicate pages in 13h on the SimVWapp Pullback /
+            # SimDom Pull Back incident.
+            #
+            # Now: track per-Position _exit_timeout_alerted flag. Telegram
+            # fires exactly ONCE on first threshold crossing. If still stuck
+            # an hour later, ONE rollup ("still stuck for Xh") fires; that
+            # repeats hourly while stuck. When the position finally
+            # finalizes (NT8 confirms FLAT), _on_exit_timeout_resolved
+            # fires a single RESOLVED telegram (see finalize hook at the
+            # top of this method).
             RETRY_ESCALATE_S = 5 * 60   # 5 minutes of retries before paging
+            HOURLY_ROLLUP_S  = 3600     # 1 hour between rollup pages
+            should_alert = False
+            is_initial = False
+            is_rollup = False
             if age_s > RETRY_ESCALATE_S:
-                msg = (
-                    f"[EXIT_PENDING_TIMEOUT:{pos.trade_id}] {pos.account} "
-                    f"still shows {nt8_state[0]} {nt8_state[1]}@{nt8_state[2]} "
-                    f"after {age_s:.0f}s — Python thinks flat but NT8 is not. "
-                    f"Bot is auto-retrying directional flatten every cycle. "
-                    f"Halting strategy '{pos.strategy}' until resolved."
-                )
+                if not pos._exit_timeout_alerted:
+                    should_alert = True
+                    is_initial = True
+                elif now - pos._exit_timeout_last_alert_ts >= HOURLY_ROLLUP_S:
+                    should_alert = True
+                    is_rollup = True
+
+            if should_alert:
+                if is_initial:
+                    msg = (
+                        f"[EXIT_PENDING_TIMEOUT:{pos.trade_id}] {pos.account} "
+                        f"still shows {nt8_state[0]} {nt8_state[1]}@{nt8_state[2]} "
+                        f"after {age_s:.0f}s — Python thinks flat but NT8 is not. "
+                        f"Bot is auto-retrying directional flatten every cycle. "
+                        f"Halting strategy '{pos.strategy}' until resolved."
+                    )
+                    tg_msg = (
+                        f"🚨 [EXIT_TIMEOUT] {pos.account} stuck exit_pending "
+                        f"{age_s:.0f}s — bot is auto-retrying flatten. {msg}"
+                    )
+                else:
+                    hours = int(age_s // 3600)
+                    msg = (
+                        f"[EXIT_PENDING_TIMEOUT_STILL_STUCK:{pos.trade_id}] "
+                        f"{pos.account} still {nt8_state[0]} after ~{hours}h. "
+                        f"Operator action still required."
+                    )
+                    tg_msg = (
+                        f"⚠ [EXIT_TIMEOUT_STILL_STUCK] {pos.account} "
+                        f"({pos.strategy}) stuck for ~{hours}h - operator "
+                        f"action still required."
+                    )
                 logger.critical(msg)
                 try:
                     from core.telegram_notifier import send_sync
                     send_sync(
-                        f"🚨 [EXIT_TIMEOUT] {pos.account} stuck exit_pending "
-                        f"{age_s:.0f}s — bot is auto-retrying flatten. {msg}",
-                        dedup_key=f"exit_pending_timeout:{pos.trade_id}",
+                        tg_msg,
+                        # Per-attempt key so dedup TTL doesn't re-fire the
+                        # SAME message every 15min. The flag-based gating
+                        # above is the real one-shot mechanism.
+                        dedup_key=(
+                            f"exit_pending_timeout:{pos.trade_id}:"
+                            f"{'initial' if is_initial else f'rollup_{int(age_s // 3600)}h'}"
+                        ),
                     )
                 except Exception:
                     pass
-                # Strategy halt hook — only after the escalation window.
-                try:
-                    from core.strategy_risk_registry import StrategyRiskRegistry
-                    reg = getattr(self, "_conflict_reg", None) or StrategyRiskRegistry()
-                    if hasattr(reg, "halt_strategy"):
-                        reg.halt_strategy(pos.strategy, reason="exit_pending_timeout")
-                except Exception as _e:
-                    logger.error(
-                        f"[EXIT_PENDING_TIMEOUT] halt_strategy failed: {_e!r}"
-                    )
+                pos._exit_timeout_alerted = True
+                pos._exit_timeout_last_alert_ts = now
+                # Strategy halt hook — fires once at initial escalation.
+                if is_initial:
+                    try:
+                        from core.strategy_risk_registry import StrategyRiskRegistry
+                        reg = getattr(self, "_conflict_reg", None) or StrategyRiskRegistry()
+                        if hasattr(reg, "halt_strategy"):
+                            reg.halt_strategy(pos.strategy, reason="exit_pending_timeout")
+                    except Exception as _e:
+                        logger.error(
+                            f"[EXIT_PENDING_TIMEOUT] halt_strategy failed: {_e!r}"
+                        )
 
     def load_strategies(self):
         """Load strategy instances from config. Override in subclass if needed."""

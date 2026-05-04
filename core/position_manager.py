@@ -91,6 +91,15 @@ class Position:
     pending_exit_price: float = 0.0
     pending_exit_reason: str = ""
 
+    # ── 2026-05-04 (Sprint D F1): EXIT_TIMEOUT alert dedup state ────
+    # Per-position one-shot flag for the EXIT_TIMEOUT escalation. Once
+    # the first telegram has fired for this Position's stuck-exit
+    # window, this stays True for the rest of its lifecycle. Hourly
+    # rollups use _exit_timeout_last_alert_ts to spread one telegram
+    # per hour while still stuck.
+    _exit_timeout_alerted: bool = False
+    _exit_timeout_last_alert_ts: float = 0.0
+
     # ── Phase 4C multi-account routing ─────────────────────────────
     # account is the NT8 sim account the entry was routed to; exit /
     # scale-out / BE-stop OIFs must use the same account.
