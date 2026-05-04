@@ -1,7 +1,96 @@
 # Phoenix Bot — Current State
 
-_Last updated: 2026-04-25 ~17:40 CDT (full scheduled-task lattice operational, SMS verified end-to-end)_
+_Last updated: 2026-05-04 (Sprint H v3 — footprint_cvd_reversal with IQS scoring)_
 _Next Claude session: read this FIRST for situational awareness_
+
+## Sprint H v3 — Footprint + CVD Reversal w/ IQS (2026-05-04)
+
+New strategy `footprint_cvd_reversal`. Institutional 4-confluence
+reversal at MenthorQ HTF levels with composite Institutional Quality
+Score (IQS, 0-100). Lab-only (`validated=False`) until 50+ trades + PF > 1.3.
+
+### Why v3 vs v2
+
+v2 was halted by CC at Phase 1 — discovered 4 spec mismatches with
+Phoenix conventions. v3 ships Option A (match Phoenix conventions
+exactly):
+- BaseStrategy subclass instead of free-function evaluate()
+- Real Signal constructor (8 required fields + atr_stop_override)
+- Real MenthorQ attribute names: `put_support` / `put_support_0dte` /
+  `call_resistance` / `call_resistance_0dte` / `hvl` / `hvl_0dte`
+  on the GammaLevels dataclass instance accessed via getattr (NOT
+  the `_all`-suffixed dict from MenthorQSnapshot which is only used
+  for AI-prompt context)
+- VP POC via `market["prior_day_poc"]` (the real key)
+- Async bridge handler integrated into the existing TCP message router
+
+### Tick chart decision
+
+Single 1,500-tick volumetric stream (per emini-watch + NT8-forum
+research). Rejected 250 (too noisy at NQ open), 750 (still noisy),
+2,250 (effectively dormant at lunch), and 4,500 (HTF context already
+covered by MenthorQ + Net GEX). Single-stream chosen over multi-stream
+to avoid documented NT8 "thin liquidity + high volatility" issues.
+
+### IQS scoring system
+
+Each confluence contributes 0-25 pts; composite IQS 0-100.
+
+- **HTF level (max 25)**: 25pts MenthorQ confluence; 15pts VP POC fallback
+- **CVD divergence (max 25)**: multi-bar regular + single-bar delta
+- **Footprint (max 25)**: stacked / absorption / oversized (>=10x ratio)
+- **CVD compression (max 25)**: 5 sub-dimensions x 5pts each
+  - Delta magnitude shrinking (< 0.6x 20-bar baseline)
+  - Bar range shrinking (< 0.6x baseline)
+  - **Volume holding/elevated (>= 0.8x baseline)** — KEY check;
+    distinguishes absorption (low delta + low range + normal volume)
+    from dead market (low everything)
+  - Effort/result spike (> 1.5x baseline)
+  - Single-bar delta divergence
+
+Entry threshold: IQS >= 70.
+Tier (in `metadata['tier']`): A++ >= 90, A >= 80, B >= 70, C >= 60.
+
+### Operator action items (in order)
+
+1. **NT8 chart setup**: add 1,500-tick volumetric chart on MNQ
+   - Bar type: Volumetric (Order Flow+)
+   - Base period: 1,500 ticks
+   - Ticks per level: 1 (finest granularity)
+   - Delta type: BidAsk (UpDownTick fallback if Last-only)
+   - Imbalance ratio: 3.0
+   - Stacked threshold: 3
+2. **Implement TickStreamer.cs volumetric emitter** per Sprint H v3
+   Phase 2a spec — emit `type:"volumetric_bar"` typed messages on
+   each bar close
+3. Recompile NinjaScript in NT8
+4. Verify `data/volumetric_latest.json` updates each bar:
+   `cat data/volumetric_latest.json`
+5. Verify `SimFootprintchart` account exists in NT8 control center
+   (signals route to it but get dropped if it doesn't exist)
+6. Restart sim_bot to pick up the new strategy
+7. Watch `[FOOTPRINT_CVD]` logs for IQS scoring of every evaluation
+8. After ~50 trades:
+   ```
+   python tools/validation_tracker.py --strategy footprint_cvd_reversal --post-b13-only
+   python tools/indicator_audit.py --strategy footprint_cvd_reversal
+   ```
+9. Promote to `validated=True` only if PF > 1.3 + WR > 50% + sample
+   tier reaches TENTATIVE (n >= 100)
+
+### Tuning knobs (in `config/strategies.py`)
+
+- `entry_threshold_iqs` (default 70): raise for pickier; lower for more signals
+- `compression_size_threshold` (default 0.6): lower for stricter compression detection
+- `compression_volume_floor` (default 0.8): higher for stricter dead-market filter
+- `divergence_lookback_bars` (default 10): lower to catch faster reversals
+
+### Until TickStreamer.cs ships
+
+Strategy stays dormant. `[FOOTPRINT_CVD] DATA_NOT_AVAILABLE` is logged
+**once** per session run (not per evaluation) so the log isn't spammed.
+
+---
 
 ## ✅ Saturday EOD — full operational state
 
