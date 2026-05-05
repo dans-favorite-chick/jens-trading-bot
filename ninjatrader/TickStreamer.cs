@@ -34,6 +34,7 @@ using System.Threading;
 using NinjaTrader.Cbi;
 using NinjaTrader.Data;
 using NinjaTrader.NinjaScript;
+using NinjaTrader.NinjaScript.BarsTypes;
 using NinjaTrader.NinjaScript.Indicators;
 #endregion
 
@@ -94,6 +95,25 @@ namespace NinjaTrader.NinjaScript.Indicators
         private double[] domBidVols  = new double[DOM_LEVELS];
         private double[] domAskVols  = new double[DOM_LEVELS];
         private DateTime lastDomSend = DateTime.MinValue;
+
+        // ── VOLUMETRIC BAR EMITTER (Sprint H v3 Phase 2a) ──────────────────
+        // On each volumetric bar close, emit aggregated bid/ask/delta/POC +
+        // imbalance list + stacked-imbalance flags + session CVD as JSON.
+        // The bridge persists each emission to data/volumetric_latest.json
+        // and logs/volumetric_history.jsonl for strategies/footprint_cvd_reversal.
+        //
+        // Operator must configure this chart as 1,500-tick Volumetric (Order
+        // Flow+) bars with BidAsk delta type and ticks_per_level=1. If the
+        // chart is NOT a volumetric series, EmitVolumetricBar() logs ONCE
+        // and silently no-ops — strategy stays dormant logging
+        // DATA_NOT_AVAILABLE without crashing the tick loop.
+        private const double IMBALANCE_RATIO     = 3.0;   // ≥3:1 = imbalanced level
+        private const int    STACKED_THRESHOLD   = 3;     // 3+ consecutive same-side
+        private const int    VOLUMETRIC_BAR_SIZE = 1500;  // emitted in JSON for context
+        private long         sessionCvd          = 0;     // cumulative session delta
+        private DateTime     sessionCvdResetDate = DateTime.MinValue;
+        private int          lastEmittedVolBar   = -1;    // dedupe guard
+        private bool         volumetricWarned    = false; // log "not volumetric" once
 
         // ── AUX INSTRUMENT THROTTLING ─────────────────────────────────────
         // VIX/VXN don't need every tick — throttle to ~2/sec to reduce load.
@@ -204,6 +224,23 @@ namespace NinjaTrader.NinjaScript.Indicators
         // ── PRIMARY TICK PROCESSING (MNQ) ──────────────────────────────────
         private void ProcessPrimaryTick()
         {
+            // Sprint H v3 Phase 2a: volumetric bar emit on bar close.
+            // IsFirstTickOfBar is set true on the first tick AFTER a bar
+            // closes, so the just-closed bar is at CurrentBar - 1. Wrapped
+            // in try/catch — emitter failure must never break the tick loop.
+            if (IsFirstTickOfBar && CurrentBar >= 1)
+            {
+                try
+                {
+                    EmitVolumetricBar(CurrentBar - 1);
+                }
+                catch (Exception ex)
+                {
+                    Print("TickStreamer EmitVolumetricBar error: " + ex.Message);
+                    // Caught + logged. Tick loop continues normally.
+                }
+            }
+
             double price = Closes[0][0];
             double bid   = GetCurrentBid(0);
             double ask   = GetCurrentAsk(0);
@@ -450,6 +487,170 @@ namespace NinjaTrader.NinjaScript.Indicators
         {
             if (string.IsNullOrEmpty(s)) return "";
             return s.Replace("\\", "\\\\").Replace("\"", "\\\"");
+        }
+
+        // ── VOLUMETRIC EMITTER (Sprint H v3 Phase 2a) ──────────────────
+        // Cast Bars.BarsSeries.BarsType as VolumetricBarsType, iterate price
+        // levels with GetBidVolumeForPrice / GetAskVolumeForPrice, build
+        // imbalances list, detect stacked + max ratio, emit JSON via Send().
+        // Returns silently (with one-time log) if the chart isn't a
+        // Volumetric series — operator configuration error, strategy stays
+        // dormant.
+        private void EmitVolumetricBar(int barIdx)
+        {
+            if (!isConnected) return;            // bridge offline — drop bar
+            if (barIdx < 0) return;
+            if (barIdx == lastEmittedVolBar) return;   // dedupe
+            lastEmittedVolBar = barIdx;
+
+            var volumetricBarsType = Bars.BarsSeries.BarsType as
+                NinjaTrader.NinjaScript.BarsTypes.VolumetricBarsType;
+            if (volumetricBarsType == null)
+            {
+                if (!volumetricWarned)
+                {
+                    Print("TickStreamer: chart is NOT a Volumetric bars series — " +
+                          "footprint_cvd_reversal strategy will stay dormant. " +
+                          "Configure chart per Sprint H v3 spec (1,500-tick " +
+                          "Volumetric, BidAsk delta, ticks_per_level=1).");
+                    volumetricWarned = true;
+                }
+                return;
+            }
+
+            var vol = volumetricBarsType.Volumes[barIdx];
+            if (vol == null) return;
+
+            double barOpen  = Bars.GetOpen(barIdx);
+            double barHigh  = Bars.GetHigh(barIdx);
+            double barLow   = Bars.GetLow(barIdx);
+            double barClose = Bars.GetClose(barIdx);
+
+            // Daily session-CVD reset on date boundary.
+            DateTime barTime = Bars.GetTime(barIdx);
+            if (barTime.Date != sessionCvdResetDate)
+            {
+                sessionCvd = 0;
+                sessionCvdResetDate = barTime.Date;
+            }
+
+            // Iterate every price level in the bar [low..high] in TickSize
+            // increments. Aggregate buy/sell volume + find POC + build
+            // imbalance list + scan for 3+ consecutive same-side stacks.
+            //
+            // Imbalance definition: same-level ratio with both sides > 0.
+            //   Buy imbalance:  ask >= IMBALANCE_RATIO × bid (and bid > 0)
+            //   Sell imbalance: bid >= IMBALANCE_RATIO × ask (and ask > 0)
+            // The "both sides > 0" guard prevents the "infinite ratio when
+            // one side is zero" false-positive (NT8 forum thread 1091161).
+            long buyVolTotal  = 0;   // aggressive lift-ask
+            long sellVolTotal = 0;   // aggressive hit-bid
+            double poc        = 0;
+            long pocVolume    = 0;
+
+            var imbalancesJson = new StringBuilder(256);
+            imbalancesJson.Append("[");
+            bool firstImb = true;
+            double maxRatio = 0;
+            int consecutiveBuy  = 0;
+            int consecutiveSell = 0;
+            bool stackedBuy  = false;
+            bool stackedSell = false;
+
+            for (double price = barLow;
+                 price <= barHigh + (TickSize / 2);
+                 price = Instrument.MasterInstrument.RoundToTickSize(price + TickSize))
+            {
+                long bidVol = (long)vol.GetBidVolumeForPrice(price);
+                long askVol = (long)vol.GetAskVolumeForPrice(price);
+
+                buyVolTotal  += askVol;
+                sellVolTotal += bidVol;
+
+                long levelTotal = bidVol + askVol;
+                if (levelTotal > pocVolume)
+                {
+                    pocVolume = levelTotal;
+                    poc = price;
+                }
+
+                // No volume on one side → can't compute ratio + breaks
+                // the stacked-consecutive run.
+                if (bidVol == 0 || askVol == 0)
+                {
+                    consecutiveBuy = 0;
+                    consecutiveSell = 0;
+                    continue;
+                }
+
+                double ratio;
+                string side;
+                if (askVol >= IMBALANCE_RATIO * bidVol)
+                {
+                    ratio = (double)askVol / (double)bidVol;
+                    side = "buy";
+                    consecutiveBuy++;
+                    consecutiveSell = 0;
+                    if (consecutiveBuy >= STACKED_THRESHOLD) stackedBuy = true;
+                }
+                else if (bidVol >= IMBALANCE_RATIO * askVol)
+                {
+                    ratio = (double)bidVol / (double)askVol;
+                    side = "sell";
+                    consecutiveSell++;
+                    consecutiveBuy = 0;
+                    if (consecutiveSell >= STACKED_THRESHOLD) stackedSell = true;
+                }
+                else
+                {
+                    consecutiveBuy = 0;
+                    consecutiveSell = 0;
+                    continue;   // not imbalanced — don't emit a row
+                }
+
+                if (ratio > maxRatio) maxRatio = ratio;
+
+                if (!firstImb) imbalancesJson.Append(",");
+                firstImb = false;
+                imbalancesJson.Append("{\"price\":").Append(price)
+                              .Append(",\"bid_vol\":").Append(bidVol)
+                              .Append(",\"ask_vol\":").Append(askVol)
+                              .Append(",\"ratio\":").Append(ratio.ToString("F2"))
+                              .Append(",\"side\":\"").Append(side).Append("\"}");
+            }
+            imbalancesJson.Append("]");
+
+            long delta = buyVolTotal - sellVolTotal;
+            long totalVolume = buyVolTotal + sellVolTotal;
+            sessionCvd += delta;
+
+            // Build the JSON message. Fields match bridge_server.py
+            // VOLUMETRIC_REQUIRED set + a few decorative extras (bar_size_ticks,
+            // max_imbalance_ratio) that the strategy reads but the bridge
+            // schema gate doesn't require.
+            var msg = new StringBuilder(512);
+            msg.Append("{\"type\":\"volumetric_bar\"");
+            msg.Append(",\"ts\":\"").Append(barTime.ToString("o")).Append("\"");
+            msg.Append(",\"instrument\":\"")
+               .Append(EscapeJson(primaryInstrumentName)).Append("\"");
+            msg.Append(",\"bar_size_ticks\":").Append(VOLUMETRIC_BAR_SIZE);
+            msg.Append(",\"open\":").Append(barOpen);
+            msg.Append(",\"high\":").Append(barHigh);
+            msg.Append(",\"low\":").Append(barLow);
+            msg.Append(",\"close\":").Append(barClose);
+            msg.Append(",\"delta\":").Append(delta);
+            msg.Append(",\"total_volume\":").Append(totalVolume);
+            msg.Append(",\"buy_volume\":").Append(buyVolTotal);
+            msg.Append(",\"sell_volume\":").Append(sellVolTotal);
+            msg.Append(",\"poc\":").Append(poc);
+            msg.Append(",\"imbalances\":").Append(imbalancesJson.ToString());
+            msg.Append(",\"stacked_buy\":").Append(stackedBuy ? "true" : "false");
+            msg.Append(",\"stacked_sell\":").Append(stackedSell ? "true" : "false");
+            msg.Append(",\"max_imbalance_ratio\":").Append(maxRatio.ToString("F2"));
+            msg.Append(",\"cvd_session\":").Append(sessionCvd);
+            msg.Append("}");
+
+            Send(msg.ToString());
         }
     }
 }
