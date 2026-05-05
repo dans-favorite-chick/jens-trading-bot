@@ -1080,6 +1080,7 @@ class BaseBot:
         from strategies.noise_area import NoiseAreaMomentum
         from strategies.vwap_band_pullback import VwapBandPullback
         from strategies.opening_session import OpeningSessionStrategy
+        from strategies.footprint_cvd_reversal import FootprintCVDReversal
 
         strategy_classes = {
             "bias_momentum": BiasMomentumFollow,
@@ -1093,6 +1094,7 @@ class BaseBot:
             "orb": OpeningRangeBreakout,
             "noise_area": NoiseAreaMomentum,
             "opening_session": OpeningSessionStrategy,
+            "footprint_cvd_reversal": FootprintCVDReversal,
         }
 
         is_prod = (self.bot_name == "prod")
