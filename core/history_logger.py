@@ -96,20 +96,18 @@ class HistoryLogger:
         })
 
     def log_eval(self, eval_record: dict, market: dict):
-        """Log a full strategy evaluation — signals, skips, blocks, and why."""
-        # S1 / phase-eh: surface gamma_regime as a first-class snapshot field.
-        # It may live on either eval_record (preferred) or market, and may be
-        # an enum with a `.value` string — normalize both.
-        _gr = eval_record.get("gamma_regime", market.get("gamma_regime"))
-        _gr_str = _gr.value if hasattr(_gr, "value") else (
-            str(_gr) if _gr is not None else None
-        )
+        """Log a full strategy evaluation — signals, skips, blocks, and why.
+
+        Sprint J 2026-05-06 cleanup: gamma_regime / above_hvl fields
+        removed from the eval record (MenthorQ subscription retired,
+        always UNKNOWN/None). Older log entries on disk retain their
+        original schema and remain readable.
+        """
         self._write({
             "event":        "eval",
             "ts":           datetime.now().isoformat(),
             "bot":          self.bot_name,
             "regime":       eval_record.get("regime"),
-            "gamma_regime": _gr_str,
             "risk_blocked": eval_record.get("risk_blocked"),
             "strategies":   eval_record.get("strategies", []),
             "best_signal":  eval_record.get("best_signal"),
@@ -135,18 +133,17 @@ class HistoryLogger:
             "smc":              eval_record.get("smc"),
             "cr_verdict":       market.get("cr_verdict"),
             "cr_confidence":    market.get("cr_confidence"),
-            "above_hvl":        market.get("above_hvl"),
-            # gamma_regime is now first-class above (line ~112); do not re-key it here.
         })
 
     def log_entry(self, signal, price: float, contracts: int,
                   stop_price: float, target_price: float,
                   risk_dollars: float, tier: str, market: dict):
-        """Log a trade entry with full context."""
-        # B14 Phase 4: first-class gamma fields for post-hoc analysis.
-        _gr = market.get("gamma_regime")
-        _gr_str = _gr.value if hasattr(_gr, "value") else str(_gr)
-        _gw = market.get("gamma_nearest_wall") or ("none", 9999.0)
+        """Log a trade entry with full context.
+
+        Sprint J 2026-05-06: gamma_regime / gamma_wall_proximity /
+        gamma_in_pin_zone fields removed (MQ subscription retired).
+        Older entries on disk retain those keys.
+        """
         self._write({
             "event":        "entry",
             "ts":           datetime.now().isoformat(),
@@ -165,22 +162,21 @@ class HistoryLogger:
             "tier":         tier,
             "stop_ticks":   signal.stop_ticks,
             "target_rr":    signal.target_rr,
-            # B14 gamma context
-            "gamma_regime":         _gr_str,
-            "gamma_wall_proximity": {"wall": _gw[0], "ticks": _gw[1]},
-            "gamma_in_pin_zone":    bool(market.get("gamma_in_pin_zone", False)),
-            # Full market at entry — strip non-JSON fields (GammaLevels, enum).
+            # Full market at entry — strip non-JSON fields. gamma_levels
+            # / gamma_regime are filtered out in case any upstream code
+            # still injects them (defensive, post-Sprint-J they shouldn't).
             "market":       {k: v for k, v in market.items()
                              if k not in ("tf_bias", "gamma_levels", "gamma_regime")},
             "tf_bias":      market.get("tf_bias"),
         })
 
     def log_exit(self, trade: dict, market: dict):
-        """Log a trade exit with P&L and full context."""
-        # B14 Phase 4: gamma state at exit (for regime-change analysis).
-        _gr = market.get("gamma_regime")
-        _gr_str = _gr.value if hasattr(_gr, "value") else str(_gr)
-        _gw = market.get("gamma_nearest_wall") or ("none", 9999.0)
+        """Log a trade exit with P&L and full context.
+
+        Sprint J 2026-05-06: gamma_regime_at_exit / gamma_wall_proximity_at_exit
+        fields removed (MQ subscription retired). Older entries on disk
+        retain those keys.
+        """
         self._write({
             "event":        "exit",
             "ts":           datetime.now().isoformat(),
@@ -201,9 +197,6 @@ class HistoryLogger:
             "vwap_at_exit":      market.get("vwap"),
             "cvd_at_exit":       market.get("cvd"),
             "atr_at_exit":       market.get("atr_5m"),
-            # B14 gamma context at exit
-            "gamma_regime_at_exit":         _gr_str,
-            "gamma_wall_proximity_at_exit": {"wall": _gw[0], "ticks": _gw[1]},
             # MAE/MFE from ExpectancyEngine (Phase A: persisted for ML training)
             "mae_ticks":       market.get("mae_ticks"),
             "mfe_ticks":       market.get("mfe_ticks"),

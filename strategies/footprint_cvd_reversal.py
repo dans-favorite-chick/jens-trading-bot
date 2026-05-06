@@ -60,11 +60,11 @@ PHOENIX INTEGRATION
 - BaseStrategy subclass with name="footprint_cvd_reversal"
 - Uses real Signal constructor (8 required fields + atr_stop_override
   since we compute the stop from structural bar levels, not ATR)
-- MenthorQ levels come from market["gamma_levels"] (a GammaLevels
-  dataclass instance from core/menthorq_gamma.py). Attribute access
-  via getattr — keys are: put_support, put_support_0dte,
-  call_resistance, call_resistance_0dte, hvl, hvl_0dte.
-- Prior-session VP POC from market["prior_day_poc"].
+- HTF levels: 2026-05-06 Sprint J rewired to use core/price_action_levels
+  (Sprint I infrastructure). _build_pa_levels_from_market() reads
+  prior_day_high/low/close, prior_day_poc, vwap, hvn_levels, lvn_levels
+  from the market dict; find_nearest_htf_level() does tier-weighted
+  scoring (TIER_1=25 / TIER_2=18 / TIER_3=12).
 - Volumetric bars come from disk (a separate stream from NT8's
   tick aggregator), so bars_5m/bars_1m args from BaseStrategy.evaluate
   are unused.

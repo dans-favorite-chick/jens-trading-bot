@@ -86,13 +86,14 @@ class GammaFlipDetector:
         Feed one 5m completed bar.
         Args:
           bar: has .close, .volume, .ts attributes
-          hvl: current HVL level from MenthorQ
+          hvl: current HVL level (from price_action_levels.PriceActionLevels.hvl
+               or any other source; MenthorQ feed retired Sprint J 2026-05-06)
           news_event_recent: True if a major calendar event is within +/- 15 min
         Returns:
           FlipEvent if a flip is confirmed this bar, else None.
         """
         if hvl <= 0:
-            return None  # No HVL data
+            return None  # No HVL data — caller already passes 0 since MQ retired
         ts = bar.ts if hasattr(bar, "ts") else datetime.now()
 
         # Track volume MA

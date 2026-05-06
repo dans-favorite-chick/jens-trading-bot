@@ -15,7 +15,6 @@ time exit. Multi-leg is stubbed for future multi-contract accounts.
 
 Universal guards (all sub-evaluators):
   - News blackout (+/-5 min around high-impact releases)
-  - Gamma gate (core.menthorq_gamma.is_entry_into_wall)
   - Max 2 trades/day
   - Day flat by 14:30 CT
   - Volume confirmation on the entry bar (each sub-evaluator)
@@ -151,10 +150,11 @@ class OpeningSessionStrategy(BaseStrategy):
             sig = sub_callable(market)
             if sig is None:
                 return None
-            gated = self._apply_gamma_gate(sig, market)
-            if gated is not None:
-                self._daily_trades_today += 1
-            return gated
+            # 2026-05-06 Sprint J cleanup: removed _apply_gamma_gate
+            # call (MQ subscription cancelled; gate always returned the
+            # signal unchanged because gamma_levels is never set).
+            self._daily_trades_today += 1
+            return sig
 
         # 1. Premarket Breakout (any opening type)
         if is_in_window(now_ct, "08:30", "08:45"):
@@ -193,24 +193,6 @@ class OpeningSessionStrategy(BaseStrategy):
                 return out
 
         return None
-
-    # ── Gamma gate ─────────────────────────────────────────────────
-    def _apply_gamma_gate(self, signal: Signal, market: dict) -> Signal | None:
-        levels = market.get("gamma_levels")
-        if levels is None:
-            return signal
-        try:
-            from core.menthorq_gamma import is_entry_into_wall
-        except ImportError:
-            return signal
-        entry_price = signal.entry_price if signal.entry_price is not None else market.get("price")
-        if entry_price is None:
-            return signal
-        wall = is_entry_into_wall(float(entry_price), signal.direction, levels)
-        if wall:
-            self._log_eval(f"BLOCKED gamma_gate wall={wall}")
-            return None
-        return signal
 
     # ── Universal stop math ────────────────────────────────────────
     def _apply_universal_stop_clamp(

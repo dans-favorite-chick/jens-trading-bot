@@ -149,11 +149,11 @@ class TestCautionFlags:
         g = ma.compute_guidance(m, fmp_snap=None)
         assert "vix_elevated" in g.caution_flags
 
-    def test_gamma_regime_unknown_flag(self):
-        m = _base_market()
-        m["menthorq"]["gex_regime"] = "UNKNOWN"
-        g = ma.compute_guidance(m, fmp_snap=None)
-        assert "gamma_regime_unknown" in g.caution_flags
+    # 2026-05-06 Sprint J: test_gamma_regime_unknown_flag removed.
+    # The gamma_regime_unknown caution flag was retired with the
+    # MenthorQ subscription — flag never fires now (always-empty MQ
+    # state was just noise). market_advisor docstring updated to
+    # reflect the change.
 
     def test_fmp_hard_disagreement_flag(self):
         m = _base_market()

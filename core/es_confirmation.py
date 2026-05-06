@@ -1,24 +1,17 @@
 """
 Phoenix Bot — ES Gamma Confirmation
 
-Pulls ES (S&P 500 E-mini) MenthorQ gamma data to confirm or diverge from NQ.
-When NQ and ES are in opposite gamma regimes, caution: the setup may be
-NQ-specific noise rather than a broader market move.
+⚠️  EFFECTIVELY DORMANT 2026-05-06 (Sprint J cleanup) ⚠️
+Originally pulled ES (S&P 500 E-mini) MenthorQ gamma data to confirm
+or diverge from NQ. With the MenthorQ subscription cancelled, the NQ
+side that fed `nq_regime` is always "UNKNOWN", and the manual ES
+regime file (memory/procedural/es_regime.json) is no longer updated.
+check_confirmation() therefore always returns the "ES UNAVAILABLE,
+confluence_adjust=0" no-op path and is harmless to call.
 
-Research basis (2026):
-- NQ and ES are highly correlated (0.85+ daily); divergences are meaningful
-- Gamma regime divergence (NQ POSITIVE, ES NEGATIVE) = mixed signal, reduce conviction
-- Both in same regime = confirmed broader tape positioning
-
-This module provides a LIGHTWEIGHT check. We don't need a second MQBridge
-for ES — we fetch ES daily summary from external source or fall back to
-NQ-only when unavailable.
-
-v1 implementation uses a small file/placeholder mechanism. User can manually
-update memory/procedural/es_regime.json each morning from MenthorQ ES dashboard:
-  {"date": "2026-04-17", "regime": "POSITIVE", "net_gex_bn": 4.2}
-
-Future: API integration when credentials / data source confirmed.
+The module is preserved for backward compat with strategies that may
+still call it as a context check. If/when an alternative gamma data
+source is integrated, callers' interface stays the same.
 """
 
 from __future__ import annotations
@@ -67,8 +60,12 @@ def load_es_regime(today: date = None) -> Optional[dict]:
 
 def check_confirmation(nq_regime: str, today: date = None) -> ESConfirmation:
     """
-    Compare NQ MenthorQ regime against ES (from manual daily file).
+    Compare NQ regime against ES (from manual daily file).
     Returns confluence adjustment that strategies apply to composite bias score.
+
+    Sprint J 2026-05-06: NQ-side regime is always "UNKNOWN" since MQ
+    cancelled, so this always returns the no-op path
+    (es_data_available=False, confluence_adjust=0).
     """
     es_data = load_es_regime(today)
     if es_data is None:

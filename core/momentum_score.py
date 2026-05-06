@@ -1,12 +1,13 @@
 """
 Phoenix Bot -- Daily Momentum Score Tracker
 
-Computes a 1-5 daily momentum score from market structure, matching
-the concept used by MenthorQ's Quinn AI for multi-day trend assessment.
+Computes a 1-5 daily momentum score from market structure (TF
+alignment, VWAP position, CVD direction). Sprint J 2026-05-06 removed
+the HVL-position bonus factor that previously consumed MenthorQSnapshot.
 
 Score Definitions:
     5 -- INSTITUTIONAL: All 4 TF aligned, strong CVD, price well above/below
-         VWAP and HVL, ATR expanding. Full institutional conviction.
+         VWAP, ATR expanding. Full institutional conviction.
     4 -- DEVELOPING: 3+ TF aligned, above/below VWAP, directional CVD.
          Real trend underway but not max strength.
     3 -- TRANSITIONAL: 2 TF aligned, mixed CVD, price near VWAP.
@@ -60,7 +61,8 @@ def compute_score(market: dict, mq_snap=None) -> dict:
 
     Args:
         market: Dict from aggregator.snapshot() -- price, tf_bias, cvd, vwap, atr_5m, etc.
-        mq_snap: Optional MenthorQSnapshot for HVL context
+        mq_snap: DEPRECATED 2026-05-06 (Sprint J) — accepted for backward
+                 compat but ignored. Was MenthorQSnapshot for HVL bonus.
 
     Returns dict:
         {
@@ -150,34 +152,14 @@ def compute_score(market: dict, mq_snap=None) -> dict:
         elif direction == "BEARISH" and cvd > 0:
             factors.append(f"CVD positive (+{cvd/1e6:.1f}M) vs bearish price -- divergence warning")
 
-    # ── Factor 4: HVL position (MenthorQ gamma context) ──────────────
-    if mq_snap and mq_snap.hvl > 0:
-        hvl = mq_snap.hvl
-        above_hvl = price >= hvl
-        if direction == "BULLISH" and above_hvl:
-            dist_pct = (price - hvl) / hvl * 100
-            if dist_pct > 1.0:
-                points += 1
-                factors.append(f"Price {dist_pct:.1f}% above HVL {hvl:.2f} (strong positive gamma)")
-            else:
-                points += 0.5
-                factors.append(f"Price at/just above HVL {hvl:.2f} (positive gamma zone)")
-        elif direction == "BEARISH" and not above_hvl:
-            dist_pct = (hvl - price) / hvl * 100
-            if dist_pct > 1.0:
-                points += 1
-                factors.append(f"Price {dist_pct:.1f}% below HVL {hvl:.2f} (negative gamma, momentum)")
-            else:
-                points += 0.5
-                factors.append(f"Price just below HVL {hvl:.2f} (negative gamma zone)")
-        elif direction == "BULLISH" and not above_hvl:
-            factors.append(f"Price BELOW HVL {hvl:.2f} in bullish setup -- negative gamma headwind")
-        elif direction == "BEARISH" and above_hvl:
-            factors.append(f"Price ABOVE HVL {hvl:.2f} in bearish setup -- positive gamma headwind")
+    # ── Factor 4: HVL position (REMOVED 2026-05-06 Sprint J) ─────────
+    # Was: gamma-context bonus from MenthorQSnapshot.hvl. MQ subscription
+    # cancelled — mq_snap is always None or empty default. Block removed
+    # entirely; max_points adjusted from 7 to 6.
 
     # ── Normalize to 1-5 scale ────────────────────────────────────────
-    # Max possible points: 4 (TF) + 1 (VWAP) + 1 (CVD) + 1 (HVL) = 7
-    # Map: 0-1 pts = 1, 1-2 pts = 2, 3 pts = 3, 4-5 pts = 4, 6-7 pts = 5
+    # Max possible points: 4 (TF) + 1 (VWAP) + 1 (CVD) = 6
+    # Map: 0-1 pts = 1, 1-2 pts = 2, 3 pts = 3, 4-5 pts = 4, 6 pts = 5
     raw = points
     if direction == "NEUTRAL" or aligned == 0:
         score = 1

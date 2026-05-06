@@ -141,16 +141,12 @@ def check_fmp_drift() -> tuple[str, str, dict]:
 
 
 def check_mq_staleness() -> tuple[str, str, dict]:
-    mq_path = _HERE.parent.parent.parent / "data" / "menthorq_daily.json"
-    if not mq_path.exists():
-        return "RED", "data/menthorq_daily.json missing entirely", {}
-    import time as _time
-    age_h = (_time.time() - mq_path.stat().st_mtime) / 3600
-    if age_h >= MQ_STALE_RED_HOURS:
-        return "RED", f"MQ paste {age_h:.1f}h stale (>{MQ_STALE_RED_HOURS}h)", {"age_h": age_h}
-    if age_h >= MQ_STALE_YELLOW_HOURS:
-        return "YELLOW", f"MQ paste {age_h:.1f}h stale (refresh recommended)", {"age_h": age_h}
-    return "GREEN", f"MQ paste {age_h:.1f}h fresh", {"age_h": age_h}
+    """⚠️  RETIRED 2026-05-06 (Sprint J) — MQ subscription cancelled.
+
+    Returns GREEN/no-op so the morning_ritual checklist doesn't keep
+    flagging the missing/archived menthorq_daily.json as RED.
+    """
+    return "GREEN", "MenthorQ retired 2026-05-05 — check skipped", {}
 
 
 def check_watcher_heartbeat(snapshot: dict) -> tuple[str, str, dict]:

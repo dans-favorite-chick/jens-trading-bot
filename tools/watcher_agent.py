@@ -118,7 +118,10 @@ NO_TRADES_WARN_MIN = 60
 LOG_ERROR_PATTERNS = re.compile(
     r"\b(ERROR|EXCEPTION|CRITICAL|Traceback)\b", re.IGNORECASE
 )
-# Known-benign CRITICAL patterns we do NOT want to page on
+# Known-benign CRITICAL patterns we do NOT want to page on.
+# 2026-05-06 Sprint J: kept "MenthorQ.*stale" in case any older log
+# tail still surfaces it (from before the subscription retired); the
+# warning won't be re-emitted by current code paths.
 BENIGN_CRITICAL = re.compile(
     r"PRICE_SANITY|MenthorQ.*stale|FMP fallback|MODE FLIP"
 )

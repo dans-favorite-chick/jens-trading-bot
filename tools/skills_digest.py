@@ -212,7 +212,7 @@ def _emit_markdown(skills: list[SkillEntry]) -> str:
     lines.append("In a Claude Code session, ask the assistant to use the skill by name or context. Examples:")
     lines.append("")
     lines.append("- *\"Use the **risk-metrics-calculation** skill to compute Sharpe + max drawdown for the last 30 trades in `logs/trade_memory.json`.\"*")
-    lines.append("- *\"Use **pdf** to extract the regime signals from `data/menthorq/morning_brief.pdf`.\"*")
+    lines.append("- *\"Use **pdf** to extract the daily checklist from `out/morning_ritual_today.md`.\"*")
     lines.append("- *\"Use **frontend-design** to add a sentiment-flow widget to dashboard.html.\"*")
     lines.append("")
     return "\n".join(lines)

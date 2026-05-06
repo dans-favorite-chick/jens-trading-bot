@@ -233,17 +233,23 @@ class TestStructuralBias(unittest.TestCase):
         trail = bias.reasoning_trail()
         self.assertIn("swing_structure", trail)
 
-    def test_vetoes_recorded_separately(self):
+    def test_pin_risk_veto_recorded(self):
+        """2026-05-06 Sprint J: MQ_STALE veto removed (subscription
+        retired). Pinning veto path remains — pinning_detector itself is
+        dormant but if a pin_risk_active dict is injected manually, the
+        composite still records it. Test reduced to PIN_RISK only."""
         from core.structural_bias import compute_structural_bias
         snap = {
             "close": 26500,
-            "pinning_state": {"pin_risk_active": True, "pin_level_name": "0DTE_CR", "pinning_level": 26500},
-            "menthorq": {"age_hours": 48},  # Stale
+            "pinning_state": {
+                "pin_risk_active": True,
+                "pin_level_name": "0DTE_CR",
+                "pinning_level": 26500,
+            },
         }
         bias = compute_structural_bias(snap)
-        self.assertEqual(len(bias.vetoes), 2)
+        self.assertEqual(len(bias.vetoes), 1)
         self.assertTrue(any("PIN_RISK" in v for v in bias.vetoes))
-        self.assertTrue(any("STALE" in v for v in bias.vetoes))
 
 
 # ═════════════════════════════════════════════════════════════════════

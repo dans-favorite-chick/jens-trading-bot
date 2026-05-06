@@ -1,29 +1,21 @@
 """
 Phoenix Bot — 0DTE Pinning Detector
 
+⚠️  EFFECTIVELY DORMANT 2026-05-06 (Sprint J cleanup) ⚠️
+Pinning detection requires 0DTE call_resistance / put_support /
+gamma_wall levels which came from MenthorQ. With the MQ subscription
+cancelled, mq_levels is always the empty default dict and:
+  regime = mq_levels.get("regime", "UNKNOWN")
+=> "UNKNOWN" => pin_risk_active stays False on every update.
+
+The class + update() interface is preserved so existing base_bot
+plumbing (`self.pinning_detector.update(...)`) and the structural_bias
+composite that reads `pinning_state` continue to work as no-ops.
+
+Original spec retained for context:
+
 Detects high pin risk in last 90 min of RTH: price near a major 0DTE
 gamma strike where dealer hedging tends to pin price around the strike.
-
-Research basis (2026):
-- 0DTE gamma peaks on expiration day; dealer hedging strongest at-the-money
-- Last 90 min RTH: call/put walls act as magnets or ceilings/floors
-- Entering new trades near a pin level is low-probability (price gets stuck)
-- Exception: a sustained BREACH of the pin level with volume = pinning failed,
-  real directional move in progress
-
-Rules:
-  pin_risk_active = True when:
-    - Time is in 13:30-15:00 CDT window (last 90 min of RTH)
-    - Price within 10 ticks of 0DTE call_resistance OR put_support OR gamma_wall
-    - MenthorQ regime is POSITIVE (pinning requires positive gamma)
-
-When pin_risk_active:
-  - New entry signals get a "pin_risk" veto flag (strategies check + skip)
-  - Existing open positions: tighten stop TO the pin level (pin will reject)
-
-On pin BREACH (sustained 5m close beyond the level with > 1.5x avg volume):
-  - Clear pin_risk flag
-  - Allow new entries (market just broke out of the pinning zone)
 """
 
 from __future__ import annotations

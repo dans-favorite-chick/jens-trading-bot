@@ -15,7 +15,9 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from config.strategies import STRATEGIES
-from core.menthorq_gamma import GammaLevels
+# 2026-05-06 Sprint J: removed `from core.menthorq_gamma import GammaLevels`
+# import + the make_gamma_levels helper (gamma gate retired with the
+# MQ subscription).
 from strategies.base_strategy import Signal
 from strategies.opening_session import ExitPlan, OpeningSessionStrategy
 
@@ -32,26 +34,6 @@ def make_strategy(**config_overrides) -> OpeningSessionStrategy:
 
 def ct(hh: int, mm: int, ss: int = 0) -> datetime:
     return datetime(2026, 4, 20, hh, mm, ss)
-
-
-def make_gamma_levels(call_resistance: float | None = None,
-                      put_support: float | None = None) -> GammaLevels:
-    return GammaLevels(
-        symbol="NQ",
-        data_date=date(2026, 4, 20),
-        call_resistance=call_resistance,
-        put_support=put_support,
-        hvl=None,
-        one_d_min=None,
-        one_d_max=None,
-        call_resistance_0dte=None,
-        put_support_0dte=None,
-        hvl_0dte=None,
-        gamma_wall_0dte=None,
-        gex_levels=(),
-        blind_spots=(),
-        loaded_at=datetime(2026, 4, 20, 7, 0),
-    )
 
 
 # ─── Per-sub-evaluator baseline markets ─────────────────────────────
@@ -193,14 +175,9 @@ class TestUniversalGuards:
         m = orb_market(now_ct=ct(14, 31))
         assert s.evaluate(m) is None
 
-    def test_gamma_gate_rejects_entry_into_wall(self):
-        s = make_strategy()
-        m = orb_market()
-        # Call resistance a few ticks above entry → LONG blocked.
-        m["gamma_levels"] = make_gamma_levels(call_resistance=m["price"] + 5 * TICK)
-        assert s.evaluate(m) is None
-        # Counter not bumped when gamma blocks.
-        assert s._daily_trades_today == 0
+    # 2026-05-06 Sprint J: test_gamma_gate_rejects_entry_into_wall removed
+    # along with the gate it tested (_apply_gamma_gate in opening_session
+    # — MenthorQ subscription retired).
 
 
 # ═══════════════════════════════════════════════════════════════════

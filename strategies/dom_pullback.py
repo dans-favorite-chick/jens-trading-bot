@@ -4,7 +4,8 @@ Phoenix Bot — DOM Absorption Pullback Strategy
 Replicates the user's manual trading pattern:
 
   Entry Setup (all required):
-    1. Context: MenthorQ LONG bias (or 2/4 TF vote majority)
+    1. Context: 2/4 TF vote majority (legacy MenthorQ-bias path
+       removed Sprint J 2026-05-06)
     2. Level: Price at EMA9 or VWAP — the pullback touches a key level
     3. Pullback quality: The pullback bars are QUIET (small body, weak volume)
        Not an aggressive reversal — just a clean, low-volume retest

@@ -1,7 +1,10 @@
 """
 Phoenix Bot -- Continuation/Reversal Assessment Engine
 
-Mirrors the analysis Quinn (MenthorQ AI) produces:
+(Sprint J 2026-05-06: original docstring referenced Quinn (MenthorQ AI)
+as the reasoning template; module is now structure-only — gamma_regime
+is recorded but no longer scored since the subscription was retired.)
+Continuation/reversal analysis approach:
   - Where is price relative to the expected daily range (1D Min/Max)?
   - Is the momentum score rising, stable, or fading?
   - Does the gamma regime support continuation or resistance?
@@ -77,7 +80,8 @@ def assess(market: dict, mq_snap=None, trajectory: dict = None) -> CRVerdict:
 
     Args:
         market:     Dict from aggregator.snapshot()
-        mq_snap:    MenthorQSnapshot (from menthorq_feed.get_snapshot())
+        mq_snap:    DEPRECATED 2026-05-06 (Sprint J) — accepted for
+                    backward compat but ignored (MQ subscription retired)
         trajectory: Dict from momentum_score.get_trajectory()
 
     Returns CRVerdict with full analysis.
@@ -290,28 +294,12 @@ def assess(market: dict, mq_snap=None, trajectory: dict = None) -> CRVerdict:
         cont_score += 1
         cont_factors.append(f"Bouncing at Put Support {put_sup:.2f} -- dealer buying zone holding")
 
-    # --- Gamma regime (context, not signal) ---
-    if gamma_regime == "POSITIVE":
-        # Positive gamma = dealers suppress extremes. Context only -- doesn't score reversal alone.
-        # Only adds reversal weight when COMBINED WITH confirmed rejection evidence.
-        if state_day_max == "REJECTED_AT" or state_call_res == "REJECTED_AT":
-            rev_score += 1
-            rev_factors.append(
-                "Positive GEX + confirmed rejection = strong mean-reversion setup. "
-                "Dealers hedging by selling at resistance."
-            )
-        else:
-            # Just note it as context
-            cont_factors.append(
-                f"Positive GEX regime -- dealers suppress volatility. "
-                f"{'Level cleared = forced hedge buying adds fuel.' if above_day_max else 'Watch for rejection at key levels.'}"
-            )
-    elif gamma_regime == "NEGATIVE":
-        cont_score += 1
-        cont_factors.append(
-            "Negative GEX regime -- dealer short gamma amplifies moves. "
-            "Breakouts more likely to extend."
-        )
+    # --- Gamma regime (RETIRED 2026-05-06 Sprint J) ---
+    # Was: scored continuation/reversal based on POSITIVE/NEGATIVE GEX.
+    # MenthorQ subscription cancelled — gamma_regime is always "UNKNOWN"
+    # and both branches are dead. Block removed for clarity. Dataclass
+    # field gamma_regime is preserved (always "UNKNOWN") so callers'
+    # rendering logic doesn't break.
 
     # --- CVD confirmation (strongest intraday reversal signal) -------
     # CVD divergence at a new price high = institutional sellers distributing.
@@ -436,7 +424,7 @@ def assess(market: dict, mq_snap=None, trajectory: dict = None) -> CRVerdict:
                 f"{'Forced dealer hedge buying above' if state_call_res == 'BROKEN_ABOVE' else 'Dealer selling confirmed' if state_call_res == 'REJECTED_AT' else 'Watch for accept vs reject'}")
     rows.append(f"{'Gamma Regime':<32} "
                 f"{gamma_regime + ' GEX':<22} "
-                f"{'Dealer selling at resistance (mean-revert)' if gamma_regime == 'POSITIVE' else 'Dealer amplifying moves (momentum)' if gamma_regime == 'NEGATIVE' else 'Unknown'}")
+                f"{'(Sprint J 2026-05-06: MQ subscription retired — no GEX context)'}")
     rows.append(f"{'Volatility (ATR proxy)':<32} "
                 f"{iv_regime + ' (ATR=' + str(round(atr_5m, 1)) + ')':<22} "
                 f"{'Compressed -- breakout is surprise' if iv_regime == 'LOW' else 'Elevated -- trending moves likely' if iv_regime == 'HIGH' else 'Normal'}")
@@ -584,13 +572,10 @@ if __name__ == "__main__":
         "mq_day_max": 25998.73,
     }
 
-    try:
-        from core.menthorq_feed import get_snapshot
-        mq_snap = get_snapshot()
-        sample_market["gamma_regime"] = "POSITIVE" if sample_market["price"] >= mq_snap.hvl else "NEGATIVE"
-        sample_market["above_hvl"] = sample_market["price"] >= mq_snap.hvl
-    except Exception:
-        mq_snap = None
+    # 2026-05-06 Sprint J: MQ snapshot fetch removed (subscription
+    # retired). gamma_regime stays "POSITIVE" from the literal above
+    # for the demo's text rendering; assess() ignores mq_snap now.
+    mq_snap = None
 
     from core.momentum_score import get_trajectory
     traj = get_trajectory(10)

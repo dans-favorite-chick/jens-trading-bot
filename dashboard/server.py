@@ -714,16 +714,16 @@ def api_tape_reader():
 
 @app.route("/api/gamma-context")
 def api_gamma_context():
-    """MenthorQ state + gamma flip detector + pinning + OpEx."""
-    with _state_lock:
-        prod_state = _state.get("prod", {})
+    """⚠️  RETIRED 2026-05-06 (Sprint J) — MenthorQ subscription cancelled.
+
+    Returns empty stub for backward compat with any dashboard tab that
+    still polls this endpoint. UI MQ panel removed in dashboard.html.
+    """
     return jsonify({
-        "menthorq": prod_state.get("menthorq", {}),
-        "gamma_flip": prod_state.get("gamma_flip_state", {}),
-        "pinning": prod_state.get("pinning_state", {}),
-        "opex": prod_state.get("opex_status", {}),
-        "vix_term_structure": prod_state.get("vix_term_structure", {}),
-        "es_confirmation": prod_state.get("es_confirmation", {}),
+        "menthorq": {},
+        "retired": True,
+        "note": "MenthorQ subscription cancelled 2026-05-05; "
+                "use /api/bias-panel or /api/tape-reader instead.",
     })
 
 
@@ -765,12 +765,14 @@ def api_all_signals():
         "sweep_state": p.get("sweep_state", {}),
         "footprint_signals": p.get("footprint_signals", []),
         "chart_patterns_v1": p.get("chart_patterns_v1", []),
-        "menthorq": p.get("menthorq", {}),
+        # 2026-05-06 Sprint J: menthorq / pinning / es_confirmation kept
+        # in the response but always empty/stubbed (subscriptions retired).
+        "menthorq": {},
         "gamma_flip": p.get("gamma_flip_state", {}),
         "vix": p.get("vix_term_structure", {}),
-        "pinning": p.get("pinning_state", {}),
+        "pinning": {},
         "opex": p.get("opex_status", {}),
-        "es_confirmation": p.get("es_confirmation", {}),
+        "es_confirmation": {},
         "decay_monitor": p.get("decay_monitor_summary", {}),
         "tca_weekly": p.get("tca_weekly_report", {}),
         "circuit_breakers": p.get("circuit_breakers_state", {}),
@@ -935,168 +937,25 @@ def api_watchdog_forensics():
 
 @app.route("/api/mq-status")
 def api_mq_status():
-    """
-    Menthor Q data flow diagnostic.
-    Shows what's in menthorq_daily.json, whether it's stale (yesterday's date),
-    and which fields are still PLACEHOLDER/zero — so you can spot what needs
-    to be filled in before session start.
-    """
-    from datetime import date as _date
-    try:
-        from core.menthorq_feed import get_snapshot, DATA_FILE
-        snap = get_snapshot()
-        today = str(_date.today())
-
-        # Read raw JSON to detect placeholder fields
-        raw = {}
-        try:
-            with open(DATA_FILE, encoding="utf-8") as f:
-                raw = json.load(f)
-        except Exception:
-            pass
-
-        # Build a list of fields that look unfilled
-        warnings = []
-        if snap.date != today:
-            warnings.append(
-                f"DATE STALE: file date={snap.date!r}, today={today!r}. "
-                "Update menthorq_daily.json before session."
-            )
-        if snap.gex_regime in ("UNKNOWN", ""):
-            warnings.append("GEX regime not set (UNKNOWN) — pretrade filter cannot use it.")
-        if snap.net_gex_bn == 0.0:
-            warnings.append("net_gex_bn = 0.0 — looks like a placeholder. Fill from MQ dashboard.")
-        if snap.hvl == 0.0:
-            warnings.append("HVL = 0.0 — THE most important MQ number. Fill before trading.")
-        if not snap.allow_longs and not snap.allow_shorts:
-            warnings.append("Both allow_longs and allow_shorts are False — bot will not trade.")
-
-        return jsonify({
-            "ok": len(warnings) == 0,
-            "warnings": warnings,
-            "snapshot": {
-                "date":           snap.date,
-                "today":          today,
-                "date_is_current": snap.date == today,
-                "gex_regime":     snap.gex_regime,
-                "net_gex_bn":     snap.net_gex_bn,
-                "hvl":            snap.hvl,
-                "dex":            snap.dex,
-                "direction_bias": snap.direction_bias,
-                "allow_longs":    snap.allow_longs,
-                "allow_shorts":   snap.allow_shorts,
-                "stop_multiplier": snap.stop_multiplier,
-                "strategy_type":  snap.strategy_type,
-                "vanna":          snap.vanna,
-                "charm":          snap.charm,
-                "cta_positioning": snap.cta_positioning,
-                "call_resistance_all": snap.call_resistance_all,
-                "put_support_all":     snap.put_support_all,
-                "call_resistance_0dte": snap.call_resistance_0dte,
-                "put_support_0dte":     snap.put_support_0dte,
-                "gex_level_1":    snap.gex_level_1,
-                "gex_level_2":    snap.gex_level_2,
-                "gex_level_3":    snap.gex_level_3,
-                "notes":          snap.notes,
-            },
-            "data_file": DATA_FILE,
-        })
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e), "warnings": [str(e)]}), 500
+    """⚠️  RETIRED 2026-05-06 (Sprint J) — MenthorQ subscription cancelled."""
+    return jsonify({
+        "ok": True,
+        "warnings": [],
+        "snapshot": {},
+        "retired": True,
+        "note": "MenthorQ subscription cancelled — endpoint preserved as stub.",
+    })
 
 
-# ─── API: MenthorQ Quick Entry ────────────────────────────────────
 @app.route("/api/mq-update", methods=["POST"])
 def api_mq_update():
-    """
-    Save MenthorQ morning setup fields to menthorq_daily.json.
-    Merges into existing file so other fields (prices from NT8) are preserved.
-    Invalidates the menthorq_feed cache so the next poll sees fresh values.
-    """
-    from datetime import date as _date
-    data = request.get_json(silent=True) or {}
-
-    # Locate the data file next to project root
-    data_file = os.path.join(PROJECT_ROOT, "data", "menthorq_daily.json")
-
-    # Read existing content (preserve NT8-populated price fields)
-    existing = {}
-    if os.path.exists(data_file):
-        try:
-            with open(data_file, "r", encoding="utf-8") as f:
-                existing = json.load(f)
-        except Exception:
-            pass
-
-    today = str(_date.today())
-
-    # --- Merge supplied fields into the nested structure ---
-    existing["date"] = today
-    existing["_last_updated"] = today
-
-    # gex section
-    gex = existing.setdefault("gex", {})
-    if "gex_regime" in data:
-        gex["regime"] = str(data["gex_regime"]).upper()
-    if "net_gex_bn" in data:
-        try:
-            gex["net_gex_bn"] = float(data["net_gex_bn"])
-        except (TypeError, ValueError):
-            pass
-
-    # HVL — stored at top level (prices section populated by NT8, but user can override)
-    if "hvl" in data:
-        try:
-            existing["hvl"] = float(data["hvl"])
-        except (TypeError, ValueError):
-            pass
-
-    # regime_summary section
-    summary = existing.setdefault("regime_summary", {})
-    if "direction_bias" in data:
-        summary["direction_bias"] = str(data["direction_bias"]).upper()
-    if "stop_multiplier" in data:
-        try:
-            summary["stop_multiplier"] = float(data["stop_multiplier"])
-        except (TypeError, ValueError):
-            pass
-    if "notes" in data:
-        summary["notes"] = str(data["notes"])
-
-    # Derive allow_longs / allow_shorts from direction_bias
-    bias = summary.get("direction_bias", "NEUTRAL")
-    summary["allow_longs"] = bias in ("NEUTRAL", "LONG")
-    summary["allow_shorts"] = bias in ("NEUTRAL", "SHORT")
-
-    # Write back
-    try:
-        os.makedirs(os.path.dirname(data_file), exist_ok=True)
-        with open(data_file, "w", encoding="utf-8") as f:
-            json.dump(existing, f, indent=2)
-    except Exception as e:
-        return jsonify({"ok": False, "error": f"Write failed: {e}"}), 500
-
-    # Invalidate menthorq_feed in-process cache
-    try:
-        import core.menthorq_feed as mf
-        mf._cached_snap = None
-        mf._cached_date = ""
-    except Exception:
-        pass  # Module may not be loaded yet — safe to ignore
-
-    # Build snapshot summary to return
-    snapshot = {
-        "date":            existing.get("date"),
-        "gex_regime":      existing.get("gex", {}).get("regime"),
-        "net_gex_bn":      existing.get("gex", {}).get("net_gex_bn"),
-        "hvl":             existing.get("hvl"),
-        "direction_bias":  existing.get("regime_summary", {}).get("direction_bias"),
-        "stop_multiplier": existing.get("regime_summary", {}).get("stop_multiplier"),
-        "allow_longs":     existing.get("regime_summary", {}).get("allow_longs"),
-        "allow_shorts":    existing.get("regime_summary", {}).get("allow_shorts"),
-        "notes":           existing.get("regime_summary", {}).get("notes"),
-    }
-    return jsonify({"ok": True, "snapshot": snapshot})
+    """⚠️  RETIRED 2026-05-06 (Sprint J) — MenthorQ subscription cancelled."""
+    return jsonify({
+        "ok": False,
+        "error": "MenthorQ Quick Entry retired — subscription cancelled. "
+                 "menthorq_daily.json archived to archived/menthorq_2026-05-05/",
+        "retired": True,
+    }), 410  # Gone
 
 
 # ─── API: Phoenix Routines (added 2026-04-25 §3.6) ──────────────────

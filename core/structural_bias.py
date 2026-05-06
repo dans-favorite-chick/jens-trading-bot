@@ -15,12 +15,12 @@ Inputs (from market_snapshot enriched by base_bot):
   - sweep_events         liquidity sweep reclassifications
   - chart_patterns       bull/bear flag, H&S (context-weighted)
   - candlestick_patterns existing 23-pattern detector output
-  - menthorq_context     GEX regime + CR/HVL/PS proximity
+  - menthorq_context     RETIRED 2026-05-06 (Sprint J) — always 0 pts
   - gamma_flip_state     active flip / cooldown
   - vix_regime           contango/backwardation class
-  - pinning_state        pin risk active?
+  - pinning_state        RETIRED 2026-05-06 (Sprint J) — always 0 pts
   - opex_status          OpEx day / triple witching afternoon?
-  - es_confirmation      NQ vs ES gamma alignment
+  - es_confirmation      RETIRED 2026-05-06 (Sprint J) — always 0 pts
 
 Output:
   StructuralBias {
@@ -273,75 +273,14 @@ def score_liquidity_sweep(sweep_state: dict) -> tuple[int, str]:
 
 
 def score_menthorq_gamma(market_snapshot: dict, price: float) -> tuple[int, str]:
-    """Gamma regime + wall proximity.
+    """⚠️  DEPRECATED (Sprint J 2026-05-06) — always returns (0, "...").
 
-    B33 rewire (Phase E-strategic): reads ``market_snapshot["gamma_regime"]``
-    directly (Path B — populated by base_bot via fresh gamma/*_levels.txt
-    parse + B27 classify_regime). Path A (the stale
-    ``data/menthorq/menthorq_daily.json`` read via ``market_snapshot["menthorq"]``)
-    has been retired.
-
-    Accepts either:
-      - the full ``market_snapshot`` dict (preferred; looks up ``gamma_regime``
-        plus optional ``gamma_nearest_wall``), or
-      - a legacy sub-dict with ``gamma_regime`` key (backwards compat for
-        tests calling this directly).
+    The MenthorQ subscription was cancelled. Function preserved for the
+    composite-bias contract (callers expect this name; their reasoning
+    string just records that MQ is offline). To replace this dimension,
+    integrate a different gamma data source and rewrite the scoring.
     """
-    if not market_snapshot:
-        return 0, "no MQ data"
-
-    regime = market_snapshot.get("gamma_regime")
-    if regime is None:
-        return 0, "no gamma_regime in snapshot"
-
-    # Normalize: may be GammaRegime enum or a string
-    regime_name = getattr(regime, "name", None) or str(regime).upper().replace("GAMMAREGIME.", "")
-
-    points = 0
-    reasons = []
-
-    # ── Regime-driven directional bias ────────────────────────────────
-    # B27 6-value enum: POSITIVE_STRONG / POSITIVE_NORMAL / NEUTRAL /
-    # NEGATIVE_NORMAL / NEGATIVE_STRONG / UNKNOWN.
-    # Positive gamma = above HVL = mean-reversion zone (bullish tilt baseline).
-    # Negative gamma = below HVL = momentum down (bearish tilt).
-    if regime_name == "POSITIVE_STRONG":
-        points += 10
-        reasons.append("POS_STRONG GEX (mean-rev, bullish floor)")
-    elif regime_name == "POSITIVE_NORMAL":
-        points += 5
-        reasons.append("POS GEX (mean-rev)")
-    elif regime_name == "NEGATIVE_NORMAL":
-        points -= 5
-        reasons.append("NEG GEX (trend-amp)")
-    elif regime_name == "NEGATIVE_STRONG":
-        points -= 10
-        reasons.append("NEG_STRONG GEX (trend-amp, bearish drift)")
-    elif regime_name == "NEUTRAL":
-        reasons.append("NEUTRAL GEX")
-    elif regime_name == "UNKNOWN":
-        return 0, "gamma regime UNKNOWN"
-
-    # ── Wall proximity (optional, from gamma_nearest_wall enrichment) ─
-    nearest = market_snapshot.get("gamma_nearest_wall")
-    if isinstance(nearest, (tuple, list)) and len(nearest) == 2:
-        wall_name, wall_dist = nearest
-        # wall_dist is in points; ticks = dist / 0.25
-        try:
-            dist_pts = float(wall_dist)
-        except (TypeError, ValueError):
-            dist_pts = 9999.0
-        if dist_pts < 5.0 and isinstance(wall_name, str):
-            wn = wall_name.lower()
-            if "resist" in wn or wn.startswith("call"):
-                points -= 5
-                reasons.append(f"near {wall_name} ({dist_pts:.1f}pt)")
-            elif "support" in wn or wn.startswith("put"):
-                points += 5
-                reasons.append(f"near {wall_name} ({dist_pts:.1f}pt)")
-
-    points = max(-WEIGHTS["menthorq_gamma"], min(WEIGHTS["menthorq_gamma"], points))
-    return points, "; ".join(reasons) if reasons else "neutral MQ context"
+    return 0, "MQ subscription retired — no gamma context available"
 
 
 def score_gamma_flip(flip_state: dict) -> tuple[int, str]:
@@ -470,12 +409,9 @@ def compute_structural_bias(market_snapshot: dict) -> StructuralBias:
     if isinstance(opex, dict) and opex.get("veto_continuation_patterns"):
         vetoes.append("OPEX_LAST_HOUR: continuation patterns vetoed")
 
-    mq = market_snapshot.get("menthorq", {})
-    if isinstance(mq, dict):
-        if mq.get("age_hours", 0) > 24:
-            vetoes.append("MQ_STALE: gamma context unreliable")
-        if not mq.get("allow_longs", True) and not mq.get("allow_shorts", True):
-            vetoes.append("MQ: both directions disallowed")
+    # 2026-05-06 Sprint J: removed MQ veto block (subscription cancelled,
+    # market_snapshot["menthorq"] is always the safe-empty default with
+    # allow_longs=True, allow_shorts=True, age_hours=0).
 
     # Normalize score to -100..+100
     max_possible = sum(WEIGHTS.values())

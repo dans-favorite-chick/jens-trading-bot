@@ -121,10 +121,13 @@ def _neutral_response(rat="flat"):
 # ─── Tests ──────────────────────────────────────────────────────────
 
 def test_personas_count():
+    # 2026-05-06 Sprint J: "gamma-reader" persona renamed to
+    # "structure-reader" (MenthorQ subscription retired). Total
+    # persona count unchanged (slot replaced, not removed).
     assert len(cg.COUNCIL_PERSONAS) == 7
     names = {p["name"] for p in cg.COUNCIL_PERSONAS}
     expected = {
-        "trend-follower", "mean-reverter", "vol-watcher", "gamma-reader",
+        "trend-follower", "mean-reverter", "vol-watcher", "structure-reader",
         "intermarket-analyst", "session-historian", "contrarian",
     }
     assert names == expected

@@ -567,35 +567,13 @@ class BiasMomentumFollow(BaseStrategy):
                 confluences.append(f"Above prior-close AVWAP ({avwap_pdc:.1f}) — prior-session buyers in control")
 
         # ── Menthor Q Level Proximity ────────────────────────────────────
-        # Warn when price is already near a key Q resistance (for LONG) or support
-        # (for SHORT). Entering near a wall = less runway, higher reversal risk.
-        # Applied as a scoring penalty only — not a hard gate.
-        mq_resistance = market.get("mq_nearest_resistance", 0.0) or 0.0
-        mq_support    = market.get("mq_nearest_support", 0.0) or 0.0
-        mq_hvl        = market.get("mq_hvl", 0.0) or 0.0
-        if price > 0:
-            from config.settings import TICK_SIZE as _ts_mq
-            if direction == "LONG" and mq_resistance > 0:
-                dist_to_wall = (mq_resistance - price) / _ts_mq
-                if dist_to_wall < 20:   # within 5 points of resistance wall
-                    momentum_score -= 15
-                    confluences.append(f"Near Q resistance {mq_resistance:.2f} ({dist_to_wall:.0f}t away) — low runway")
-                elif dist_to_wall < 40:  # within 10 points
-                    momentum_score -= 5
-                    confluences.append(f"Approaching Q resistance {mq_resistance:.2f} ({dist_to_wall:.0f}t)")
-            elif direction == "SHORT" and mq_support > 0:
-                dist_to_wall = (price - mq_support) / _ts_mq
-                if dist_to_wall < 20:
-                    momentum_score -= 15
-                    confluences.append(f"Near Q support {mq_support:.2f} ({dist_to_wall:.0f}t away) — low runway")
-                elif dist_to_wall < 40:
-                    momentum_score -= 5
-                    confluences.append(f"Approaching Q support {mq_support:.2f} ({dist_to_wall:.0f}t)")
-            # HVL awareness — the gamma flip level
-            if mq_hvl > 0:
-                dist_to_hvl = abs(price - mq_hvl) / _ts_mq
-                if dist_to_hvl < 16:  # within 4 points of HVL
-                    confluences.append(f"Near HVL {mq_hvl:.2f} ({dist_to_hvl:.0f}t) — expect volatility")
+        # 2026-05-06 Sprint J cleanup: removed MenthorQ wall-proximity
+        # scoring (mq_nearest_resistance / mq_nearest_support / mq_hvl).
+        # MQ subscription was cancelled and these fields are always 0
+        # in the market dict now. Block removed rather than left as a
+        # no-op for clarity. If structural-level proximity scoring is
+        # wanted, use core.price_action_levels.find_nearest_htf_level
+        # against PriceActionLevels instead.
 
         # Recent bar direction (use 5m if available, else 1m)
         bars = bars_5m if len(bars_5m) >= 2 else bars_1m

@@ -676,48 +676,14 @@ class BaseBot:
         self._trades_since_cluster = 0      # Counter for clustering trigger
         self._equity_recorded_today = False # Only record equity once per day
 
-        # ─── B14 Phase 4: MenthorQ gamma integration ──────────────────
-        # Load daily gamma levels from data/menthorq/gamma/ at startup.
-        # An async watcher (_gamma_reload_watcher) polls for mtime changes
-        # every 60s so intraday repastes take effect without a bot restart.
-        # Used for: (a) entry-wall filter via is_entry_into_wall,
-        # (b) snapshot enrichment (regime, nearest wall, pin-zone flag).
-        # NOTE: natural_stop_for_entry() exists in core/menthorq_gamma but
-        # is intentionally NOT wired here — strategies will opt in later.
-        from pathlib import Path as _GammaPath
-        from core.menthorq_gamma import load_latest_gamma
-        from config.settings import MENTHORQ_GAMMA_DIR, MENTHORQ_MAX_DATA_AGE_HOURS
-        self.gamma_data_dir = _GammaPath(MENTHORQ_GAMMA_DIR)
-        self._gamma_max_age_hours = MENTHORQ_MAX_DATA_AGE_HOURS
-        try:
-            self.gamma_levels = load_latest_gamma(
-                self.gamma_data_dir, max_age_hours=self._gamma_max_age_hours
-            )
-            if self.gamma_levels is not None:
-                logger.info(
-                    f"[GAMMA] Loaded: date={self.gamma_levels.data_date} "
-                    f"symbol={self.gamma_levels.symbol} "
-                    f"HVL={self.gamma_levels.hvl} "
-                    f"HVL_0DTE={self.gamma_levels.hvl_0dte} "
-                    f"complete={self.gamma_levels.is_complete}"
-                )
-            else:
-                logger.warning(
-                    f"[GAMMA] No gamma data loaded from {self.gamma_data_dir} "
-                    f"— entry-wall filter will be inactive"
-                )
-        except Exception as _e:
-            logger.warning(f"[GAMMA] Failed to load gamma data: {_e}")
-            self.gamma_levels = None
-        # Track the mtime we loaded from so the reload watcher can detect
-        # newer files in the directory.
-        self._gamma_mtime = 0.0
-        try:
-            _levels_files = list(self.gamma_data_dir.glob("*_levels.txt"))
-            if _levels_files:
-                self._gamma_mtime = max(p.stat().st_mtime for p in _levels_files)
-        except Exception:
-            pass
+        # ─── MenthorQ gamma integration RETIRED 2026-05-06 (Sprint J) ──
+        # Subscription cancelled. self.gamma_levels stays None forever;
+        # downstream consumers (entry-wall filter, snapshot enrichment,
+        # reload watcher) all gracefully no-op when this is None.
+        # Attribute kept for backward compat with code that still reads
+        # self.gamma_levels (rare after Sprint J cleanup, but defensive).
+        self.gamma_levels = None
+        self._gamma_mtime = 0.0  # Reload watcher reads this, sees no change
 
         # Register bar callback
         self.aggregator.on_bar(self._on_bar)
@@ -1197,8 +1163,7 @@ class BaseBot:
         # Phase 5: Start Telegram command listener
         asyncio.ensure_future(self.telegram_commands.poll_commands(self))
 
-        # B14 Phase 4: MenthorQ gamma reload watcher (60s poll)
-        asyncio.ensure_future(self._gamma_reload_watcher())
+        # MenthorQ gamma reload watcher RETIRED 2026-05-06 (Sprint J)
 
         # Phase 4B: session-levels prior-day refresh at 00:01 CT daily
         asyncio.ensure_future(self._session_levels_refresh_task())
@@ -1299,65 +1264,16 @@ class BaseBot:
 
             await asyncio.sleep(2)
 
-    async def _gamma_reload_watcher(self):
-        """B14 Phase 4: poll data/menthorq/gamma/ every 60s; reload when
-        a newer *_levels.txt appears (intraday repaste, new day). Silent
-        on no-change; logs at INFO when a reload fires.
-        """
-        from core.menthorq_gamma import load_latest_gamma
-        while True:
-            await asyncio.sleep(60)
-            try:
-                files = list(self.gamma_data_dir.glob("*_levels.txt"))
-                if not files:
-                    continue
-                current_mtime = max(p.stat().st_mtime for p in files)
-                if current_mtime > self._gamma_mtime:
-                    new_levels = load_latest_gamma(
-                        self.gamma_data_dir,
-                        max_age_hours=self._gamma_max_age_hours,
-                    )
-                    if new_levels is not None:
-                        self.gamma_levels = new_levels
-                        self._gamma_mtime = current_mtime
-                        logger.info(
-                            f"[GAMMA] Reloaded — date={new_levels.data_date} "
-                            f"complete={new_levels.is_complete}"
-                        )
-            except Exception as e:
-                logger.warning(f"[GAMMA] Reload watcher error: {e}")
+    # _gamma_reload_watcher RETIRED 2026-05-06 (Sprint J).
+    # MenthorQ subscription cancelled — no gamma files to reload.
 
     def _enrich_market_with_gamma(self, market: dict) -> dict:
-        """B14 Phase 4: inject gamma_levels, gamma_regime, nearest wall,
-        and pin-zone flag into the snapshot. No-op when gamma data missing
-        (strategies and downstream code tolerate None)."""
-        from core.menthorq_gamma import (
-            classify_regime, distance_to_nearest_wall, is_at_hvl_gravity,
-            GammaRegime,
-        )
-        levels = self.gamma_levels
-        market["gamma_levels"] = levels
-        if levels is None:
-            market["gamma_regime"] = GammaRegime.UNKNOWN
-            market["gamma_nearest_wall"] = ("none", 9999.0)
-            market["gamma_in_pin_zone"] = False
-            return market
-        price = market.get("price", 0) or 0
-        if price <= 0:
-            market["gamma_regime"] = GammaRegime.UNKNOWN
-            market["gamma_nearest_wall"] = ("none", 9999.0)
-            market["gamma_in_pin_zone"] = False
-            return market
-        market["gamma_regime"] = classify_regime(price, levels)
-        # Nearest wall relative to current price (no direction — both sides
-        # considered via LONG look-up; we scan both then pick the closest).
-        long_wall = distance_to_nearest_wall(price, "LONG", levels)
-        short_wall = distance_to_nearest_wall(price, "SHORT", levels)
-        if long_wall[1] < short_wall[1]:
-            market["gamma_nearest_wall"] = long_wall
-        else:
-            market["gamma_nearest_wall"] = short_wall
-        market["gamma_in_pin_zone"] = is_at_hvl_gravity(price, levels)
+        """⚠️  No-op since 2026-05-06 (Sprint J cleanup).
+
+        MenthorQ subscription was retired. Method preserved as a stub
+        so existing callers don't need changes; just returns the
+        market dict unchanged.
+        """
         return market
 
     async def _session_levels_refresh_task(self):
@@ -1685,26 +1601,8 @@ class BaseBot:
                     )
                     continue
 
-                # Phase 4C: one-shot startup regime log. Fires after the first
-                # tick populates last_price and gamma_levels is loaded. Deferred
-                # from 4B because at TickAggregator init time last_price=0 and
-                # gamma_levels isn't on the aggregator.
-                if (not getattr(self, "_startup_regime_logged", True)
-                        and self.gamma_levels is not None
-                        and self.aggregator.last_price > 0):
-                    try:
-                        from core.menthorq_gamma import classify_regime
-                        regime = classify_regime(
-                            self.aggregator.last_price, self.gamma_levels
-                        )
-                        logger.info(
-                            f"[SESSION+GAMMA] Regime at startup: {regime.name} "
-                            f"(price={self.aggregator.last_price}, "
-                            f"net_gex={self.gamma_levels.net_gex})"
-                        )
-                    except Exception as e:
-                        logger.warning(f"[SESSION+GAMMA] startup log failed: {e!r}")
-                    self._startup_regime_logged = True
+                # 2026-05-06 Sprint J: removed startup-regime log block
+                # (used MenthorQ classify_regime; subscription retired).
 
                 # NEW (shadow): feed footprint builders on every tick (fast path, no branching)
                 try:
@@ -2030,18 +1928,9 @@ class BaseBot:
                 except Exception:
                     pass
 
-                # Inject Menthor Q regime context into AI filter
-                mq_context = ""
-                try:
-                    from core.menthorq_feed import get_snapshot, to_prompt_context
-                    mq_snap = get_snapshot()
-                    mq_context = to_prompt_context(mq_snap, market_snap.get("price", 0))
-                    if strategy_context:
-                        strategy_context = mq_context + "\n\n" + strategy_context
-                    else:
-                        strategy_context = mq_context
-                except Exception:
-                    pass
+                # 2026-05-06 Sprint J: removed MenthorQ regime context
+                # injection (subscription retired). AI filter now reads
+                # only structural_bias / footprint context.
 
                 # Inject Continuation/Reversal assessment (Quinn-style)
                 try:
@@ -2193,23 +2082,9 @@ class BaseBot:
                 except Exception as e:
                     logger.debug(f"[SWEEP] check error: {e}")
 
-                # Feed gamma flip detector on 5m bars
-                try:
-                    from core.menthorq_feed import get_snapshot as _mq_snap
-                    _mq = _mq_snap()
-                    _hvl = getattr(_mq, "hvl", 0) or 0
-                    flip = self.gamma_flip_detector.update(bar, _hvl, news_event_recent=False)
-                    if flip:
-                        self._last_gamma_flip_event = {
-                            "direction": flip.direction,
-                            "hvl": flip.hvl_level,
-                            "breach_price": flip.breach_price,
-                            "ts": flip.ts.isoformat(),
-                        }
-                        logger.warning(f"[GAMMA FLIP] {flip.direction} confirmed at "
-                                       f"HVL {flip.hvl_level:.2f}")
-                except Exception as e:
-                    logger.debug(f"[GAMMA FLIP] update error: {e}")
+                # 2026-05-06 Sprint J: gamma flip detector update removed
+                # (depended on MenthorQ HVL — subscription retired). Detector
+                # class kept for future reactivation with another HVL source.
 
         # Feed RSI divergence detector on every 1m bar close
         if timeframe == "1m":
@@ -2332,10 +2207,10 @@ class BaseBot:
         if regime == "AFTERHOURS" and self._last_regime not in ("AFTERHOURS", None):
             try:
                 from core.momentum_score import record_daily
-                from core.menthorq_feed import get_snapshot
-                _eod_mq = get_snapshot()
+                # 2026-05-06 Sprint J: was passing MQ snapshot; momentum
+                # score now ignores mq_snap argument (HVL factor retired).
                 _eod_market = self.aggregator.snapshot()
-                eod_rec = record_daily(_eod_market, _eod_mq)
+                eod_rec = record_daily(_eod_market, None)
                 logger.info(
                     f"[MOMENTUM SCORE] EOD recorded: {eod_rec.get('detail', '')} "
                     f"(price={eod_rec.get('price', 0):.2f})"
@@ -2587,30 +2462,12 @@ class BaseBot:
         except Exception:
             pass
 
-        # MenthorQ gamma regime — enrich market snapshot for strategies
-        # gamma_regime: "POSITIVE" (above HVL, suppress vol) | "NEGATIVE" (below HVL, amplify)
-        # above_hvl: bool — real-time price vs HVL flip line
-        # mq_day_min/max: gamma-implied range for today
-        _mq_snap = None
-        try:
-            from core.menthorq_feed import get_snapshot, regime_for_price
-            _mq_snap = get_snapshot()
-            _mq_regime = regime_for_price(_mq_snap, market.get("price", 0))
-            market["gamma_regime"] = _mq_regime.get("gamma_regime", "UNKNOWN")
-            market["above_hvl"]    = _mq_regime.get("above_hvl", True)
-            market["mq_hvl"]       = _mq_regime.get("hvl", 0.0)
-            market["mq_day_min"]   = _mq_regime.get("day_min", 0.0)
-            market["mq_day_max"]   = _mq_regime.get("day_max", 0.0)
-            market["mq_nearest_resistance"] = _mq_regime.get("nearest_resistance", 0.0)
-            market["mq_nearest_support"]    = _mq_regime.get("nearest_support", 0.0)
-            market["mq_direction_bias"]     = _mq_snap.direction_bias if _mq_snap else "NEUTRAL"
-        except Exception as _mq_err:
-            import traceback as _tb
-            logger.warning(f"[MQ] Snapshot load error (mq_direction_bias=NEUTRAL): "
-                           f"{_mq_err} | {_tb.format_exc().splitlines()[-1]}")
-            market["gamma_regime"] = "UNKNOWN"
-            market["above_hvl"] = True
-            market["mq_direction_bias"] = "NEUTRAL"
+        # 2026-05-06 Sprint J: removed MenthorQ market-snapshot enrichment
+        # block (subscription retired). Kept the safe-default keys that
+        # legacy consumer code may still read defensively. They're inert.
+        market["gamma_regime"] = "UNKNOWN"
+        market["above_hvl"] = True
+        market["mq_direction_bias"] = "NEUTRAL"
 
         # Continuation/Reversal Assessment (Quinn-style)
         # Runs every bar — lightweight trajectory lookup + level proximity check
@@ -2714,26 +2571,10 @@ class BaseBot:
             except Exception:
                 _enriched["chart_patterns_v1"] = []
 
-            # MenthorQ context enrichment
-            try:
-                from core.menthorq_feed import get_snapshot as _mq_snap_fn, regime_for_price
-                _mq_snap = _mq_snap_fn()
-                _mq_price = float(market.get("close", 0) or 0)
-                _mq_regime = regime_for_price(_mq_snap, _mq_price) if _mq_snap else {}
-                _enriched["menthorq"] = {
-                    "gex_regime": getattr(_mq_snap, "gex_regime", "UNKNOWN") if _mq_snap else "UNKNOWN",
-                    "hvl": getattr(_mq_snap, "hvl", 0),
-                    "call_resistance_all": getattr(_mq_snap, "call_resistance_all", 0),
-                    "put_support_all": getattr(_mq_snap, "put_support_all", 0),
-                    "call_resistance_0dte": getattr(_mq_snap, "call_resistance_0dte", 0),
-                    "put_support_0dte": getattr(_mq_snap, "put_support_0dte", 0),
-                    "gamma_wall_0dte": getattr(_mq_snap, "gamma_wall_0dte", 0),
-                    "allow_longs": _mq_regime.get("allow_long", True),
-                    "allow_shorts": _mq_regime.get("allow_short", True),
-                    "age_hours": 0.0,  # MQBridge refreshes every 60s
-                }
-            except Exception:
-                _enriched["menthorq"] = {}
+            # 2026-05-06 Sprint J: removed MenthorQ context enrichment
+            # (subscription retired). Empty dict preserved so legacy
+            # consumers that read _enriched["menthorq"] don't KeyError.
+            _enriched["menthorq"] = {}
 
             # Gamma flip state
             _enriched["gamma_flip_state"] = self.gamma_flip_detector.get_state()
@@ -2905,25 +2746,9 @@ class BaseBot:
         except Exception:
             pass
 
-        # ── B14 Phase 4: Gamma-Wall Entry Filter ──────────────────────
-        # Reject entries that would immediately push into an opposing
-        # gamma wall (within NO_TRADE_INTO_WALL_BUFFER_TICKS, default 12)
-        # OR that enter at a countertrend reversal-zone (LONG just below
-        # resistance / SHORT just above support — price bounces against
-        # the trade). See core/menthorq_gamma.is_entry_into_wall.
-        if best_signal is not None and self.gamma_levels is not None:
-            from core.menthorq_gamma import is_entry_into_wall
-            _price = market.get("price", 0) or 0
-            _wall = is_entry_into_wall(_price, best_signal.direction, self.gamma_levels)
-            if _wall:
-                logger.info(
-                    f"[GAMMA_GATE] {best_signal.strategy} {best_signal.direction} "
-                    f"@ {_price:.2f}: REJECT — entry too close to {_wall}"
-                )
-                self.last_rejection = (
-                    f"gamma_wall:{_wall} blocked {best_signal.strategy} {best_signal.direction}"
-                )
-                best_signal = None
+        # 2026-05-06 Sprint J: removed gamma-wall entry filter
+        # (depended on MenthorQ levels — subscription retired). Self.gamma_levels
+        # is always None now so this gate would never fire anyway.
 
         # ── C/R Day Bias Filter ───────────────────────────────────────
         # On strong CONTINUATION/BULLISH C/R days (score >= 4), suppress
@@ -2959,57 +2784,9 @@ class BaseBot:
             except Exception as e:
                 logger.debug(f"[CR BIAS FILTER] Non-blocking error: {e}")
 
-        if best_signal:
-            # ── Menthor Q Direction Gate ─────────────────────────────
-            # Check HVL + GEX regime BEFORE any confidence boosts.
-            # This is a hard gate — Menthor Q regime overrides strategy direction.
-            try:
-                from core.menthorq_feed import get_snapshot, regime_for_price
-                mq_snap = get_snapshot()
-                mq_regime = regime_for_price(mq_snap, market.get("price", 0))
-                self._last_mq_regime = mq_regime  # Store for dashboard
-
-                mq_blocks = False
-                if best_signal.direction == "LONG" and not mq_regime.get("allow_long", True):
-                    mq_blocks = True
-                    block_reason = (f"MenthorQ HVL gate: price below HVL {mq_snap.hvl} "
-                                    f"in {mq_snap.gex_regime} gamma regime — LONGs blocked")
-                elif best_signal.direction == "SHORT" and not mq_regime.get("allow_short", True):
-                    mq_blocks = True
-                    block_reason = (f"MenthorQ gate: {mq_snap.gex_regime} gamma, "
-                                    f"shorts blocked — regime={mq_snap.direction_bias}")
-
-                if mq_blocks:
-                    logger.info(f"[MQ GATE] {block_reason}")
-                    self.last_rejection = block_reason
-                    try:
-                        sig_dict = {"direction": best_signal.direction,
-                                    "strategy": best_signal.strategy,
-                                    "confidence": best_signal.confidence,
-                                    "entry_score": best_signal.entry_score,
-                                    "reason": best_signal.reason}
-                        self.history.log_near_miss(sig_dict, market, f"mq_gate: {block_reason}")
-                    except Exception:
-                        pass
-                    best_signal = None
-                else:
-                    # Apply MQ stop multiplier to the signal (wider stops in negative gamma)
-                    if mq_regime.get("stop_multiplier", 1.0) > 1.0:
-                        best_signal.stop_ticks = int(
-                            best_signal.stop_ticks * mq_regime["stop_multiplier"]
-                        )
-                        best_signal.confluences.append(
-                            f"MQ stop widened {mq_regime['stop_multiplier']}x "
-                            f"({mq_snap.gex_regime} gamma)"
-                        )
-                    # Log MQ context as confluence info
-                    if mq_snap.gex_regime != "UNKNOWN":
-                        best_signal.confluences.append(
-                            f"MQ: GEX {mq_snap.gex_regime} ({mq_snap.net_gex_bn:+.1f}B), "
-                            f"HVL {mq_snap.hvl}, {mq_snap.direction_bias} bias"
-                        )
-            except Exception as e:
-                logger.debug(f"[MQ GATE] Non-blocking error: {e}")
+        # 2026-05-06 Sprint J: MenthorQ HVL direction gate + stop multiplier
+        # block REMOVED. Subscription retired; the gate was always allowing
+        # all directions and stop_multiplier=1.0 (verified pre-removal).
 
         if best_signal:
             # Phase 6: Apply regime transition bonus to best signal's confidence
@@ -4626,46 +4403,14 @@ class BaseBot:
 
     # ─── Dashboard State ────────────────────────────────────────────
     def _menthorq_to_dict(self) -> dict:
-        """Expose MenthorQ gamma regime and all levels for dashboard."""
-        try:
-            from core.menthorq_feed import get_snapshot, regime_for_price
-            snap = get_snapshot()
-            price = self.aggregator.snapshot().get("price", 0)
-            regime = regime_for_price(snap, price)
-            return {
-                "gamma_regime": regime.get("gamma_regime", "UNKNOWN"),
-                "live_gamma":   regime.get("live_gamma", "UNKNOWN"),
-                "above_hvl":    regime.get("above_hvl", True),
-                "hvl":          snap.hvl,
-                "hvl_0dte":     snap.hvl_0dte,
-                "gamma_wall_0dte": snap.gamma_wall_0dte,
-                "call_resistance": snap.call_resistance_all,
-                "put_support":     snap.put_support_all,
-                "call_resistance_0dte": snap.call_resistance_0dte,
-                "put_support_0dte":     snap.put_support_0dte,
-                "day_min":      snap.day_min,
-                "day_max":      snap.day_max,
-                "nearest_resistance": regime.get("nearest_resistance", 0.0),
-                "nearest_support":    regime.get("nearest_support", 0.0),
-                "gex_levels": [
-                    snap.gex_level_1, snap.gex_level_2, snap.gex_level_3,
-                    snap.gex_level_4, snap.gex_level_5, snap.gex_level_6,
-                    snap.gex_level_7, snap.gex_level_8, snap.gex_level_9,
-                    snap.gex_level_10,
-                ],
-                "stop_multiplier": regime.get("stop_multiplier", 1.0),
-                "allow_long":  regime.get("allow_long", True),
-                "allow_short": regime.get("allow_short", True),
-                "dex":    snap.dex,
-                "vanna":  snap.vanna,
-                "cta":    snap.cta_positioning,
-                "net_gex_bn": snap.net_gex_bn,
-                "source": snap.source,
-                "is_stale": snap.is_stale,
-                "summary": regime.get("summary", ""),
-            }
-        except Exception as e:
-            return {"gamma_regime": "UNKNOWN", "error": str(e)}
+        """⚠️  RETIRED 2026-05-06 (Sprint J) — returns empty stub.
+
+        Subscription cancelled. Dashboard MenthorQ panel removed in
+        the same commit; this method is preserved as a stub so any
+        legacy serialization map that still references it (e.g.
+        line 4737-ish lambdas) doesn't KeyError.
+        """
+        return {"gamma_regime": "UNKNOWN", "retired": True}
 
     def _cr_to_dict(self) -> dict:
         """Expose continuation/reversal assessment for dashboard."""

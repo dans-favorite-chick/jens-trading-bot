@@ -353,9 +353,9 @@ class CompressionBreakout(BaseStrategy):
         if direction == "SHORT" and bias_60m == "BULLISH":
             return False  # Don't short against 1h uptrend
 
-        # Also check MenthorQ HVL regime if available
-        # If price below HVL in negative gamma regime: momentum mode (good for breakouts)
-        # If price above HVL in positive gamma regime: mean-reversion mode (bad for breakouts)
+        # 2026-05-06 Sprint J cleanup: removed dead MenthorQ HVL regime
+        # comment block (subscription cancelled). Session regime
+        # classifier still applies — chop windows still avoided.
         regime = session_info.get("regime", "")
         if "AFTERNOON_CHOP" in regime or "CLOSE_CHOP" in regime:
             return False  # Avoid chop windows

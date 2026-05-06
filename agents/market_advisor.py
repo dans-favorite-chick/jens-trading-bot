@@ -2,17 +2,16 @@
 Phoenix Bot — Market Advisor
 
 Deterministic guidance producer that synthesizes:
-  * MenthorQ dealer-flow data (gamma regime, HVL, DEX, vanna/charm, CTA)
   * FMP cross-venue reference (QQQ → MNQ-equivalent, SPY correlation)
   * Tick-aggregator state (ATR regime, VWAP extension, RSI, CVD)
 
 …into a small advisory packet that both the Council Gate and individual
-strategies can consume. Per Jennifer 2026-04-24: "the counsel needs to
-determine market sentiment and direction, and volatility. We need to
-make sure we wire in all info from MenthorQ as well as any helpful
-data from FMP to further advise the counsel. They should be guiding,
-not stopping. For example, choppy market = tighter 2:1 ratio for pnl.
-Big runs can get 3-1. Big RSI or overextended from VWAP is caution."
+strategies can consume.
+
+Sprint J 2026-05-06: removed MenthorQ dealer-flow integration (gamma
+regime, HVL, DEX, vanna/charm, CTA) — subscription retired. Sentiment
+classification now derives from tf_bias agreement only; volatility
+classification unchanged.
 
 Output schema (AdvisorGuidance):
   sentiment         : "BULLISH" | "BEARISH" | "NEUTRAL"
@@ -108,37 +107,24 @@ def _classify_volatility(market: dict) -> tuple[str, dict]:
 
 
 def _classify_sentiment(market: dict) -> tuple[str, float, dict]:
-    """Blend MQ direction + tf_bias + council-ish votes from snapshot."""
-    mq = market.get("menthorq", {}) or {}
-    mq_dir = str(mq.get("direction_bias", "NEUTRAL")).upper()
+    """Blend tf_bias votes from snapshot.
+
+    Sprint J 2026-05-06: removed MQ direction_bias / vanna / charm
+    contributions (subscription retired — values always NEUTRAL now).
+    Sentiment derives entirely from tf_bias agreement.
+    """
     tf_bias = market.get("tf_bias", {}) or {}
     bull = sum(1 for v in tf_bias.values() if str(v).upper() == "BULLISH")
     bear = sum(1 for v in tf_bias.values() if str(v).upper() == "BEARISH")
 
-    vanna = str(mq.get("vanna", "NEUTRAL")).upper()
-    charm = str(mq.get("charm", "NEUTRAL")).upper()
-
-    # Score: +1 per bullish signal, -1 per bearish.
-    score = 0
-    score += bull - bear
-    if mq_dir == "LONG":
-        score += 1
-    elif mq_dir == "SHORT":
-        score -= 1
-    if vanna == "BULLISH":
-        score += 0.5
-    elif vanna == "BEARISH":
-        score -= 0.5
-    if charm == "BULLISH":
-        score += 0.5
-    elif charm == "BEARISH":
-        score -= 0.5
+    # Score: +1 per bullish TF, -1 per bearish.
+    score = bull - bear
 
     if score >= 2:
-        return "BULLISH", min(100.0, 50.0 + score * 10), {"score": score, "mq_dir": mq_dir, "tf_bull": bull, "tf_bear": bear}
+        return "BULLISH", min(100.0, 50.0 + score * 10), {"score": score, "tf_bull": bull, "tf_bear": bear}
     if score <= -2:
-        return "BEARISH", min(100.0, 50.0 + abs(score) * 10), {"score": score, "mq_dir": mq_dir, "tf_bull": bull, "tf_bear": bear}
-    return "NEUTRAL", 50.0 - abs(score) * 5, {"score": score, "mq_dir": mq_dir, "tf_bull": bull, "tf_bear": bear}
+        return "BEARISH", min(100.0, 50.0 + abs(score) * 10), {"score": score, "tf_bull": bull, "tf_bear": bear}
+    return "NEUTRAL", 50.0 - abs(score) * 5, {"score": score, "tf_bull": bull, "tf_bear": bear}
 
 
 def _classify_market_regime(volatility: str, sentiment: str, market: dict) -> tuple[str, dict]:
@@ -204,15 +190,10 @@ def _compute_caution_flags(market: dict, fmp_snap: Optional[dict]) -> list[str]:
         elif rsi <= _RSI_OVERSOLD:
             flags.append("rsi_oversold")
 
-    # Gamma regime unknown
-    mq = market.get("menthorq", {}) or {}
-    if str(mq.get("gex_regime", "")).upper() in ("", "UNKNOWN"):
-        flags.append("gamma_regime_unknown")
-
-    # MQ price below HVL + negative gamma → amplified downside
-    hvl = float(mq.get("hvl", 0) or 0)
-    if hvl > 0 and price > 0 and price < hvl and str(mq.get("gex_regime", "")).upper() == "NEGATIVE":
-        flags.append("below_hvl_neg_gamma")
+    # 2026-05-06 Sprint J: gamma_regime_unknown / below_hvl_neg_gamma
+    # flags removed (MQ subscription retired, mq dict is always empty
+    # default — gamma_regime_unknown was firing on every eval, which
+    # was noise rather than signal).
 
     # FMP disagreement
     if fmp_snap and fmp_snap.get("reference") and fmp_snap.get("local"):
@@ -233,10 +214,9 @@ def _compute_caution_flags(market: dict, fmp_snap: Optional[dict]) -> list[str]:
     elif vix >= 30:
         flags.append("vix_elevated")
 
-    # Post-OPEX week — from menthorq notes if set
-    notes = str(mq.get("notes", "")).lower()
-    if "opex" in notes or "post-opex" in notes:
-        flags.append("post_opex_week")
+    # 2026-05-06 Sprint J: post_opex_week flag removed — was driven by
+    # the MQ daily notes field (subscription retired). Could be revived
+    # in the future via OpEx calendar lookup if needed.
 
     return flags
 
@@ -297,9 +277,8 @@ def compute_guidance(market: dict, fmp_snap: Optional[dict] = None) -> AdvisorGu
             "atr_15m": market.get("atr_15m"),
             "tf_bias": market.get("tf_bias"),
             "rsi": market.get("rsi") or market.get("rsi_14"),
-            "mq_regime": (market.get("menthorq") or {}).get("gex_regime"),
-            "mq_dir": (market.get("menthorq") or {}).get("direction_bias"),
-            "mq_hvl": (market.get("menthorq") or {}).get("hvl"),
+            # 2026-05-06 Sprint J: mq_regime / mq_dir / mq_hvl removed
+            # from inputs_snapshot (MQ subscription retired).
             "vix": ((market.get("intel") or {}).get("vix")) or market.get("vix"),
             "fmp_snap": fmp_snap,
         },

@@ -102,23 +102,29 @@ VOTER_CONFIGS = [
         "system": "You deliberately look for reasons the majority might be WRONG. You challenge the obvious thesis by looking for divergences, exhaustion signals, and traps. If everyone is bullish, you check for bearish flags.",
     },
     {
-        "name": "Gamma Flow Analyst",
-        "system": """You are a Menthor Q GEX specialist. You interpret options market structure to predict how dealer hedging flows will affect intraday price action.
+        # 2026-05-06 Sprint J: Gamma Flow Analyst voter retired. The
+        # MenthorQ subscription was cancelled and this voter's entire
+        # framework (GEX regime, HVL position, DEX, vanna/charm, CTA
+        # positioning) depended on MQ data which is no longer available.
+        # The voter slot is left as a no-op stub so VOTER_CONFIGS
+        # indices don't shift for any callers that index by position.
+        "name": "Structural Bias Analyst (Gamma Flow retired)",
+        "system": """You analyze MNQ session bias from structural price action ONLY.
 
-Your framework:
-- GEX Regime: POSITIVE GEX = dealers suppress volatility (fade extremes, mean-revert). NEGATIVE GEX = dealers amplify moves (follow momentum hard, no fading).
-- HVL (High Vol Level): The most important number. Price ABOVE HVL = positive gamma zone (stable, bullish bias from dealer flows). Price BELOW HVL = negative gamma zone (volatile, chaotic, dealers amplify every move).
-- DEX (Dealer Delta): Negative GEX + Negative DEX = structurally bearish (dealers amplifying AND selling). Negative GEX + Positive DEX = squeeze risk (dealers forced to buy).
-- GEX Levels 1-3: Key support/resistance where dealer gamma exposure is highest. Price tends to stall or reverse at these levels.
-- Call Wall / Put Wall: Major options strikes. Call wall = ceiling. Put wall = floor. Breakdown of put wall = gamma cascade lower.
-- Vanna flow BEARISH = rising VIX forces dealer selling → bearish amplification. Vanna flow BULLISH = VIX falling → dealer buying.
-- Charm flow BULLISH = time decay pushes dealers to buy. BEARISH = time decay pushes dealers to sell (especially near OPEX).
-- CTAs max short + negative GEX = potential gamma squeeze setup (explosive LONG opportunity).
-- Post-OPEX week: gamma stabilizers expired, expect 1.5x normal moves. Widen all stops.
+Your framework (Sprint J — MenthorQ subscription retired):
+- VWAP position: price ABOVE VWAP = institutional accumulation bias.
+  Price BELOW VWAP = distribution bias.
+- Prior-day high/low: clear breakouts/breakdowns above/below these
+  institutional reference points are directional. Failed tests are
+  reversal candidates.
+- TF alignment: 1m/5m/15m/60m bias agreement = high-conviction trend.
+  Mixed = chop.
+- Footprint patterns: stacked imbalance, absorption, finished auction,
+  trapped traders — the bot's tape-reading layer.
 
-Vote BULLISH if: positive GEX + price above HVL + vanna/charm bullish + CTA covering
-Vote BEARISH if: negative GEX + price below HVL + vanna bearish + put wall breaking
-Vote NEUTRAL if: GEX data is UNKNOWN/not filled, or mixed signals""",
+Vote BULLISH if: price > VWAP + price > PDH + tf_bias majority bullish
+Vote BEARISH if: price < VWAP + price < PDL + tf_bias majority bearish
+Vote NEUTRAL if: price between VWAP and prior-day extremes, or mixed bias""",
     },
     {
         # Deterministic FinBERT-driven voter (post-2026-04-25 §2.2). Does NOT
@@ -171,17 +177,9 @@ Latest FRED snapshot ({macro_fetched_at}):
 - 10Y-2Y spread: {macro_curve_2y10y}% ({macro_curve_state})  <- inverted=recession-signal
 Recent regime shifts (24h): {macro_recent_shifts}
 
-## Menthor Q — Options Dealer Flow (GEX Regime)
-GEX Regime: {mq_gex_regime} | Net GEX: {mq_net_gex_bn}B
-HVL (High Vol Level): {mq_hvl} | Price vs HVL: {mq_price_vs_hvl}
-DEX (Dealer Delta Bias): {mq_dex}
-GEX Levels: L1={mq_gex_l1} | L2={mq_gex_l2} | L3={mq_gex_l3}
-Call Wall (All): {mq_call_wall} | Put Wall (All): {mq_put_wall}
-Call Wall (0DTE): {mq_call_0dte} | Put Wall (0DTE): {mq_put_0dte}
-Vanna Flow: {mq_vanna} | Charm Flow: {mq_charm}
-CTA Positioning: {mq_cta}
-MQ Direction Bias: {mq_direction_bias} | Stop Multiplier: {mq_stop_mult}x
-MQ Notes: {mq_notes}
+## (Sprint J 2026-05-06: MenthorQ section removed — subscription
+## retired. Voters base their reasoning on TF bias / VWAP /
+## structural_bias / footprint context instead.)
 
 ## Market Advisor Guidance (deterministic prefilter; 2026-04-24)
 Sentiment: {adv_sentiment} (conf {adv_conf})
@@ -243,31 +241,9 @@ async def _run_voter(config: dict, market: dict, recent_trades_str: str) -> Vote
         except Exception:
             pass
 
-        # Extract Menthor Q data from market snapshot
-        mq_data = market.get("menthorq", {})
-        mq_price = market.get("price", 0)
-        mq_hvl = mq_data.get("hvl", 0.0)
-        mq_price_vs_hvl = (
-            f"ABOVE HVL ({mq_price - mq_hvl:+.2f})" if mq_hvl > 0 and mq_price > mq_hvl
-            else f"BELOW HVL ({mq_price - mq_hvl:+.2f})" if mq_hvl > 0 and mq_price <= mq_hvl
-            else "UNKNOWN (HVL not filled)"
-        )
-        mq_gex_regime = mq_data.get("gex_regime", "UNKNOWN")
-        mq_net_gex_bn = mq_data.get("net_gex_bn", 0.0)
-        mq_dex = mq_data.get("dex", "UNKNOWN")
-        mq_gex_l1 = mq_data.get("gex_level_1", 0.0) or "N/A"
-        mq_gex_l2 = mq_data.get("gex_level_2", 0.0) or "N/A"
-        mq_gex_l3 = mq_data.get("gex_level_3", 0.0) or "N/A"
-        mq_call_wall = mq_data.get("call_resistance_all", 0.0) or "N/A"
-        mq_put_wall = mq_data.get("put_support_all", 0.0) or "N/A"
-        mq_call_0dte = mq_data.get("call_resistance_0dte", 0.0) or "N/A"
-        mq_put_0dte = mq_data.get("put_support_0dte", 0.0) or "N/A"
-        mq_vanna = mq_data.get("vanna", "NEUTRAL")
-        mq_charm = mq_data.get("charm", "NEUTRAL")
-        mq_cta = mq_data.get("cta_positioning", "NEUTRAL")
-        mq_direction_bias = mq_data.get("direction_bias", "NEUTRAL")
-        mq_stop_mult = mq_data.get("stop_multiplier", 1.0)
-        mq_notes = mq_data.get("notes", "MQ data not yet filled for today")
+        # 2026-05-06 Sprint J: MenthorQ data extraction removed
+        # (subscription retired). Template no longer references mq_*
+        # placeholders, so we don't need to extract anything.
 
         # Reddit hot tickers
         reddit_hot = ", ".join(
@@ -392,24 +368,8 @@ async def _run_voter(config: dict, market: dict, recent_trades_str: str) -> Vote
             expert_assessment=expert_str,
             strategy_performance=strat_perf_str,
             recent_trades=recent_trades_str,
-            mq_gex_regime=mq_gex_regime,
-            mq_net_gex_bn=mq_net_gex_bn,
-            mq_hvl=mq_hvl if mq_hvl else "N/A",
-            mq_price_vs_hvl=mq_price_vs_hvl,
-            mq_dex=mq_dex,
-            mq_gex_l1=mq_gex_l1,
-            mq_gex_l2=mq_gex_l2,
-            mq_gex_l3=mq_gex_l3,
-            mq_call_wall=mq_call_wall,
-            mq_put_wall=mq_put_wall,
-            mq_call_0dte=mq_call_0dte,
-            mq_put_0dte=mq_put_0dte,
-            mq_vanna=mq_vanna,
-            mq_charm=mq_charm,
-            mq_cta=mq_cta,
-            mq_direction_bias=mq_direction_bias,
-            mq_stop_mult=mq_stop_mult,
-            mq_notes=mq_notes,
+            # 2026-05-06 Sprint J: mq_* template variables removed —
+            # MenthorQ section deleted from PROMPT_TEMPLATE.
             adv_sentiment=adv_sentiment,
             adv_conf=adv_conf,
             adv_volatility=adv_volatility,
@@ -543,12 +503,9 @@ async def _orchestrator_synthesis(votes: list[Vote], market: dict) -> str:
         for v in votes
     ])
 
-    mq_snap = market.get("menthorq", {})
-    mq_summary = (
-        f"GEX: {mq_snap.get('gex_regime', 'UNKNOWN')} | "
-        f"HVL: {mq_snap.get('hvl', 'N/A')} | "
-        f"MQ Bias: {mq_snap.get('direction_bias', 'NEUTRAL')}"
-    ) if mq_snap else "MQ data not available"
+    # 2026-05-06 Sprint J: removed Menthor Q context line from the
+    # synthesis prompt (subscription retired). The structural_bias /
+    # tape-reading patterns are richer signals anyway.
 
     prompt = f"""The Phoenix Bot council of {len(VOTER_CONFIGS)} AI analysts just voted on today's MNQ session bias.
 
@@ -559,10 +516,9 @@ async def _orchestrator_synthesis(votes: list[Vote], market: dict) -> str:
 Price: {market.get('price', 0)} | VWAP: {market.get('vwap', 0)}
 CVD: {market.get('cvd', 0)} | ATR 5m: {market.get('atr_5m', 0)}
 Regime: {market.get('regime', 'UNKNOWN')}
-Menthor Q: {mq_summary}
 
 Write a 2-3 sentence synthesis of the council's consensus (or disagreement).
-Highlight any notable dissent, especially from the Contrarian or Gamma Flow Analyst.
+Highlight any notable dissent, especially from the Contrarian voter.
 Be concise — this goes on the dashboard."""
 
     system = ("You are the chief strategist synthesizing your council's votes. "
@@ -805,8 +761,11 @@ COUNCIL_PERSONAS: list[dict] = [
         "lens": "Read ATR regime and VIX. Expanding vol + directional break = follow; compressed vol = fade; spiking VIX from low = risk-off bearish.",
     },
     {
-        "name": "gamma-reader",
-        "lens": "Interpret Menthor Q GEX / HVL / dealer flow. Positive GEX above HVL = stable bullish; negative GEX below HVL = amplified moves (direction = sign of DEX).",
+        "name": "structure-reader",
+        # 2026-05-06 Sprint J: was "gamma-reader" interpreting Menthor Q
+        # GEX/HVL — replaced with structural-level analysis since the MQ
+        # subscription was retired.
+        "lens": "Read price-action structure: VWAP position, prior-day high/low, swing pivots, HVN/LVN. Above VWAP + above PDH = bullish; below VWAP + below PDL = bearish.",
     },
     {
         "name": "intermarket-analyst",

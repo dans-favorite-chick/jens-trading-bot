@@ -87,7 +87,10 @@ def apply_context_weighting(
     - Pattern mid-range, no confluence: -10 (noise filter)
 
     market_snapshot must contain: close, vwap, volume, atr_5m, hvn_list, poc,
-    mq_hvl, mq_call_resistance, mq_put_support, regime, tf_bias_5m
+    regime, tf_bias_5m
+    (Sprint J 2026-05-06: mq_hvl / mq_call_resistance / mq_put_support
+    removed — they're always 0 since MQ subscription cancelled. Use
+    PriceActionLevels / find_nearest_htf_level for HTF confluence.)
     """
     pattern_name = raw_pattern.get("pattern") or raw_pattern.get("name", "")
     direction = _infer_direction(pattern_name)
@@ -105,8 +108,9 @@ def apply_context_weighting(
     tolerance = atr_5m * 0.5  # "Near" a level = within 0.5 ATR
 
     # ── Context check 1: near a key S/R level? ─────────────────────────
+    # 2026-05-06 Sprint J: mq_* keys removed from sweep (always 0 now).
     key_levels = []
-    for key in ("vwap", "poc", "mq_hvl", "mq_call_resistance", "mq_put_support"):
+    for key in ("vwap", "poc", "prior_day_high", "prior_day_low"):
         level = market_snapshot.get(key)
         if level and level > 0:
             key_levels.append((key, float(level)))

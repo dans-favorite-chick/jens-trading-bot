@@ -102,25 +102,16 @@ class TestCheckNT8SingleStream:
 
 
 class TestCheckMQStaleness:
-    def test_fresh_green(self, monkeypatch, tmp_path: Path):
-        # Create a fresh menthorq_daily.json
+    """2026-05-06 Sprint J: check_mq_staleness now always returns GREEN
+    (no-op stub — MenthorQ subscription retired). The original
+    fresh/missing/stale tests no longer apply; this single test
+    confirms the stub returns GREEN regardless of file state."""
+
+    def test_always_green_after_retirement(self, tmp_path: Path):
         from tools.routines import morning_ritual as mr
-        mq_dir = tmp_path / "data"
-        mq_dir.mkdir(parents=True)
-        mq_path = mq_dir / "menthorq_daily.json"
-        mq_path.write_text("{}", encoding="utf-8")
-        # Patch _HERE to redirect lookups
-        monkeypatch.setattr(mr, "_HERE", tmp_path / "tools" / "routines" / "x.py")
-        # The check uses _HERE.parent.parent.parent / "data" / "menthorq_daily.json"
-        # so ensure that path resolves
         status, detail, _ = mr.check_mq_staleness()
         assert status == "GREEN"
-
-    def test_missing_red(self, monkeypatch, tmp_path: Path):
-        from tools.routines import morning_ritual as mr
-        monkeypatch.setattr(mr, "_HERE", tmp_path / "tools" / "routines" / "x.py")
-        status, _, _ = mr.check_mq_staleness()
-        assert status == "RED"
+        assert "retired" in detail.lower() or "skipped" in detail.lower()
 
 
 class TestCheckMarkers:
