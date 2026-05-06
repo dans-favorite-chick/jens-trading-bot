@@ -678,6 +678,40 @@ def api_footprint():
     })
 
 
+# ─── Sprint K2: bias summary + tape reader panels ─────────────────
+
+@app.route("/api/bias-panel")
+def api_bias_panel():
+    """3-column market bias synthesis (STRUCTURE / MOMENTUM / TAPE)
+    + overall verdict. Reads sim_bot's most-recent eval state plus
+    the Sprint K1 tape_read_latest event."""
+    from dashboard.panels import (
+        build_bias_panel_data, build_tape_reader_panel_data,
+    )
+
+    # Sim_bot is where activity happens (per Sprint G default-tab fix)
+    with _state_lock:
+        sim_state = _state.get("sim", {}) or {}
+
+    # Pull a tape-state snapshot to feed into the synthesis
+    tape_state = build_tape_reader_panel_data()
+    state_for_bias = {
+        "structure_bias": sim_state.get("structure_bias")
+                          or tape_state.get("structure_bias"),
+        "cvd_delta_5": sim_state.get("cvd_delta_5"),
+        "tape_read": tape_state if tape_state.get("available") else None,
+    }
+    return jsonify(build_bias_panel_data(state_for_bias))
+
+
+@app.route("/api/tape-reader")
+def api_tape_reader():
+    """Live tape-reading pattern callouts from data/tape_read_latest.json
+    (written by footprint_cvd_reversal Sprint K1 on each evaluation)."""
+    from dashboard.panels import build_tape_reader_panel_data
+    return jsonify(build_tape_reader_panel_data())
+
+
 @app.route("/api/gamma-context")
 def api_gamma_context():
     """MenthorQ state + gamma flip detector + pinning + OpEx."""

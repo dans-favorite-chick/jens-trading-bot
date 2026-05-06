@@ -132,6 +132,39 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
 .sig-blocked { background:#2d0000; color:var(--red); }
 .sig-error { background:#2d1f00; color:var(--yellow); }
 
+/* ===== SECTION: Sprint K2 Bias + Tape Panels ===== */
+.bias-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:12px; margin-bottom:10px; }
+.bias-col { background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:10px; text-align:center; }
+.bias-col .col-label { font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:1px; margin-bottom:4px; }
+.bias-col .col-verdict { font-size:22px; font-weight:700; font-family:var(--mono); margin:6px 0; }
+.bias-col .col-reasons { font-size:11px; color:var(--text-dim); }
+.bias-bullish { color:var(--green); }
+.bias-bearish { color:var(--red); }
+.bias-neutral { color:var(--text-dim); }
+.bias-overall { padding:8px 12px; border-radius:6px; font-size:13px; text-align:center; font-weight:600; }
+.bias-overall.strong-bullish { background:#0d2818; color:var(--green); border:1px solid var(--green); }
+.bias-overall.strong-bearish { background:#2d0000; color:var(--red); border:1px solid var(--red); }
+.bias-overall.moderate-bullish { background:#0d2818; color:var(--green); border:1px solid var(--border); opacity:0.85; }
+.bias-overall.moderate-bearish { background:#2d0000; color:var(--red); border:1px solid var(--border); opacity:0.85; }
+.bias-overall.mixed,
+.bias-overall.neutral { background:var(--surface); color:var(--text-dim); border:1px solid var(--border); }
+
+.tape-row { display:flex; align-items:center; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:var(--mono); }
+.tape-row:last-child { border-bottom:none; }
+.tape-tag { width:8px; height:8px; border-radius:50%; display:inline-block; }
+.tape-tag.blue { background:var(--blue); }
+.tape-tag.green { background:var(--green); }
+.tape-tag.red { background:var(--red); }
+.tape-tag.yellow { background:var(--yellow); }
+.tape-tag.off { background:#444; }
+.tape-row.inactive { opacity:0.45; }
+.tape-meta { font-size:11px; color:var(--text-dim); margin:8px 0; padding:6px 10px; background:var(--surface); border-radius:4px; }
+.tape-iqs { font-size:11px; color:var(--text-dim); display:flex; gap:8px; padding:6px 10px; background:#0c111a; border-radius:4px; }
+.tape-fire { padding:8px 12px; border-radius:6px; font-size:13px; font-weight:600; text-align:center; margin-top:8px; }
+.tape-fire.long { background:#0d2818; color:var(--green); border:1px solid var(--green); }
+.tape-fire.short { background:#2d0000; color:var(--red); border:1px solid var(--red); }
+.tape-fire.idle { background:var(--surface); color:var(--text-dim); border:1px solid var(--border); }
+
 /* ===== SECTION: Stats ===== */
 .stat-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:8px; }
 .stat { text-align:center; }
@@ -539,6 +572,38 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
   <div id="no-trades" style="text-align:center; color:var(--text-dim); padding:20px;">No trades yet</div>
 </div>
 
+<!-- ===== SECTION: Sprint K2 Market Bias Summary ===== -->
+<div class="card" style="margin-top:12px;">
+  <h3>Market Bias <span style="font-size:10px; color:var(--text-dim); font-weight:400; text-transform:none;">— structure / momentum / tape synthesis</span></h3>
+  <div class="bias-grid">
+    <div class="bias-col">
+      <div class="col-label">Structure</div>
+      <div class="col-verdict bias-neutral" id="bias-structure-verdict">—</div>
+      <div class="col-reasons" id="bias-structure-reasons">loading…</div>
+    </div>
+    <div class="bias-col">
+      <div class="col-label">Momentum</div>
+      <div class="col-verdict bias-neutral" id="bias-momentum-verdict">—</div>
+      <div class="col-reasons" id="bias-momentum-reasons">loading…</div>
+    </div>
+    <div class="bias-col">
+      <div class="col-label">Tape</div>
+      <div class="col-verdict bias-neutral" id="bias-tape-verdict">—</div>
+      <div class="col-reasons" id="bias-tape-reasons">loading…</div>
+    </div>
+  </div>
+  <div class="bias-overall neutral" id="bias-overall">Loading bias…</div>
+</div>
+
+<!-- ===== SECTION: Sprint K2 Tape Reader (live pattern callouts) ===== -->
+<div class="card" style="margin-top:12px;">
+  <h3>Tape Reader <span style="font-size:10px; color:var(--text-dim); font-weight:400; text-transform:none;">— live footprint patterns the bot is seeing</span></h3>
+  <div id="tape-meta" class="tape-meta">No tape data yet — strategy hasn't evaluated, or volumetric data not flowing.</div>
+  <div id="tape-iqs" class="tape-iqs" style="display:none;"></div>
+  <div id="tape-patterns"></div>
+  <div id="tape-fire" class="tape-fire idle" style="display:none;">Waiting…</div>
+</div>
+
 <!-- ===== SECTION: Signal Activity ===== -->
 <div class="card" style="margin-top:12px;">
   <h3>Signal Activity — Last Bar Evaluation</h3>
@@ -759,10 +824,92 @@ async function refreshBothBotsSummary() {
   }
 }
 
+// ── Sprint K2: bias + tape reader panels ─────────────────────────
+async function refreshBiasPanel() {
+  try {
+    const res = await fetch('/api/bias-panel');
+    if (!res.ok) return;
+    const data = await res.json();
+    _setBiasCol('structure', data.structure);
+    _setBiasCol('momentum',  data.momentum);
+    _setBiasCol('tape',      data.tape);
+    const ov = data.overall || {};
+    const elOv = document.getElementById('bias-overall');
+    if (elOv) {
+      elOv.textContent = ov.summary || '—';
+      elOv.className = 'bias-overall ' + (ov.verdict || 'neutral').toLowerCase().replace('_', '-');
+    }
+  } catch (e) { /* best-effort */ }
+}
+
+function _setBiasCol(name, col) {
+  if (!col) return;
+  const verdict = col.verdict || 'NEUTRAL';
+  const elV = document.getElementById(`bias-${name}-verdict`);
+  if (elV) {
+    elV.textContent = verdict;
+    elV.className = 'col-verdict bias-' + verdict.toLowerCase();
+  }
+  const elR = document.getElementById(`bias-${name}-reasons`);
+  if (elR) elR.textContent = (col.reasons || []).join(', ') || '—';
+}
+
+async function refreshTapeReader() {
+  try {
+    const res = await fetch('/api/tape-reader');
+    if (!res.ok) return;
+    const data = await res.json();
+    const meta = document.getElementById('tape-meta');
+    const iqs  = document.getElementById('tape-iqs');
+    const pats = document.getElementById('tape-patterns');
+    const fire = document.getElementById('tape-fire');
+    if (!data.available) {
+      if (meta) meta.textContent = data.message || 'No tape data yet';
+      if (iqs)  iqs.style.display = 'none';
+      if (pats) pats.innerHTML = '';
+      if (fire) fire.style.display = 'none';
+      return;
+    }
+    if (meta) {
+      const tsShort = data.bar_ts ? data.bar_ts.slice(11, 19) : data.ts.slice(11, 19);
+      meta.textContent = `Bar ${tsShort} CT — at ${data.nearest_htf_level || 'no HTF level'} — structure_bias: ${data.structure_bias}`;
+    }
+    if (iqs) {
+      iqs.style.display = 'flex';
+      const b = data.iqs_breakdown || {};
+      iqs.innerHTML = `<span><b>IQS ${data.iqs_score}/100</b></span>` +
+                      `<span>L=${b.L||0}</span><span>D=${b.D||0}</span>` +
+                      `<span>F=${b.F||0}</span><span>C=${b.C||0}</span>` +
+                      `<span>+B=${b.bonus||0}</span><span style="margin-left:auto">tier ${data.tier||'-'}</span>`;
+    }
+    if (pats) {
+      pats.innerHTML = (data.patterns || []).map(p => {
+        const cls = p.active ? '' : 'inactive';
+        return `<div class="tape-row ${cls}"><span class="tape-tag ${esc(p.tag)}"></span><span>${esc(p.label)}</span></div>`;
+      }).join('');
+    }
+    if (fire) {
+      fire.style.display = 'block';
+      if (data.would_fire) {
+        const dir = (data.fire_direction || '').toLowerCase();
+        fire.className = 'tape-fire ' + dir;
+        fire.textContent = `WOULD FIRE ${data.fire_direction} (IQS ${data.iqs_score} ≥ 70)`;
+      } else {
+        fire.className = 'tape-fire idle';
+        fire.textContent = `Waiting — IQS ${data.iqs_score} < 70 threshold`;
+      }
+    }
+  } catch (e) { /* best-effort */ }
+}
+
+
 // ── Polling ────────────────────────────────────────────────────────
 async function poll() {
   // Sprint G: refresh both-bots summary in parallel with main poll.
   refreshBothBotsSummary();
+  // Sprint K2: bias + tape reader panels (independent of main bot state)
+  refreshBiasPanel();
+  refreshTapeReader();
   try {
     // Single API call — /api/status has bridge health + connection log + bot state
     const res = await fetch('/api/status');
