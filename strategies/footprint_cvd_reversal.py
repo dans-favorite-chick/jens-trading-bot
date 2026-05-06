@@ -479,6 +479,184 @@ def _classify_tier(iqs: int) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────
+# Sprint K1 — TAPE-READING PRO PATTERNS
+#
+# Layered onto the base 4-confluence IQS as bonus points (cap +20).
+# These are professional tape-reading patterns that help marginal
+# setups cross the 70 threshold when institutional context is strong:
+#   - Finished auction at extreme: +10
+#   - Trapped traders confirmed: +10
+# Bonuses cap at +20 total; final IQS cap stays at 100.
+# ──────────────────────────────────────────────────────────────────
+
+def _detect_finished_auction(
+    latest: dict,
+    bars_history: list[dict],
+    direction: str,
+    lookback: int = 5,
+) -> tuple[bool, str]:
+    """Finished auction = extreme tested, volume diminishing, no new high/low.
+
+    For a LONG (buying exhaustion at HIGH extreme — we'd want to SHORT):
+      - Recent bars tested or exceeded prior extreme
+      - Latest bar's high is at or below recent peak (no new high)
+      - Latest bar's volume is < recent average (auction "winding down")
+
+    For a SHORT (selling exhaustion at LOW extreme — we'd want to LONG):
+      - Recent bars tested or breached prior low
+      - Latest bar's low is at or above recent trough (no new low)
+      - Latest bar's volume is < recent average
+
+    Note: direction here = the trade direction we're considering.
+    A LONG signal benefits from a finished-auction at the LOW (selling
+    exhausted), and vice versa for SHORT.
+
+    Returns (is_finished, reason).
+    """
+    if len(bars_history) < lookback:
+        return False, ""
+    recent = bars_history[-lookback:]
+    last = latest
+
+    last_volume = last.get("total_volume", 0)
+    avg_recent_volume = sum(b.get("total_volume", 0) for b in recent) / lookback
+    if avg_recent_volume <= 0:
+        return False, ""
+
+    volume_diminished = last_volume < avg_recent_volume * 0.7
+
+    if direction == "long":
+        # Selling exhausted at lows — look for "no new low" on the latest
+        recent_low = min(b.get("low", float("inf")) for b in recent)
+        last_low = last.get("low", float("inf"))
+        no_new_low = last_low >= recent_low - 0.01
+        if no_new_low and volume_diminished:
+            return True, (
+                f"finished_auction_low: last_low {last_low:.2f} >= "
+                f"recent_low {recent_low:.2f}, vol {last_volume:.0f} < "
+                f"0.7x avg {avg_recent_volume:.0f}"
+            )
+    else:  # short
+        recent_high = max(b.get("high", float("-inf")) for b in recent)
+        last_high = last.get("high", float("-inf"))
+        no_new_high = last_high <= recent_high + 0.01
+        if no_new_high and volume_diminished:
+            return True, (
+                f"finished_auction_high: last_high {last_high:.2f} <= "
+                f"recent_high {recent_high:.2f}, vol {last_volume:.0f} < "
+                f"0.7x avg {avg_recent_volume:.0f}"
+            )
+
+    return False, ""
+
+
+def _detect_trapped_traders(
+    latest: dict,
+    bars_history: list[dict],
+    direction: str,
+) -> tuple[bool, str]:
+    """Trapped traders = breakout that immediately reverses with absorption.
+
+    Long-trapped (we go SHORT — direction=short):
+      - Prior bar (bars_history[-1]) broke above resistance with stacked_buy
+      - Current latest bar reverses with stacked_sell + negative delta
+      - Cumulative delta turns sharply negative (latest < prior)
+
+    Short-trapped (we go LONG — direction=long):
+      - Prior bar broke below support with stacked_sell
+      - Current latest bar reverses with stacked_buy + positive delta
+      - Cumulative delta turns sharply positive
+
+    Returns (is_trapped, reason).
+    """
+    if not bars_history:
+        return False, ""
+    prior = bars_history[-1]
+
+    last_delta = latest.get("delta", 0)
+    last_stacked_buy = latest.get("stacked_buy", False)
+    last_stacked_sell = latest.get("stacked_sell", False)
+    last_cvd = latest.get("cvd_session", 0)
+
+    prior_stacked_buy = prior.get("stacked_buy", False)
+    prior_stacked_sell = prior.get("stacked_sell", False)
+    prior_cvd = prior.get("cvd_session", 0)
+
+    if direction == "long":
+        # Short-trapped: prior bar broke down with stacked_sell, current
+        # reverses with stacked_buy + positive delta + rising CVD
+        if (prior_stacked_sell and last_stacked_buy
+                and last_delta > 0
+                and last_cvd > prior_cvd):
+            return True, (
+                f"shorts_trapped: prior stacked_sell, latest stacked_buy "
+                f"with delta {last_delta:+d}, CVD {prior_cvd:+d}->{last_cvd:+d}"
+            )
+    else:  # short
+        if (prior_stacked_buy and last_stacked_sell
+                and last_delta < 0
+                and last_cvd < prior_cvd):
+            return True, (
+                f"longs_trapped: prior stacked_buy, latest stacked_sell "
+                f"with delta {last_delta:+d}, CVD {prior_cvd:+d}->{last_cvd:+d}"
+            )
+
+    return False, ""
+
+
+def _score_tape_bonuses(
+    latest: dict,
+    bars_history: list[dict],
+    direction: str,
+) -> tuple[int, dict]:
+    """Compute Sprint K1 pattern bonuses, capped at +20 total.
+
+    Returns (bonus_score, debug_dict).
+    """
+    debug = {
+        "finished_auction": False, "finished_auction_reason": "",
+        "trapped_traders": False, "trapped_traders_reason": "",
+    }
+    bonus = 0
+
+    fa, fa_reason = _detect_finished_auction(latest, bars_history, direction)
+    if fa:
+        debug["finished_auction"] = True
+        debug["finished_auction_reason"] = fa_reason
+        bonus += 10
+
+    tt, tt_reason = _detect_trapped_traders(latest, bars_history, direction)
+    if tt:
+        debug["trapped_traders"] = True
+        debug["trapped_traders_reason"] = tt_reason
+        bonus += 10
+
+    return min(20, bonus), debug
+
+
+# ──────────────────────────────────────────────────────────────────
+# Sprint K1 — TAPE-READ EVENT EMISSION (for dashboard live panel)
+# ──────────────────────────────────────────────────────────────────
+
+def _emit_tape_read_event(eval_data: dict, root: Path | None = None) -> None:
+    """Write data/tape_read_latest.json for the dashboard tape-reader panel.
+
+    Called from evaluate() on each evaluation (not just signals) so the
+    dashboard can show "what the bot is seeing right now" even when no
+    signal fires. Best-effort — never breaks the strategy on write failure.
+    """
+    try:
+        base = Path(root) if root is not None else _DATA_ROOT
+        out = base / "data" / "tape_read_latest.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        tmp = out.with_suffix(".tmp")
+        tmp.write_text(json.dumps(eval_data, indent=2), encoding="utf-8")
+        tmp.replace(out)
+    except Exception as e:
+        logger.debug(f"[FOOTPRINT_CVD] tape_read emit failed: {e!r}")
+
+
+# ──────────────────────────────────────────────────────────────────
 # Strategy class (Phoenix BaseStrategy subclass)
 # ──────────────────────────────────────────────────────────────────
 # Module-level flag: log DATA_NOT_AVAILABLE only once per session per
@@ -631,14 +809,66 @@ class FootprintCVDReversal(BaseStrategy):
                 bars_history, cfg, tick_size,
             )
 
-            iqs = min(100, level_score + div_score + fp_score + comp_score)
+            # Sprint K1: tape-reading pro pattern bonuses (cap +20).
+            # Bonuses are ADDITIVE on top of the base 4-confluence IQS;
+            # final IQS still capped at 100. Helps marginal setups cross
+            # the threshold when institutional context is strong.
+            tape_bonus, tape_debug = _score_tape_bonuses(
+                latest, bars_history, direction,
+            )
+
+            base_iqs = level_score + div_score + fp_score + comp_score
+            iqs = min(100, base_iqs + tape_bonus)
             tier = _classify_tier(iqs)
 
             logger.info(
                 f"[FOOTPRINT_CVD][{direction}] IQS={iqs} "
-                f"(L={level_score} D={div_score} F={fp_score} C={comp_score}) "
+                f"(L={level_score} D={div_score} F={fp_score} "
+                f"C={comp_score} +B={tape_bonus}) "
                 f"level={level_name} tier={tier}"
             )
+
+            # Sprint K1: emit tape-read event for dashboard live panel
+            # — every evaluation, not just signal-fire ones.
+            structure_bias_for_event = (
+                "BULLISH" if regime in ("BULLISH", "POSITIVE_STRONG")
+                else "BEARISH" if regime in ("BEARISH", "NEGATIVE_STRONG")
+                else "NEUTRAL"
+            )
+            _emit_tape_read_event({
+                "ts": now_ct.isoformat(),
+                "direction_evaluated": direction,
+                "structure_bias": structure_bias_for_event,
+                "iqs_score": iqs,
+                "iqs_breakdown": {
+                    "L": level_score, "D": div_score,
+                    "F": fp_score, "C": comp_score,
+                    "bonus": tape_bonus,
+                },
+                "nearest_htf_level": level_name,
+                "absorption_detected": fp_debug.get("absorption", False),
+                "stacked_buy": latest.get("stacked_buy", False),
+                "stacked_sell": latest.get("stacked_sell", False),
+                "cvd_divergence": (
+                    "BULLISH_DIV" if (direction == "long"
+                                      and div_debug.get("divergence_present"))
+                    else "BEARISH_DIV" if (direction == "short"
+                                           and div_debug.get("divergence_present"))
+                    else ""
+                ),
+                "finished_auction": tape_debug["finished_auction"],
+                "trapped_traders": (
+                    "shorts_trapped" if (direction == "long"
+                                         and tape_debug["trapped_traders"])
+                    else "longs_trapped" if (direction == "short"
+                                             and tape_debug["trapped_traders"])
+                    else ""
+                ),
+                "would_fire": iqs >= cfg.entry_threshold_iqs,
+                "fire_direction": direction.upper() if iqs >= cfg.entry_threshold_iqs else "",
+                "tier": tier,
+                "bar_ts": latest.get("ts", ""),
+            })
 
             if iqs < cfg.entry_threshold_iqs:
                 continue
@@ -678,6 +908,11 @@ class FootprintCVDReversal(BaseStrategy):
                 confluences.append("volume_holding")
             if comp_debug["effort_spike"]:
                 confluences.append("effort_spike")
+            # Sprint K1 tape-read pattern confluences
+            if tape_debug["finished_auction"]:
+                confluences.append("finished_auction")
+            if tape_debug["trapped_traders"]:
+                confluences.append("trapped_traders")
 
             return Signal(
                 direction="LONG" if direction == "long" else "SHORT",
@@ -701,6 +936,9 @@ class FootprintCVDReversal(BaseStrategy):
                     "sub_strategy": "footprint_cvd_reversal",
                     "tier": tier,
                     "iqs": iqs,
+                    "base_iqs": base_iqs,            # Sprint K1: pre-bonus
+                    "tape_bonus": tape_bonus,        # Sprint K1: pattern bonuses
+                    "tape_debug": tape_debug,        # Sprint K1
                     "level_score": level_score,
                     "divergence_score": div_score,
                     "footprint_score": fp_score,
