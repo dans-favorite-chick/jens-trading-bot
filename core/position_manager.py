@@ -349,18 +349,70 @@ class PositionManager:
         """True if an un-filled LIMIT entry is known to be working on
         this account. Stale entries (older than PENDING_ENTRY_TIMEOUT_S)
         are auto-expired and return False.
+
+        2026-05-06 fix: when expiring a stale pending record, ALSO send
+        a CANCEL OIF for the original trade_id. Prior behavior cleared
+        only the Python-side record but left the NT8-side LIMIT order
+        working — the next entry attempt would then collide with the
+        still-active LIMIT and NT8 would reject "Exceeds account's
+        maximum position quantity" (e.g. SimBias Momentum 03:13 today,
+        SimDom Pull Back 2026-05-05 20:30).
         """
         rec = self._pending_entries.get(account)
         if rec is None:
             return False
         if (time.time() - rec["submitted_at"]) > self.PENDING_ENTRY_TIMEOUT_S:
+            stale_trade_id = rec.get("trade_id", "")
             logger.info(
                 f"[PENDING_ENTRY] {account} record expired "
-                f"(trade={rec['trade_id']}, age>{self.PENDING_ENTRY_TIMEOUT_S}s)"
+                f"(trade={stale_trade_id}, age>{self.PENDING_ENTRY_TIMEOUT_S}s)"
             )
+            # Send CANCEL OIF to NT8 so the still-working LIMIT order
+            # gets cleaned up at the exchange side. Best-effort: never
+            # let a cancel-write failure block the Python-side expiry —
+            # operator can manually cancel from NT8 if this fails.
+            self._cancel_stale_nt8_order(account, stale_trade_id)
             self._pending_entries.pop(account, None)
             return False
         return True
+
+    def _cancel_stale_nt8_order(self, account: str, trade_id: str) -> None:
+        """Write a CANCEL OIF for an aged-out pending entry's order_id.
+
+        Phoenix uses trade_id as the NT8 ORDER ID (see
+        bridge/oif_writer.py:_build_entry_line — the field-10 ORDER ID
+        slot in PLACE OIFs is populated with trade_id, and
+        cancel_single_order_line targets that same slot).
+
+        Best-effort. Logs but never raises — callers must continue
+        regardless of cancel success/failure.
+        """
+        if not trade_id:
+            logger.warning(
+                f"[PENDING_ENTRY] {account} expiry: empty trade_id, "
+                f"can't issue CANCEL OIF — operator must check NT8 manually"
+            )
+            return
+        try:
+            from bridge.oif_writer import write_oif
+            written = write_oif(action="CANCEL", trade_id=trade_id, account=account)
+            if written:
+                logger.info(
+                    f"[PENDING_ENTRY] {account} CANCEL OIF written for "
+                    f"stale trade_id={trade_id} ({len(written)} file(s))"
+                )
+            else:
+                logger.warning(
+                    f"[PENDING_ENTRY] {account} CANCEL OIF returned no "
+                    f"files for trade_id={trade_id} — operator should "
+                    f"verify NT8 has no working LIMIT on this account"
+                )
+        except Exception as e:
+            logger.warning(
+                f"[PENDING_ENTRY] {account} CANCEL OIF write failed for "
+                f"trade_id={trade_id}: {e!r} — operator should verify "
+                f"NT8 has no working LIMIT on this account"
+            )
 
     def get_pending_entry(self, account: str) -> dict | None:
         """Return the pending-entry record for an account, honouring
