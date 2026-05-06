@@ -7,6 +7,38 @@ import pytest
 from agents import market_advisor as ma
 
 
+@pytest.fixture(autouse=True)
+def mock_fmp_sanity_for_market_advisor_tests(monkeypatch):
+    """Prevent live FMP API calls in test_market_advisor (B15-followup).
+
+    13 tests in this file pass `fmp_snap=None` to compute_guidance(),
+    which triggers an auto-fetch via core.fmp_sanity.check_mnq_vs_fmp —
+    a live network call comparing local MNQ price against QQQ-derived
+    reference. When live MNQ drifts >2% from the test's hardcoded
+    27,400 reference, the fmp_disagrees_Xpct caution flag fires and
+    downgrades suggested_rr_tier from 3.0 to 2.0 (line 274-275 in
+    market_advisor.py: `rr_tier = min(rr_tier, 2.0)`), breaking
+    test_trending_bull's `>= 2.5` assertion.
+
+    This autouse fixture replaces fmp_sanity.check_mnq_vs_fmp with a
+    no-op returning None. compute_guidance handles None gracefully
+    (no fmp_disagrees flag, no tier downgrade).
+
+    Tests that need a SPECIFIC FMP scenario (e.g. test_fmp_hard_disagreement_flag)
+    pass an explicit fmp_snap dict to compute_guidance, which bypasses
+    the auto-fetch branch entirely — this fixture is invisible to them.
+
+    Kills the entire flake class permanently — tests no longer depend
+    on internet, time of day, or live MNQ price.
+    """
+    from core import fmp_sanity
+    monkeypatch.setattr(
+        fmp_sanity,
+        "check_mnq_vs_fmp",
+        lambda *args, **kwargs: None,
+    )
+
+
 def _base_market(**overrides) -> dict:
     """Plausible MNQ snapshot; overrides replace top-level keys only."""
     m = {
