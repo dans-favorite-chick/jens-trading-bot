@@ -43,17 +43,10 @@ from strategies.footprint_cvd_reversal import (
 CT = ZoneInfo("America/Chicago")
 
 
-# ─── GammaLevels-like stub (tests don't need the real dataclass) ────
-@dataclass
-class _FakeGammaLevels:
-    """Minimal stand-in for core.menthorq_gamma.GammaLevels — only the
-    attributes the strategy actually reads."""
-    put_support: float = 0.0
-    put_support_0dte: float = 0.0
-    call_resistance: float = 0.0
-    call_resistance_0dte: float = 0.0
-    hvl: float = 0.0
-    hvl_0dte: float = 0.0
+# Sprint J (2026-05-05): _FakeGammaLevels stub removed — the strategy
+# now consumes structural levels from the market dict directly via
+# _build_pa_levels_from_market. Tests just put fields like
+# {"prior_day_low": 27800.0, "vwap": 27800.0, ...} into the market.
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -97,70 +90,88 @@ def test_session_boundary_allows_mid_session():
 # ═══════════════════════════════════════════════════════════════════
 # Confluence 1: HTF level (real Phoenix MenthorQ attribute names)
 # ═══════════════════════════════════════════════════════════════════
-def test_long_at_put_support_0dte_scores_25():
-    gl = _FakeGammaLevels(put_support_0dte=27800.0, put_support=25000.0)
-    score, name = _score_htf_level(27801.0, gl, None, 8, 0.25, "long")
+# Sprint J (2026-05-05): _score_htf_level is now market-dict-based via
+# Sprint I's price_action_levels infrastructure (replaces MenthorQ
+# GammaLevels). Tier-weighted points: TIER_1=25, TIER_2=18, TIER_3=12.
+# Tier 1 sources = prior_day_high/low/close, session_poc / prior_day_poc.
+# Tier 2 sources = vwap, hvn_levels.
+# Tier 3 sources = lvn_levels.
+
+def test_long_at_prior_day_low_scores_25_tier1():
+    """PDL is tier-1 institutional level → 25 pts."""
+    market = {"prior_day_low": 27800.0}
+    score, name = _score_htf_level(27801.0, market, 8, 0.25, "long")
     assert score == 25
-    assert name == "put_support_0dte"
+    assert name == "PDL"
 
 
-def test_long_at_put_support_scores_25():
-    """Real attribute name is 'put_support' (no '_all' suffix), per
-    GammaLevels in core/menthorq_gamma.py."""
-    gl = _FakeGammaLevels(put_support=27800.0)
-    score, name = _score_htf_level(27801.0, gl, None, 8, 0.25, "long")
+def test_long_at_prior_day_high_scores_25_tier1():
+    market = {"prior_day_high": 27800.0}
+    score, name = _score_htf_level(27801.0, market, 8, 0.25, "long")
     assert score == 25
-    assert name == "put_support"
+    assert name == "PDH"
 
 
-def test_long_at_hvl_scores_25():
-    gl = _FakeGammaLevels(hvl=27800.0)
-    score, name = _score_htf_level(27801.0, gl, None, 8, 0.25, "long")
+def test_at_session_poc_scores_25_tier1():
+    """Session POC (or prior_day_poc fallback) is tier-1."""
+    market = {"prior_day_poc": 27800.0}
+    score, name = _score_htf_level(27801.0, market, 8, 0.25, "long")
     assert score == 25
-    assert name == "hvl"
+    assert name == "POC"
 
 
-def test_short_at_call_resistance_0dte_scores_25():
-    gl = _FakeGammaLevels(call_resistance_0dte=27800.0)
-    score, name = _score_htf_level(27801.0, gl, None, 8, 0.25, "short")
-    assert score == 25
-    assert name == "call_resistance_0dte"
+def test_at_vwap_scores_18_tier2():
+    """VWAP is tier-2 strong structural → 18 pts."""
+    market = {"vwap": 27800.0}
+    score, name = _score_htf_level(27801.0, market, 8, 0.25, "long")
+    assert score == 18
+    assert name == "VWAP"
 
 
-def test_short_at_call_resistance_scores_25():
-    gl = _FakeGammaLevels(call_resistance=27800.0)
-    score, name = _score_htf_level(27801.0, gl, None, 8, 0.25, "short")
-    assert score == 25
-    assert name == "call_resistance"
+def test_at_hvn_scores_18_tier2():
+    """HVN (high volume node) is tier-2 → 18 pts."""
+    market = {"hvn_levels": [27800.0]}
+    score, name = _score_htf_level(27801.0, market, 8, 0.25, "long")
+    assert score == 18
+    assert name.startswith("HVN_")
 
 
-def test_vp_poc_only_scores_15():
-    """When no MenthorQ level matches, prior-session VP POC is the
-    weaker fallback at 15 pts."""
-    score, name = _score_htf_level(27800.0, _FakeGammaLevels(), 27800.5, 8, 0.25, "long")
-    assert score == 15
-    assert name == "vp_poc_prev_session"
+def test_at_lvn_scores_12_tier3():
+    """LVN (low volume node) is tier-3 moderate → 12 pts."""
+    market = {"lvn_levels": [27800.0]}
+    score, name = _score_htf_level(27801.0, market, 8, 0.25, "long")
+    assert score == 12
+    assert name.startswith("LVN_")
 
 
 def test_outside_buffer_scores_0():
-    gl = _FakeGammaLevels(put_support=27800.0)
-    score, name = _score_htf_level(27810.0, gl, None, 8, 0.25, "long")
+    """Level too far from price → no confluence."""
+    market = {"prior_day_low": 27800.0}
+    score, name = _score_htf_level(27810.0, market, 8, 0.25, "long")
     assert score == 0
 
 
 def test_zero_level_treated_as_unset():
     """Phoenix sometimes uses 0 as a 'not loaded' sentinel for levels.
     The HTF scorer must treat zeros as missing, not as a level at $0."""
-    gl = _FakeGammaLevels(put_support=0.0)
-    score, _ = _score_htf_level(27800.0, gl, None, 8, 0.25, "long")
+    market = {"prior_day_low": 0.0, "prior_day_high": 0.0}
+    score, _ = _score_htf_level(27800.0, market, 8, 0.25, "long")
     assert score == 0
 
 
-def test_none_gamma_levels_handled():
-    """Strategies must survive a None gamma_levels gracefully (e.g.
-    on bot startup before the daily MenthorQ file loads)."""
-    score, _ = _score_htf_level(27800.0, None, None, 8, 0.25, "long")
+def test_empty_market_dict_handled():
+    """Strategies must survive a market dict with no level fields
+    gracefully (e.g. on bot startup before any aggregator data)."""
+    score, _ = _score_htf_level(27800.0, {}, 8, 0.25, "long")
     assert score == 0
+
+
+def test_tier1_beats_tier2_when_equidistant():
+    """When PDH and VWAP are both 1 tick away, PDH (tier 1) wins."""
+    market = {"prior_day_high": 27801.0, "vwap": 27799.0}
+    score, name = _score_htf_level(27800.0, market, 8, 0.25, "long")
+    assert score == 25  # tier 1
+    assert name == "PDH"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -396,8 +407,10 @@ def test_strategy_returns_long_signal_on_full_setup(tmp_path, monkeypatch):
         "price": 27801.0,
         "tick_size": 0.25,
         "regime": "POSITIVE_NORMAL",
-        "gamma_levels": _FakeGammaLevels(put_support=27800.0),
-        "prior_day_poc": None,
+        # Sprint J: HTF level via market dict (price-action levels)
+        # Tests put PDL=27800 in the market — `_score_htf_level` reads
+        # this directly via `_build_pa_levels_from_market`.
+        "prior_day_low": 27800.0,
     }
     session_info = {"now_ct": datetime(2026, 5, 5, 9, 30, 5, tzinfo=CT)}
     signal = strat.evaluate(market, [], [], session_info)
@@ -407,7 +420,8 @@ def test_strategy_returns_long_signal_on_full_setup(tmp_path, monkeypatch):
     assert signal.metadata["tier"] in ("A++", "A", "B")
     assert signal.metadata["iqs"] >= 70
     assert signal.metadata["level_score"] == 25
-    assert signal.metadata["level_name"] == "put_support"
+    # Sprint J: PDL is now the level (was put_support pre-Sprint-J).
+    assert signal.metadata["level_name"] == "PDL"
     assert signal.metadata["sub_strategy"] == "footprint_cvd_reversal"
     # Phoenix Signal contract — these must exist
     assert signal.strategy == "footprint_cvd_reversal"
@@ -425,8 +439,10 @@ def test_strategy_blocks_in_lunch(tmp_path, monkeypatch):
     strat = FootprintCVDReversal({})
     market = {
         "price": 27801.0, "tick_size": 0.25, "regime": "POSITIVE_NORMAL",
-        "gamma_levels": _FakeGammaLevels(put_support=27800.0),
-        "prior_day_poc": None,
+        # Sprint J: HTF level via market dict (price-action levels)
+        # Tests put PDL=27800 in the market — `_score_htf_level` reads
+        # this directly via `_build_pa_levels_from_market`.
+        "prior_day_low": 27800.0,
     }
     session_info = {"now_ct": datetime(2026, 5, 5, 12, 0, tzinfo=CT)}
     assert strat.evaluate(market, [], [], session_info) is None
@@ -438,8 +454,10 @@ def test_strategy_blocks_long_in_negative_strong(tmp_path, monkeypatch):
     strat = FootprintCVDReversal({})
     market = {
         "price": 27801.0, "tick_size": 0.25, "regime": "NEGATIVE_STRONG",
-        "gamma_levels": _FakeGammaLevels(put_support=27800.0),
-        "prior_day_poc": None,
+        # Sprint J: HTF level via market dict (price-action levels)
+        # Tests put PDL=27800 in the market — `_score_htf_level` reads
+        # this directly via `_build_pa_levels_from_market`.
+        "prior_day_low": 27800.0,
     }
     session_info = {"now_ct": datetime(2026, 5, 5, 9, 30, 5, tzinfo=CT)}
     assert strat.evaluate(market, [], [], session_info) is None
@@ -451,8 +469,10 @@ def test_strategy_dormant_when_data_not_available(tmp_path, monkeypatch):
     strat = FootprintCVDReversal({})
     market = {
         "price": 27801.0, "tick_size": 0.25, "regime": "POSITIVE_NORMAL",
-        "gamma_levels": _FakeGammaLevels(put_support=27800.0),
-        "prior_day_poc": None,
+        # Sprint J: HTF level via market dict (price-action levels)
+        # Tests put PDL=27800 in the market — `_score_htf_level` reads
+        # this directly via `_build_pa_levels_from_market`.
+        "prior_day_low": 27800.0,
     }
     session_info = {"now_ct": datetime(2026, 5, 5, 9, 30, tzinfo=CT)}
     assert strat.evaluate(market, [], [], session_info) is None
@@ -485,8 +505,10 @@ def test_strategy_returns_none_when_iqs_below_threshold(tmp_path, monkeypatch):
     strat = FootprintCVDReversal({})
     market = {
         "price": 27801.0, "tick_size": 0.25, "regime": "POSITIVE_NORMAL",
-        "gamma_levels": _FakeGammaLevels(put_support=27800.0),
-        "prior_day_poc": None,
+        # Sprint J: HTF level via market dict (price-action levels)
+        # Tests put PDL=27800 in the market — `_score_htf_level` reads
+        # this directly via `_build_pa_levels_from_market`.
+        "prior_day_low": 27800.0,
     }
     session_info = {"now_ct": datetime(2026, 5, 5, 9, 30, 5, tzinfo=CT)}
     # Level=25, divergence=0, footprint=0, compression~0 → IQS=25 < 70
@@ -499,7 +521,7 @@ def test_strategy_disabled_returns_none(tmp_path, monkeypatch):
     strat = FootprintCVDReversal({"enabled": False})
     market = {
         "price": 27801.0, "tick_size": 0.25, "regime": "POSITIVE_NORMAL",
-        "gamma_levels": _FakeGammaLevels(put_support=27800.0),
+        "prior_day_low": 27800.0,
     }
     session_info = {"now_ct": datetime(2026, 5, 5, 9, 30, tzinfo=CT)}
     assert strat.evaluate(market, [], [], session_info) is None

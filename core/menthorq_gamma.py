@@ -1,6 +1,21 @@
 """
 Phoenix Bot — MenthorQ Gamma Integration (B14)
 
+⚠️  DEPRECATED 2026-05-05 (Sprint J) ⚠️
+The MenthorQ subscription was cancelled. This module is kept as an
+inert shell so legacy callers don't break, but `load_latest_gamma()`
+now always returns `None` regardless of what's on disk.
+
+Replacement: `core/price_action_levels.py` (Sprint I) provides
+structure-derived HTF levels via `build_levels_from_aggregator()` and
+`find_nearest_htf_level()`. Strategies have been rewired to consume
+those.
+
+Parsing helpers (`load_gamma_for_date`, `_parse_*`) are preserved for
+backward-compat with archived data — operator can still load specific
+historical files manually if needed for analysis.
+
+ORIGINAL DESCRIPTION (kept for context):
 Parses Jennifer's daily MenthorQ paste into an immutable GammaLevels
 dataclass. Feeds regime classification, entry-wall filtering, and
 natural-stop discovery (Phase 3).
@@ -402,46 +417,22 @@ def load_gamma_for_date(
 def load_latest_gamma(
     data_dir: Path, max_age_hours: int = 30
 ) -> Optional[GammaLevels]:
+    """⚠️  DEPRECATED (Sprint J 2026-05-05) — always returns None.
+
+    The MenthorQ subscription was cancelled and the daily-paste
+    workflow retired. This stub exists so legacy callers don't crash;
+    they should treat `None` as "no MQ data available" (which Phoenix's
+    base_bot, market_advisor, and strategies already handle as a
+    no-op / fallback path).
+
+    Strategies needing HTF reference levels should use
+    `core.price_action_levels.build_levels_from_aggregator(agg)` instead.
+
+    The original parameters are kept for signature compat. The original
+    parser (`load_gamma_for_date`) still works on archived files for
+    manual analysis — but that's not the runtime path anymore.
     """
-    Find the most recent *_levels.txt in data_dir and parse it.
-
-    Returns None (with WARN log) if the file is older than
-    max_age_hours. Returns None silently if no files exist.
-    """
-    data_dir = Path(data_dir)
-    if not data_dir.is_dir():
-        logger.warning("gamma data dir does not exist: %s", data_dir)
-        return None
-
-    candidates = sorted(data_dir.glob("*_levels.txt"))
-    if not candidates:
-        return None
-
-    # Pick by filename date (deterministic) then fall back to mtime.
-    dated = [
-        (d, p) for p in candidates
-        if (d := _parse_date_from_name(p.name)) is not None
-    ]
-    if dated:
-        dated.sort(key=lambda x: x[0])
-        target_date, chosen = dated[-1]
-    else:
-        chosen = max(candidates, key=lambda p: p.stat().st_mtime)
-        target_date = date.fromtimestamp(chosen.stat().st_mtime)
-
-    file_mtime = datetime.fromtimestamp(
-        chosen.stat().st_mtime, tz=timezone.utc
-    )
-    age = datetime.now(timezone.utc) - file_mtime
-    if age > timedelta(hours=max_age_hours):
-        logger.warning(
-            "latest gamma file %s is %.1fh old (> %dh threshold) — "
-            "ignoring",
-            chosen.name, age.total_seconds() / 3600, max_age_hours,
-        )
-        return None
-
-    return load_gamma_for_date(data_dir, target_date)
+    return None
 
 
 # ─── Phase 3: regime classification + decision functions ────────────

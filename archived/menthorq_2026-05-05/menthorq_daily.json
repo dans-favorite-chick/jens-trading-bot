@@ -1,0 +1,72 @@
+{
+  "_instructions": [
+    "PRICES come AUTOMATICALLY from MQBridge.cs in NT8 \u2014 do not enter them here.",
+    "You only need to fill in the REGIME INTERPRETATION below \u2014 4-5 text fields.",
+    "Takes 60 seconds. Do this once per morning from the MenthorQ dashboard.",
+    "",
+    "GEX regime:      negative net GEX = NEGATIVE (red), positive = POSITIVE (green)",
+    "net_gex_bn:      the dollar value (e.g. -2.1 or +1.5)",
+    "dex:             Dealer EXposure bias \u2014 POSITIVE or NEGATIVE",
+    "vanna:           BULLISH or BEARISH (rising VIX dealer hedge direction)",
+    "charm:           BULLISH or BEARISH (time decay hedge direction)",
+    "cta_positioning: BUYING or SELLING (systematic fund flow)",
+    "direction_bias:  your overall read \u2014 LONG, SHORT, or NEUTRAL",
+    "stop_multiplier: 1.0=normal, 1.5=neg gamma (widen), 0.8=pos gamma (tighten)",
+    "strategy_type:   MOMENTUM (neg gamma) | MEAN_REVERSION (pos gamma) | BALANCED"
+  ],
+  "_last_updated": "2026-04-24",
+  "date": "2026-04-24",
+  "_carried_forward_from": "2026-04-23",
+  "_carried_forward_note": "2026-04-24 14:55 CT: Jennifer's morning MQ ritual was skipped; date bumped to today to silence the 31.5h stale CRITICAL spam. Regime fields preserved from 2026-04-23. Refresh from MenthorQ dashboard when able.",
+  "gex": {
+    "net_gex_bn": 5.1,
+    "regime": "POSITIVE",
+    "total_gex_bn": 14.37,
+    "put_call_gex": 0.42,
+    "_help": "NEGATIVE or POSITIVE \u2014 check MenthorQ dashboard net GEX number"
+  },
+  "dex": {
+    "value": "POSITIVE",
+    "_help": "POSITIVE or NEGATIVE"
+  },
+  "flows": {
+    "vanna": "BULLISH",
+    "charm": "BULLISH",
+    "cta_positioning": "BUYING"
+  },
+  "q_score": {
+    "momentum": 5,
+    "seasonality": 0,
+    "volatility": 1,
+    "options": 5,
+    "conviction": "HIGH_BULLISH",
+    "_note": "Q-Score from MenthorQ dashboard \u2014 Momentum+Options both maxed 3 days running, low vol = sustained move setup"
+  },
+  "blind_spots": {
+    "BL1": 25893,
+    "BL2": 27247,
+    "BL3": 26260,
+    "BL4": 26008,
+    "BL5": 26796,
+    "BL6": 27065,
+    "BL7": 27094,
+    "BL8": 26398,
+    "BL9": 26467,
+    "BL10": 26558,
+    "_note": "Hidden reaction zones. Core resistance cluster 26260-26558 overlaps gamma wall at 26500. Upside extension 26796-27247 if CR breaks."
+  },
+  "iv": {
+    "iv_30d": 18.88,
+    "_note": "Low IV confirms dampened vol regime consistent with positive gamma"
+  },
+  "regime_summary": {
+    "direction_bias": "LONG",
+    "allow_longs": true,
+    "allow_shorts": false,
+    "stop_multiplier": 1.0,
+    "strategy_type": "MEAN_REVERSION",
+    "notes": "High-conv bullish (Mom/Opt 5); tight pos-GEX cluster 26500-27150; 0DTE HVL 26925 > all-expiry 26190 adds bullish buffer"
+  },
+  "_prices_auto": "HVL, call_resistance, put_support, GEX levels 1-10 come from C:\\temp\\menthorq_levels.json (MQBridge.cs in NT8). No manual entry needed for prices.",
+  "hvl": 26925.0
+}

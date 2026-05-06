@@ -1,6 +1,19 @@
 """
 Phoenix Bot — Menthor Q Integration
 
+⚠️  DEPRECATED 2026-05-05 (Sprint J) ⚠️
+The MenthorQ subscription was cancelled. This module is kept as an
+inert shell so legacy callers don't break:
+  - load() / get_snapshot() now always return _default_snapshot()
+    (neutral "no MQ data" — allows all directions, stop_multiplier=1.0)
+  - load_bridge_levels() returns the same neutral dict
+  - All parsing helpers preserved for archived-file analysis only
+
+Replacement: use `core.price_action_levels.build_levels_from_aggregator(agg)`
+for HTF reference levels and `find_nearest_htf_level()` for confluence
+scoring. Strategies have been rewired to consume those.
+
+ORIGINAL DESCRIPTION (kept for context):
 Reads daily Menthor Q data (GEX regime, HVL, key levels, flow signals)
 and exposes it as structured context for strategies and the pre-trade filter.
 
@@ -161,14 +174,19 @@ class MenthorQSnapshot:
 
 
 def load_bridge_levels() -> dict:
-    """
-    Read price levels from C:\\temp\\menthorq_levels.json (written by MQBridge.cs).
-    Returns a dict of level prices, or {} if file not available.
+    """⚠️  DEPRECATED (Sprint J 2026-05-05) — always returns {}.
 
-    This is the AUTOMATIC path — no manual entry required.
-    MQBridge.cs reads MenthorQLevelsAPI draw objects on the NT8 chart and
-    writes updated prices every 60 seconds.
+    The MenthorQ subscription was cancelled and the bridge-file workflow
+    retired. This stub returns an empty dict; callers' existing
+    "if not levels: degrade gracefully" branches now always take the
+    degrade path.
     """
+    return {}
+
+
+def _legacy_load_bridge_levels() -> dict:
+    """Original implementation, preserved for offline analysis of
+    archived bridge files. Not used in the runtime path."""
     if not os.path.exists(BRIDGE_FILE):
         logger.warning(
             f"[MenthorQ] Bridge file missing at {BRIDGE_FILE} — "
@@ -312,8 +330,13 @@ def bridge_health() -> dict:
 
 
 def load() -> MenthorQSnapshot:
-    """
-    Load today's Menthor Q snapshot.
+    """⚠️  DEPRECATED (Sprint J 2026-05-05) — always returns _default_snapshot()."""
+    return _default_snapshot("subscription_cancelled_sprint_j")
+
+
+def _legacy_load() -> MenthorQSnapshot:
+    """Original implementation, preserved for offline analysis of
+    archived data files. Not used in the runtime path.
 
     TWO-SOURCE MERGE STRATEGY:
       1. MQBridge.cs (C:\\temp\\menthorq_levels.json)
@@ -617,8 +640,14 @@ _cached_bridge_mtime: float = 0.0
 
 
 def get_snapshot() -> MenthorQSnapshot:
-    """
-    Return cached snapshot. Reload when:
+    """⚠️  DEPRECATED (Sprint J 2026-05-05) — always returns _default_snapshot()."""
+    return _default_snapshot("subscription_cancelled_sprint_j")
+
+
+def _legacy_get_snapshot() -> MenthorQSnapshot:
+    """Original cached implementation; preserved but unreferenced.
+
+    Reloads when:
       - New trading day (date changed)
       - MQBridge.cs wrote a newer file (picks up live NT8 level refreshes)
     """

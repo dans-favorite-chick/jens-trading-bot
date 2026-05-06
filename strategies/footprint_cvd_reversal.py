@@ -210,64 +210,83 @@ def _is_session_boundary(now_ct: datetime, cfg: FootprintCVDConfig) -> bool:
 
 # ──────────────────────────────────────────────────────────────────
 # Confluence 1: HTF level
+#
+# Sprint J (2026-05-05): rewired from MenthorQ GammaLevels attributes
+# to Sprint I's price_action_levels infrastructure.
+#   TIER_1 (PDH/PDL/POC):    25 pts  (institutional)
+#   TIER_2 (VWAP/HVN/ON H/L): 18 pts  (strong structural)
+#   TIER_3 (LVN):            12 pts  (moderate)
 # ──────────────────────────────────────────────────────────────────
-def _gl_attr(gamma_levels: Any, name: str) -> Optional[float]:
-    """Read a level off a GammaLevels-like object. Returns None for
-    missing attribute or zero/None values (Phoenix sometimes uses 0
-    as a sentinel for unset levels)."""
-    if gamma_levels is None:
-        return None
-    val = getattr(gamma_levels, name, None)
-    if val is None:
+
+def _safe_float(v: Any) -> Optional[float]:
+    """Coerce to positive float or return None (treats 0/None/junk as 'unset')."""
+    if v is None:
         return None
     try:
-        f = float(val)
+        f = float(v)
     except (TypeError, ValueError):
         return None
     return f if f > 0 else None
 
 
+def _build_pa_levels_from_market(market: dict):
+    """Adapter — construct a PriceActionLevels from a Phoenix market
+    snapshot dict so find_nearest_htf_level can score confluence.
+
+    Reads the structural fields Phoenix already populates in the market
+    dict during evaluation (vwap, prior_day_*, etc). HVN/LVN are read
+    if upstream populated them; otherwise empty (graceful).
+    """
+    from core.price_action_levels import PriceActionLevels
+    return PriceActionLevels(
+        prior_day_high=_safe_float(market.get("prior_day_high")),
+        prior_day_low=_safe_float(market.get("prior_day_low")),
+        prior_day_close=_safe_float(market.get("prior_day_close")),
+        session_poc=(_safe_float(market.get("session_poc"))
+                     or _safe_float(market.get("prior_day_poc"))),
+        session_vwap=_safe_float(market.get("vwap")),
+        hvn_levels=[float(v) for v in (market.get("hvn_levels") or [])
+                    if isinstance(v, (int, float)) and v > 0],
+        lvn_levels=[float(v) for v in (market.get("lvn_levels") or [])
+                    if isinstance(v, (int, float)) and v > 0],
+    )
+
+
 def _score_htf_level(
     price: float,
-    gamma_levels: Any,
-    vp_poc_prev: Optional[float],
+    market: dict,
     buffer_ticks: int,
     tick_size: float,
     direction: str,
 ) -> tuple[int, str]:
     """Score 0-25 + level name.
 
-    Reads MenthorQ levels off the GammaLevels dataclass attributes
-    used elsewhere in Phoenix (NOT a "_all"-suffixed dict). VP POC
-    is the lower-quality fallback at 15 pts.
+    Sprint J: pulls from Phoenix's market snapshot via
+    `_build_pa_levels_from_market` and scores via Sprint I's
+    `find_nearest_htf_level` with tier-weighted points.
+
+    Direction is currently unused — the score uses tier rank only.
+    Future enhancement could weight LONG higher when nearest level is
+    on the support side, etc., but the current Phoenix scoring logic
+    treats all tier-1 levels equivalently.
     """
-    buf = buffer_ticks * tick_size
+    from core.price_action_levels import LevelTier, find_nearest_htf_level
 
-    if direction == "long":
-        candidates = [
-            ("put_support_0dte", 25),
-            ("put_support",       25),
-            ("hvl_0dte",          25),
-            ("hvl",               25),
-        ]
-    else:
-        candidates = [
-            ("call_resistance_0dte", 25),
-            ("call_resistance",       25),
-            ("hvl_0dte",              25),
-            ("hvl",                   25),
-        ]
+    levels = _build_pa_levels_from_market(market)
+    nearest = find_nearest_htf_level(
+        price, levels,
+        max_distance_ticks=buffer_ticks,
+        tick_size=tick_size,
+    )
+    if nearest is None:
+        return 0, ""
 
-    for name, score in candidates:
-        level = _gl_attr(gamma_levels, name)
-        if level is not None and abs(price - level) <= buf:
-            return score, name
-
-    if vp_poc_prev is not None and vp_poc_prev > 0 \
-            and abs(price - vp_poc_prev) <= buf:
-        return 15, "vp_poc_prev_session"
-
-    return 0, ""
+    tier_points = {
+        LevelTier.TIER_1: 25,
+        LevelTier.TIER_2: 18,
+        LevelTier.TIER_3: 12,
+    }
+    return tier_points.get(nearest.tier, 0), nearest.label
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -566,25 +585,36 @@ class FootprintCVDReversal(BaseStrategy):
         if price is None:
             return None
         tick_size = market.get("tick_size", 0.25)
-        regime = market.get("regime") or market.get("gamma_regime") or "UNKNOWN"
-        # Phoenix passes GammaRegime enum sometimes — coerce to string
+        # Sprint J (2026-05-05): structure_bias replaces gamma_regime.
+        # Falls back to legacy fields for compatibility with old market
+        # dicts; default UNKNOWN never trips a regime gate.
+        regime = (
+            market.get("structure_bias")
+            or market.get("regime")
+            or market.get("gamma_regime")
+            or "UNKNOWN"
+        )
         regime = getattr(regime, "name", str(regime))
-        gamma_levels = market.get("gamma_levels")
-        vp_poc_prev = market.get("prior_day_poc")
 
         # Try LONG side, then SHORT
         for direction in ("long", "short"):
-            # Regime gate
+            # Regime gate — accepts both:
+            #   - new Sprint I structure_bias: "BULLISH" / "BEARISH" / "NEUTRAL"
+            #   - legacy gamma_regime: "POSITIVE_STRONG" / "NEGATIVE_STRONG"
+            # NEGATIVE_NORMAL / POSITIVE_NORMAL no longer trip the gate
+            # (matches pre-Sprint-J behavior that only blocked on _STRONG).
             if direction == "long" and cfg.block_negative_strong_long \
-                    and "NEGATIVE_STRONG" in regime:
+                    and regime in ("NEGATIVE_STRONG", "BEARISH"):
                 continue
             if direction == "short" and cfg.block_positive_strong_short \
-                    and "POSITIVE_STRONG" in regime:
+                    and regime in ("POSITIVE_STRONG", "BULLISH"):
                 continue
 
             # Confluence 1: HTF level (must score >0 to continue)
+            # Sprint J: rewired to read price-action levels from market
+            # dict via Sprint I's find_nearest_htf_level.
             level_score, level_name = _score_htf_level(
-                price, gamma_levels, vp_poc_prev,
+                price, market,
                 cfg.level_buffer_ticks, tick_size, direction,
             )
             if level_score == 0:
