@@ -267,7 +267,7 @@ def check_mnq_vs_fmp(local_price: float, tolerance: float = 0.01) -> dict:
 # ═══════════════════════════════════════════════════════════════════════
 
 async def poll_loop(interval_s: float = 60.0, divergence_threshold_pct: float = 0.015,
-                    _unused_halt: float = None) -> None:
+                    _unused_halt: float = None, **legacy_kwargs) -> None:
     """Asyncio task that refreshes FMP every `interval_s` seconds.
 
     2026-04-24 Jennifer: rather than writing a HALT marker on local/FMP
@@ -279,10 +279,18 @@ async def poll_loop(interval_s: float = 60.0, divergence_threshold_pct: float = 
 
     `_unused_halt` is kept in the signature for backward compatibility
     with any old call sites still passing `halt_on_divergence_pct=` by
-    keyword — it has no effect.
+    keyword. 2026-05-08 fix: the prior implementation only worked
+    positionally — passing `halt_on_divergence_pct=` actually raised
+    TypeError. `**legacy_kwargs` now absorbs renamed keywords cleanly
+    so callers ahead of a coordinated rename don't crash the loop start.
+    Both `_unused_halt` and any legacy_kwargs entries have no effect.
 
     Safe to leave disabled: only runs if FMP_API_KEY is set.
     """
+    if legacy_kwargs:
+        logger.debug(
+            f"[FMP] poll_loop ignoring legacy kwargs: {list(legacy_kwargs.keys())}"
+        )
     import asyncio
     from core import price_sanity
 

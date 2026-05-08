@@ -65,6 +65,43 @@ AI_TIERS = {
 
 _gemini_client = None
 
+# 2026-05-08: 403 PERMISSION_DENIED circuit breaker.
+# When the Gemini API is disabled at the GCP project level (or the key is
+# revoked), every call returns 403. Without a breaker we hammer the API
+# every council vote (every minute) and spam ~50 lines of error log per
+# vote. The breaker trips on the first 403 and stays open for
+# `_GEMINI_CIRCUIT_OPEN_S` seconds so the council fallback (Groq) takes
+# over silently. A successful call (after manual GCP fix) closes the
+# circuit immediately on the next call attempt window.
+_GEMINI_CIRCUIT_OPEN_S: float = 600.0  # 10 min
+_gemini_circuit_open_until: float = 0.0
+_gemini_circuit_first_trip_logged: bool = False
+
+
+def _gemini_circuit_is_open() -> bool:
+    return time.time() < _gemini_circuit_open_until
+
+
+def _gemini_circuit_trip(reason: str) -> None:
+    global _gemini_circuit_open_until, _gemini_circuit_first_trip_logged
+    _gemini_circuit_open_until = time.time() + _GEMINI_CIRCUIT_OPEN_S
+    if not _gemini_circuit_first_trip_logged:
+        logger.error(
+            f"[Gemini] CIRCUIT OPENED for {_GEMINI_CIRCUIT_OPEN_S/60:.0f}min: {reason}. "
+            f"All Gemini calls will short-circuit to None until then; "
+            f"council fallback (Groq) takes over silently. To fix: enable Gemini "
+            f"API in GCP Console for the key's project, or rotate GEMINI_API_KEY."
+        )
+        _gemini_circuit_first_trip_logged = True
+
+
+def _gemini_circuit_close() -> None:
+    global _gemini_circuit_open_until, _gemini_circuit_first_trip_logged
+    if _gemini_circuit_open_until or _gemini_circuit_first_trip_logged:
+        logger.info("[Gemini] CIRCUIT CLOSED — Gemini API recovered.")
+    _gemini_circuit_open_until = 0.0
+    _gemini_circuit_first_trip_logged = False
+
 
 def _get_gemini_client():
     """Lazy-init Gemini client."""
@@ -104,6 +141,10 @@ async def ask_gemini(
     Returns:
         Response text, or None on failure/timeout
     """
+    # 2026-05-08: short-circuit when project-level 403 has been observed.
+    # Avoids hammering a known-disabled API and silences ~50 log lines/vote.
+    if _gemini_circuit_is_open():
+        return None
     try:
         client = _get_gemini_client()
         from google.genai import types
@@ -145,12 +186,20 @@ async def ask_gemini(
             logger.warning(f"[Gemini] {model_name} returned empty response")
             return None
         logger.info(f"[Gemini] {model_name} responded ({len(text)} chars)")
+        # Recovery path: any successful call closes the circuit.
+        _gemini_circuit_close()
         return text
 
     except asyncio.TimeoutError:
         logger.warning(f"[Gemini] Timeout after {timeout_s}s")
         return None
     except Exception as e:
+        # Trip circuit breaker on permission-denied / quota / API-disabled
+        # errors — these are NOT going to self-heal in the next minute.
+        msg = str(e)
+        if "403" in msg or "PERMISSION_DENIED" in msg or "API has not been used" in msg or "API key not valid" in msg:
+            _gemini_circuit_trip(reason=msg.split("\n", 1)[0][:200])
+            return None
         logger.error(f"[Gemini] Error: {e}")
         return None
 
@@ -436,8 +485,13 @@ async def ask(
         logger.info(f"[AI] Tier={tier} {primary} succeeded in {elapsed:.0f}ms")
         return result
 
-    # Primary failed — try fallback
-    logger.warning(f"[AI] Tier={tier} {primary} failed, falling back to {fallback}")
+    # Primary failed — try fallback. Demote to DEBUG when the failure is a
+    # known sticky-state circuit-breaker trip (e.g. Gemini 403 PERMISSION_DENIED).
+    # Avoids 50+ log lines/vote while the underlying GCP issue isn't fixed.
+    if primary == "gemini" and _gemini_circuit_is_open():
+        logger.debug(f"[AI] Tier={tier} {primary} short-circuited, using {fallback}")
+    else:
+        logger.warning(f"[AI] Tier={tier} {primary} failed, falling back to {fallback}")
     result = await _call_provider(
         provider=fallback,
         prompt=prompt,

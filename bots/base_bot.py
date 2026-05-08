@@ -1185,8 +1185,12 @@ class BaseBot:
         # no-op when FMP_API_KEY is unset.
         try:
             from core import fmp_sanity
+            # 2026-05-08: was passing `halt_on_divergence_pct=` (legacy
+            # name), which fmp_sanity.poll_loop didn't accept — TypeError
+            # killed the loop on every bot start. Now uses correct kwarg
+            # name; signature also added **legacy_kwargs as a safety net.
             asyncio.ensure_future(fmp_sanity.poll_loop(interval_s=60.0,
-                                                      halt_on_divergence_pct=0.015))
+                                                      divergence_threshold_pct=0.015))
         except Exception as e:
             logger.warning(f"[FMP] sanity loop failed to start (non-blocking): {e!r}")
 
@@ -3647,8 +3651,24 @@ class BaseBot:
                     f"target_oid={(_new_pos.target_order_id or 'MISS')[:12]}"
                 )
             else:
-                logger.warning(f"[OID_CAPTURE:{tid}] no order_ids captured — "
-                               f"stop-moves will fall back to Python-only")
+                # 2026-05-08: demoted from WARNING to INFO. Audit of last
+                # 24h showed 220 NT8 outgoing/ files — ALL terminal-state
+                # (FILLED/CANCELLED/REJECTED), zero WORKING. NT8's ATI
+                # only writes status files on order completion, not on
+                # acceptance. So scan_outgoing_for_order_id (which matches
+                # by price tolerance against parts[2]) cannot capture
+                # protective-stop / target order_ids while they sit
+                # WORKING — those are far from current price and never
+                # produce a matching outgoing file until they fill or
+                # cancel. Capture rate ~3% / target capture rate ~0%.
+                # The "Python-only" fallback is therefore the production
+                # behavior, not an exception. A real fix requires a
+                # NinjaScript that subscribes to OnOrderUpdate and pushes
+                # order events back to Phoenix via the WebSocket — out of
+                # scope for OID_CAPTURE. This log line stays as INFO so
+                # the cadence remains visible without flooding the log.
+                logger.info(f"[OID_CAPTURE:{tid}] no order_ids captured — "
+                            f"stop-moves use Python-only fallback (expected; see comment)")
         except Exception as _e:
             logger.warning(f"[OID_CAPTURE:{tid}] failed: {_e}")
 

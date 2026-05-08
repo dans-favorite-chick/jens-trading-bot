@@ -1,5 +1,5 @@
 // ============================================================================
-// TickStreamer v3.0 — Multi-Instrument Edition
+// TickStreamer v3.0 — Multi-Instrument Edition  (05/04/2026)
 // ============================================================================
 // CHANGES FROM v2.0:
 //   ✅ Multi-instrument support: streams primary chart instrument PLUS up to
@@ -90,6 +90,20 @@ namespace NinjaTrader.NinjaScript.Indicators
         private string[] auxInstrumentNames  = new string[3];
         private readonly object sendLock     = new object();
 
+        // ── SINGLETON ENFORCEMENT (2026-05-08) ────────────────────────────
+        // Workspace pollution can leave duplicate TickStreamer instances on
+        // hidden charts (see 2026-04-25 incident + recurrence on 2026-05-07
+        // Jen's Fav.xml: 4 TickStreamer references = 2+ chart instances).
+        // Each duplicate retries TCP connection every RECONNECT_MS=5000ms
+        // and gets bounced by the bridge's PHOENIX_BRIDGE_SINGLE_STREAM
+        // defense — producing tens of thousands of rejection log lines per
+        // day. The bridge defense is correct; this is the client-side
+        // companion. The first instance to reach State.DataLoaded claims
+        // the slot; subsequent instances log once and skip TryConnect /
+        // heartbeat entirely. Released on State.Terminated.
+        private static int _activeInstanceCount = 0;
+        private bool _claimedSlot = false;
+
         // ── DOM DEPTH STATE (primary instrument only) ──────────────────────
         private const int DOM_LEVELS = 5;
         private double[] domBidVols  = new double[DOM_LEVELS];
@@ -163,6 +177,28 @@ namespace NinjaTrader.NinjaScript.Indicators
                         auxInstrumentNames[i - 1] = BarsArray[i].Instrument.FullName;
                 }
 
+                // 2026-05-08: singleton claim. Atomically increment the
+                // process-wide active count. If we're not first, refuse to
+                // connect and log once. The first instance owns the slot;
+                // duplicates become passive (no TCP, no heartbeat, no file
+                // fallback). On chart close, the first instance's
+                // State.Terminated releases the slot so the next reload
+                // can claim it.
+                int slot = Interlocked.Increment(ref _activeInstanceCount);
+                if (slot > 1)
+                {
+                    Print(string.Format(
+                        "[TickStreamer] DUPLICATE INSTANCE refusing to connect " +
+                        "(active count={0}, this chart={1}). Only ONE TickStreamer " +
+                        "can run per NT8 process — the bridge enforces this anyway " +
+                        "via PHOENIX_BRIDGE_SINGLE_STREAM. Close the duplicate chart " +
+                        "or run tools/nt8_unhide_all_windows.ps1 to find a hidden one.",
+                        slot, primaryInstrumentName));
+                    Interlocked.Decrement(ref _activeInstanceCount);
+                    return;  // skip TryConnect + heartbeat
+                }
+                _claimedSlot = true;
+
                 try { Directory.CreateDirectory(@"C:\temp"); } catch { }
                 TryConnect();
                 heartbeatTimer = new Timer(HeartbeatCallback, null, HEARTBEAT_MS, HEARTBEAT_MS);
@@ -175,6 +211,14 @@ namespace NinjaTrader.NinjaScript.Indicators
                     heartbeatTimer = null;
                 }
                 Disconnect();
+                // Release the singleton slot only if this instance actually
+                // claimed it. Duplicate instances that returned early in
+                // DataLoaded never incremented past their own decrement.
+                if (_claimedSlot)
+                {
+                    Interlocked.Decrement(ref _activeInstanceCount);
+                    _claimedSlot = false;
+                }
             }
         }
 
