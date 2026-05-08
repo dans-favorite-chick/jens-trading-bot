@@ -656,6 +656,11 @@ class OIFStuckError(RuntimeError):
 # tests/test_verify_consumed_mandatory.py) monkeypatch it back to False
 # for the scope they care about.
 _PYTEST_BYPASS_CONSUME_CHECK: bool = False
+# 2026-05-08: also bypass the NT8 acceptance verification in
+# write_modify_stop (no real outgoing/ WORKING file ever appears in tests).
+# Production keeps this False so a rejected new stop blocks the old-stop
+# cancel and protection is preserved.
+_PYTEST_BYPASS_NT8_ACCEPTANCE_CHECK: bool = False
 
 
 def _verify_consumed(
@@ -801,24 +806,37 @@ def scan_outgoing_for_order_id(account, expected_price, tolerance=0.01, timeout_
 
 
 def write_modify_stop(direction, new_stop_price, n_contracts, trade_id, account, old_stop_order_id):
-    """B76 + P0.5 (D4): replace an existing STOPMARKET stop with a new one
-    at new_stop_price.
+    """B76 + P0.5 (D4) + P0.6 (2026-05-08): replace an existing STOPMARKET
+    stop with a new one at new_stop_price.
 
     Ordering (P0.5): PLACE new stop FIRST, verify it's working, THEN
     CANCEL the old stop. The reverse order (CANCEL → PLACE) is FORBIDDEN
     because it opens a brief no-stop window during which adverse price
-    movement is completely unprotected. Placing first opens a brief
-    two-stop window instead — worse case is that a sharp move hits the
-    LESS favourable stop first, which is recoverable; a no-stop gap is
-    a real loss.
+    movement is completely unprotected.
+
+    P0.6 (2026-05-08): the v1 "stage both, commit both, verify consumed"
+    flow had a hidden failure mode: file-consumption verifies ATI READ
+    the file, NOT that NT8 ACCEPTED the order. When NT8's account-level
+    max-position-quantity guard rejected the new stop, the cancel still
+    went through — leaving the position with NO active stop while
+    Phoenix logged STOP_MOVED as if the trail succeeded. Observed
+    overnight 2026-05-07/08 on `SimBias Momentum` trade 114c7222.
+
+    Fix: write the new stop, wait for NT8 to publish a WORKING file in
+    outgoing/ confirming acceptance, ONLY THEN write the cancel. If the
+    new stop doesn't show up in outgoing/ within timeout, the old stop
+    is preserved (caller's trail call is a no-op) and an alert is
+    raised. Worst case becomes: stale old stop active, alarm fires;
+    NEVER unprotected.
 
     Ordering hierarchy (spec § scale-out):
       CHANGE in place > PLACE_NEW+CANCEL_OLD > CANCEL_OLD+PLACE_NEW (FORBIDDEN)
     NT8 ATI doesn't expose a true CHANGE verb on OIF, so we use the
-    middle option. CHANGE upgrade is Phase-1 event-stream work.
+    middle option.
 
-    Returns list of OIF file paths written (2 on success, in commit
-    order: [new_stop, cancel_old]) or [] on early-guard rejection.
+    Returns list of OIF file paths written. On success: [new_stop, cancel_old].
+    On NT8 rejection of the new stop: [new_stop] only (cancel skipped).
+    On early-guard rejection: [].
     """
     _reject_live_account(account, f"write_modify_stop[{trade_id}]")
     if direction is None or direction.upper() not in ("LONG", "SHORT"):
@@ -837,25 +855,80 @@ def write_modify_stop(direction, new_stop_price, n_contracts, trade_id, account,
         side=exit_side, qty=n_contracts, stop_price=new_stop_price, account=account,
     )
 
-    # P0.5 ORDERING: stage new stop FIRST so it commits first (no-stop
-    # window would be catastrophic; two-stop window is merely inefficient).
-    staged = []
+    # P0.5 ORDERING: stage new stop FIRST. Source-level test
+    # (test_scale_out_no_race::test_write_modify_stop_stages_place_before_cancel_only)
+    # asserts replace_idx < cancel_idx, so both _stage_oif calls must
+    # remain in this order in source even though we now commit them in
+    # two phases.
     try:
-        staged.append(_stage_oif(new_stop_line, trade_id, suffix="stop_replace"))
-        staged.append(_stage_oif(cancel_line, trade_id, suffix="stop_cancel"))
+        new_staged = [_stage_oif(new_stop_line, trade_id, suffix="stop_replace")]
     except OSError as e:
         logger.error(f"[STOP_MODIFY:{trade_id}] stage failed: {e}")
         return []
 
-    written = _commit_staged(staged, trade_id)
-    if len(written) == len(staged):
+    new_written = _commit_staged(new_staged, trade_id)
+    if not new_written:
+        logger.error(f"[STOP_MODIFY:{trade_id}] new stop commit failed — keeping old stop")
+        return []
+
+    # P0.6 verification gate: was the new stop ACCEPTED by NT8?
+    # NT8 publishes outgoing/{account}_{order_id}.txt with content
+    # 'WORKING;0;<price>' once an order is live. No file = rejected
+    # (max-position guard, price-band, etc.) — abort cancel.
+    bypass = sys.modules[__name__].__dict__.get(
+        "_PYTEST_BYPASS_NT8_ACCEPTANCE_CHECK", False,
+    )
+    new_oid = None
+    if not bypass:
+        new_oid = scan_outgoing_for_order_id(
+            account, new_stop_price, tolerance=0.01, timeout_s=2.5,
+        )
+        if new_oid is None:
+            logger.error(
+                f"[STOP_MODIFY:{trade_id}] NT8 did NOT acknowledge new STOPMARKET "
+                f"@ {new_stop_price:.2f} within 2.5s — likely account-level rejection "
+                f"(max position quantity, price band, account disabled). "
+                f"OLD stop {str(old_stop_order_id)[:12]} REMAINS ACTIVE — protection preserved."
+            )
+            try:
+                from core.telegram_notifier import send_sync
+                send_sync(
+                    f"⚠️ [STOP_MODIFY_REJECTED] {trade_id} on {account}: "
+                    f"new stop @ {new_stop_price:.2f} not accepted by NT8. "
+                    f"Old stop preserved; check NT8 Log tab + account max-position setting.",
+                    dedup_key=f"stop_modify_rejected_{account}",
+                )
+            except Exception:
+                pass
+            # Stale OIF in incoming/ still gets the consume check so an
+            # OIFStuckError surfaces if the file never even gets read.
+            _verify_consumed(new_written, trade_id, timeout_s=2.0, raise_on_stuck=False)
+            return new_written  # only [new_stop] — caller knows cancel was skipped
+
+    # New stop accepted (or test bypass active). Now safe to cancel old.
+    try:
+        cancel_staged = [_stage_oif(cancel_line, trade_id, suffix="stop_cancel")]
+    except OSError as e:
+        logger.error(
+            f"[STOP_MODIFY:{trade_id}] cancel stage failed after new stop "
+            f"accepted: {e}. Two stops are active until next bar/cleanup."
+        )
+        return new_written
+
+    cancel_written = _commit_staged(cancel_staged, trade_id)
+    written = new_written + cancel_written
+
+    if len(cancel_written) == 1:
+        oid_tag = f" new_oid={new_oid[:12]}" if new_oid else ""
         logger.info(
             f"[STOP_MODIFY:{trade_id}] cancelled {str(old_stop_order_id)[:12]} "
-            f"+ submitted new STOPMARKET @ {new_stop_price:.2f}"
+            f"+ submitted new STOPMARKET @ {new_stop_price:.2f}{oid_tag}"
         )
     else:
         logger.error(
-            f"[STOP_MODIFY:{trade_id}] partial commit: {len(written)}/{len(staged)}"
+            f"[STOP_MODIFY:{trade_id}] cancel commit failed; new stop @ "
+            f"{new_stop_price:.2f} active alongside old stop "
+            f"{str(old_stop_order_id)[:12]}. Manual cleanup may be needed."
         )
 
     # P0.4 (D1): stop-modify was the biggest gap in the verify-consumed

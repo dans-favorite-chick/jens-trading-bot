@@ -46,6 +46,17 @@ def _isolate_oif_incoming(monkeypatch):
         monkeypatch.setattr(
             _oif, "_PYTEST_BYPASS_SANITY_CHECK", True, raising=False,
         )
+        # 2026-05-08: bypass the NT8-acceptance verification in
+        # write_modify_stop. In production, the function waits ~2.5s for
+        # NT8 to publish a WORKING file in outgoing/ before sending the
+        # cancel of the old stop. No simulated NT8 in tests, so the
+        # bypass keeps the existing two-file commit semantics that
+        # tests like test_scale_out_no_race rely on. Tests that
+        # specifically exercise the verification gate set this back to
+        # False inside their own scope.
+        monkeypatch.setattr(
+            _oif, "_PYTEST_BYPASS_NT8_ACCEPTANCE_CHECK", True, raising=False,
+        )
     except Exception:
         # oif_writer may not be importable in ultra-minimal test envs
         pass
