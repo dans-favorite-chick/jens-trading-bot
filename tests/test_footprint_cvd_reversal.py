@@ -216,57 +216,129 @@ def test_warmup_returns_zero_divergence():
 # ═══════════════════════════════════════════════════════════════════
 # Confluence 3: Footprint
 # ═══════════════════════════════════════════════════════════════════
-def test_footprint_stacked_buy_scores_15_on_long():
+# Sprint L (2026-05-08): _score_footprint v2 uses graduated scoring.
+# Pre-Sprint-L tests asserted hardcoded 15-pt-binary values; v2 maps to:
+#   - imbalance sub-score (0-18): per-level scoring or v1 stacked fallback
+#   - absorption sub-score (0-7): graduated by |delta|/range_ticks ratio
+# Total still capped at 25.
+def test_footprint_legacy_stacked_buy_fallback_scores_12_on_long():
+    """Legacy path: imbalances[] missing, stacked_buy=True triggers
+    fallback equivalent to '3 same-side imbalances'."""
     cfg = FootprintCVDConfig()
     latest = {"stacked_buy": True, "stacked_sell": False,
               "delta": 0, "max_imbalance_ratio": 5.0,
               "high": 27801, "low": 27800}
     score, debug = _score_footprint(latest, "long", cfg, 0.25)
-    assert score == 15
+    assert score == 12  # v1=15 → v2 fallback=12 (matches "3 imbalances")
     assert debug["stacked"]
 
 
-def test_footprint_absorption_scores_15_on_long():
-    """Heavy negative delta in a tiny range = absorption (passive limit
-    orders soaking up aggressive selling at the level)."""
+def test_footprint_per_level_imbalances_score_higher_than_legacy():
+    """v2 win: 4+ stacked imbalances at bar extreme + oversized scores 18."""
+    cfg = FootprintCVDConfig()
+    latest = {
+        "stacked_buy": True,
+        "delta": 0,
+        "max_imbalance_ratio": 12.0,
+        "high": 27801, "low": 27800,
+        "imbalances": [
+            {"price": 27800.00, "bid_vol": 5, "ask_vol": 25, "ratio": 5.0, "side": "buy"},
+            {"price": 27800.25, "bid_vol": 8, "ask_vol": 30, "ratio": 3.7, "side": "buy"},
+            {"price": 27800.50, "bid_vol": 4, "ask_vol": 18, "ratio": 4.5, "side": "buy"},
+            {"price": 27800.75, "bid_vol": 6, "ask_vol": 22, "ratio": 3.7, "side": "buy"},
+        ],
+    }
+    score, debug = _score_footprint(latest, "long", cfg, 0.25)
+    # 12 (3+ same side) + 4 (at extreme: 27800 == low) + 4 (oversized 12>=10)
+    # + 2 (4+ stacked) = 22, capped at 18 imbalance sub-cap
+    assert score == 18
+    assert debug["imbalance_count"] == 4
+    assert debug["at_extreme"]
+    assert debug["oversized"]
+    assert debug["stacked_4plus"]
+
+
+def test_footprint_absorption_graduated_long():
+    """Heavy negative delta in tiny range scores by |delta|/range_ticks ratio.
+    delta=-200, range=2t → ratio=100 → tier 3 → 7 pts."""
     cfg = FootprintCVDConfig()
     latest = {"stacked_buy": False, "stacked_sell": False,
               "delta": -200, "max_imbalance_ratio": 5.0,
               "high": 27800.5, "low": 27800.0}  # 2-tick range
     score, debug = _score_footprint(latest, "long", cfg, 0.25)
-    assert score == 15
+    assert score == 7
+    assert debug["absorption"]
+    assert debug["absorption_tier"] == 3
+
+
+def test_footprint_absorption_partial_credit_below_old_threshold():
+    """v1 had hard AND-gate (delta>50 AND range<10t). v2 awards partial
+    credit. delta=-60, range=20t → ratio=3 → tier 0 (still no signal).
+    delta=-100, range=20t → ratio=5 → tier 1 → 3 pts (partial)."""
+    cfg = FootprintCVDConfig()
+    # Borderline case that v1 missed entirely
+    latest = {"delta": -100, "max_imbalance_ratio": 5.0,
+              "high": 27805.0, "low": 27800.0}  # 20-tick range
+    score, debug = _score_footprint(latest, "long", cfg, 0.25)
+    assert score == 3  # tier 1 (5x ratio)
     assert debug["absorption"]
 
 
-def test_footprint_oversized_adds_5():
-    cfg = FootprintCVDConfig()
-    latest = {"stacked_buy": True, "stacked_sell": False,
-              "delta": 0, "max_imbalance_ratio": 12.0,
-              "high": 27801, "low": 27800}
-    score, debug = _score_footprint(latest, "long", cfg, 0.25)
-    assert score == 20  # 15 (stacked) + 5 (oversized)
-    assert debug["oversized"]
-
-
-def test_footprint_capped_at_25():
-    """Stacked + absorption + oversized = 35pts raw, but capped at 25."""
+def test_footprint_legacy_stacked_plus_oversized_plus_absorption():
+    """Legacy bars (no imbalances[]) with all three signals: stacked
+    (12 from fallback) + oversized (4 from ratio>=10) + absorption (7)."""
     cfg = FootprintCVDConfig()
     latest = {"stacked_buy": True, "stacked_sell": False,
               "delta": -200, "max_imbalance_ratio": 12.0,
               "high": 27800.5, "low": 27800.0}
-    score, _ = _score_footprint(latest, "long", cfg, 0.25)
-    assert score == 25
+    score, debug = _score_footprint(latest, "long", cfg, 0.25)
+    # 12 (stacked fallback) + 4 (oversized) + 7 (absorption) = 23
+    assert score == 23
+    assert debug["stacked"]
+    assert debug["oversized"]
+    assert debug["absorption"]
 
 
-def test_footprint_short_uses_stacked_sell_and_positive_delta():
+def test_footprint_short_legacy_path():
+    """Short side: stacked_sell + positive delta tight range."""
     cfg = FootprintCVDConfig()
     latest = {"stacked_buy": False, "stacked_sell": True,
               "delta": 200, "max_imbalance_ratio": 5.0,
               "high": 27800.5, "low": 27800.0}
     score, debug = _score_footprint(latest, "short", cfg, 0.25)
-    assert score == 25  # stacked_sell + absorption (positive delta + tiny range)
+    # 12 (stacked_sell fallback) + 7 (absorption tier 3) = 19
+    assert score == 19
     assert debug["stacked"]
     assert debug["absorption"]
+
+
+def test_footprint_capped_at_25():
+    """Even with everything maxed, total caps at 25."""
+    cfg = FootprintCVDConfig()
+    latest = {
+        "delta": -300,  # tier 3 absorption
+        "max_imbalance_ratio": 15.0,
+        "high": 27800.25, "low": 27800.0,  # 1-tick range
+        "imbalances": [
+            {"price": 27800.00, "bid_vol": 5, "ask_vol": 50, "ratio": 10.0, "side": "buy"},
+            {"price": 27800.00, "bid_vol": 5, "ask_vol": 50, "ratio": 10.0, "side": "buy"},
+            {"price": 27800.25, "bid_vol": 5, "ask_vol": 50, "ratio": 10.0, "side": "buy"},
+            {"price": 27800.25, "bid_vol": 5, "ask_vol": 50, "ratio": 10.0, "side": "buy"},
+            {"price": 27800.25, "bid_vol": 5, "ask_vol": 50, "ratio": 10.0, "side": "buy"},
+        ],
+    }
+    score, _ = _score_footprint(latest, "long", cfg, 0.25)
+    assert score == 25  # 18 (imbalance cap) + 7 (absorption) = 25
+
+
+def test_footprint_no_signal_when_delta_wrong_sign():
+    """LONG reversal needs negative delta (sellers swinging into bid).
+    Positive delta on a long-direction call = no absorption."""
+    cfg = FootprintCVDConfig()
+    latest = {"delta": 200, "max_imbalance_ratio": 5.0,
+              "high": 27800.5, "low": 27800.0}
+    score, _ = _score_footprint(latest, "long", cfg, 0.25)
+    assert score == 0  # no absorption (delta wrong sign), no stacked, no oversized
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -399,7 +471,15 @@ def _patch_strategy_root(monkeypatch, root: Path):
 
 
 def test_strategy_returns_long_signal_on_full_setup(tmp_path, monkeypatch):
-    _setup_full_bullish_volumetric(tmp_path)
+    """Sprint L (2026-05-08): now requires N+1 confirmation. Setup the
+    trigger bar, evaluate once (sets pending), then advance to a NEW
+    bar that didn't violate the trigger's wick, evaluate again, expect
+    Signal."""
+    # Reset module-level pending state so this test is hermetic
+    import strategies.footprint_cvd_reversal as mod
+    mod._pending_signals.clear()
+
+    trigger_latest = _setup_full_bullish_volumetric(tmp_path)
     _patch_strategy_root(monkeypatch, tmp_path)
 
     strat = FootprintCVDReversal({})
@@ -413,7 +493,39 @@ def test_strategy_returns_long_signal_on_full_setup(tmp_path, monkeypatch):
         "prior_day_low": 27800.0,
     }
     session_info = {"now_ct": datetime(2026, 5, 5, 9, 30, 5, tzinfo=CT)}
-    signal = strat.evaluate(market, [], [], session_info)
+
+    # First call: stores pending, returns None (N+1 needed)
+    first_call = strat.evaluate(market, [], [], session_info)
+    assert first_call is None, (
+        "Sprint L: first evaluation on the trigger bar must DEFER firing "
+        "and return None (pending stored). This kills the discretionary→code "
+        "translation loss where coders fire on the trigger bar."
+    )
+    assert "long" in mod._pending_signals
+    pending = mod._pending_signals["long"]
+    assert pending["trigger_low"] == trigger_latest["low"]
+    assert pending["trigger_high"] == trigger_latest["high"]
+
+    # Advance to a NEW bar (different ts) whose low STAYED at or above
+    # the trigger's low — the wick held, absorption confirmed.
+    next_bar_ts = datetime(2026, 5, 5, 9, 30, 30, tzinfo=CT).isoformat()
+    next_bar = dict(trigger_latest)
+    next_bar["ts"] = next_bar_ts
+    # Confirmation: low >= trigger_low (27800)
+    next_bar["low"] = 27800.5
+    next_bar["high"] = 27802.5
+    next_bar["close"] = 27802.0
+    next_bar["open"] = 27801.0
+    (tmp_path / "data" / "volumetric_latest.json").write_text(
+        json.dumps(next_bar), encoding="utf-8",
+    )
+    # Append to history so warmup count + recent state stays valid
+    with (tmp_path / "logs" / "volumetric_history.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(next_bar) + "\n")
+
+    # Second call: pending confirms, signal fires anchored to TRIGGER bar's wick
+    session_info_2 = {"now_ct": datetime(2026, 5, 5, 9, 30, 35, tzinfo=CT)}
+    signal = strat.evaluate(market, [], [], session_info_2)
 
     assert signal is not None
     assert signal.direction == "LONG"
@@ -431,6 +543,11 @@ def test_strategy_returns_long_signal_on_full_setup(tmp_path, monkeypatch):
     assert signal.entry_price == 27801.0
     assert signal.stop_price < signal.entry_price  # LONG → stop below
     assert signal.target_price > signal.entry_price
+    # Sprint L: stop anchored to the TRIGGER bar (27800), not the next bar (27800.5)
+    assert signal.metadata["trigger_low"] == 27800.0
+    assert signal.metadata["trigger_bar_ts"] == trigger_latest["ts"]
+    # Pending should be cleared after firing
+    assert "long" not in mod._pending_signals
 
 
 def test_strategy_blocks_in_lunch(tmp_path, monkeypatch):

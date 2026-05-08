@@ -252,6 +252,63 @@ def _build_pa_levels_from_market(market: dict):
     )
 
 
+def _count_extra_htf_confluences(
+    price: float,
+    market: dict,
+    buffer_ticks: int,
+    tick_size: float,
+) -> tuple[int, list[str]]:
+    """Count HTF levels within buffer of price, beyond the nearest one.
+
+    The research consensus: a 50-quality pattern at a 3-level confluence
+    beats a 75-quality pattern at no confluence. Pure additive scoring
+    can't capture this because levels are categorical multipliers, not
+    continuous additions. _score_htf_level returns the score of the
+    NEAREST level only; this function reports how many ADDITIONAL
+    levels also cluster nearby — used to multiply the non-level score
+    components.
+
+    Returns (extra_count, label_list). Deduplicates levels within ~1
+    tick (tagged the "same node") so PDH and PDC at the same price
+    don't count as 2.
+
+    For MNQ 0.25 tick size and buffer_ticks=8, this captures all
+    levels within 2 points of price.
+    """
+    levels = _build_pa_levels_from_market(market)
+    threshold = buffer_ticks * tick_size
+    candidates: list[tuple[float, str]] = []
+
+    for attr, label in (
+        ("prior_day_high", "PDH"),
+        ("prior_day_low", "PDL"),
+        ("prior_day_close", "PDC"),
+        ("session_poc", "POC"),
+        ("session_vwap", "VWAP"),
+    ):
+        v = getattr(levels, attr, None)
+        if v is not None and abs(v - price) <= threshold:
+            candidates.append((float(v), label))
+
+    for v in (levels.hvn_levels or []):
+        if abs(v - price) <= threshold:
+            candidates.append((float(v), "HVN"))
+    for v in (levels.lvn_levels or []):
+        if abs(v - price) <= threshold:
+            candidates.append((float(v), "LVN"))
+
+    # Dedup: levels within 1 tick of each other are "the same node"
+    unique: list[tuple[float, str]] = []
+    for v, lbl in candidates:
+        if not any(abs(v - u_v) < tick_size for u_v, _ in unique):
+            unique.append((v, lbl))
+
+    # _score_htf_level uses the NEAREST level — so "extra" = total - 1
+    extra = max(0, len(unique) - 1)
+    labels = [lbl for _, lbl in unique]
+    return extra, labels
+
+
 def _score_htf_level(
     price: float,
     market: dict,
@@ -350,37 +407,200 @@ def _score_cvd_divergence(
 
 # ──────────────────────────────────────────────────────────────────
 # Confluence 3: Footprint absorption / stacked / oversized
+#
+# 2026-05-08 v2 (Sprint L): graduated scoring using the per-level
+# `imbalances[]` array TickStreamer emits but the v1 scoring ignored.
+# v1 produced a sparse {0, 5, 15, 20, 25} distribution that combined
+# with mid-tier scores from other confluences produced IQS clustering
+# at 40-55 (well below the 70 threshold). Audit of 7 days of logs showed
+# only ONE evaluation reaching IQS=75 (5 pts above threshold) — the
+# scoring was the binding constraint, not the gating threshold.
+#
+# v2 walks the imbalances array, weights by stacked count, location at
+# bar extreme, and ratio strength. Replaces the binary stacked AND
+# binary absorption (each 0/15) with a continuous 0-25 distribution.
+# Also relaxes absorption from `delta AND range` to a weighted score
+# so a bar with extreme delta + tight range scores partial credit even
+# if one threshold is borderline.
 # ──────────────────────────────────────────────────────────────────
+def _score_imbalances(
+    latest: dict, direction: str, cfg: FootprintCVDConfig, tick_size: float,
+) -> tuple[int, dict]:
+    """Walk the per-level imbalances array.
+
+    The volumetric_bar message from TickStreamer.cs includes:
+      imbalances: [{price, bid_vol, ask_vol, ratio, side}, ...]
+
+    Sides: "buy" = ask_vol/bid_vol_below ≥ ratio_threshold (institutional
+    buying pressure stacked on the offer); "sell" = inverse.
+
+    Scoring (capped at 18 for the imbalance sub-component):
+      base 0
+      + 4 per same-side imbalance, max 12 (so 1=4, 2=8, 3+=12)
+      + 4 if any imbalance is at the bar extreme (within 1 tick of high/low)
+      + 4 if max_ratio >= oversized_imbalance_ratio (10x default)
+      + 2 if 4+ same-side imbalances stacked (very rare, deserves bump)
+    Cap 18 — the absorption sub-component contributes the remaining 7.
+    """
+    debug = {
+        "imbalance_count": 0,
+        "at_extreme": False,
+        "oversized": False,
+        "stacked_4plus": False,
+    }
+    score = 0
+
+    imbalances = latest.get("imbalances") or []
+    target_side = "buy" if direction == "long" else "sell"
+
+    same_side = [
+        ib for ib in imbalances
+        if isinstance(ib, dict) and str(ib.get("side", "")).lower() == target_side
+    ]
+    debug["imbalance_count"] = len(same_side)
+
+    # Tier 1: count of same-side imbalances (0/4/8/12)
+    if same_side:
+        score += min(12, 4 * len(same_side))
+
+    # Tier 2: at bar extreme (the institutional "trap zone")
+    if same_side:
+        bar_low = latest.get("low")
+        bar_high = latest.get("high")
+        if bar_low is not None and bar_high is not None:
+            extreme_threshold = tick_size * 1.0  # within 1 tick of extreme
+            for ib in same_side:
+                price = ib.get("price")
+                if price is None:
+                    continue
+                # LONG reversal: imbalance at LOW = bid stacking absorption
+                # SHORT reversal: imbalance at HIGH = offer stacking
+                target_extreme = bar_low if direction == "long" else bar_high
+                if abs(price - target_extreme) <= extreme_threshold:
+                    debug["at_extreme"] = True
+                    score += 4
+                    break
+
+    # Tier 3: oversized ratio (a single huge imbalance regardless of stack)
+    if latest.get("max_imbalance_ratio", 0) >= cfg.oversized_imbalance_ratio:
+        debug["oversized"] = True
+        score += 4
+
+    # Tier 4: deep stacked (4+ on same side)
+    if len(same_side) >= 4:
+        debug["stacked_4plus"] = True
+        score += 2
+
+    return min(18, score), debug
+
+
+def _score_absorption_graduated(
+    latest: dict, direction: str, cfg: FootprintCVDConfig, tick_size: float,
+) -> tuple[int, dict]:
+    """Graduated absorption score (0-7).
+
+    v1 was binary 0/15 with hard AND on `abs(delta) > 50 AND range < 10t`.
+    v2 awards partial credit so a bar with extreme delta but borderline
+    range (or vice versa) still scores. Absorption is "high effort,
+    little progress" — so the right metric is delta-per-tick-of-range.
+
+    For LONG (we want bid absorption — sellers swinging, price holds):
+      - Need delta < 0 (sellers active)
+      - Score by |delta| / max(range_ticks, 1) ratio
+
+    For SHORT (offer absorption — buyers swinging, price holds):
+      - Need delta > 0 (buyers active)
+      - Same metric
+
+    Score:
+        |delta| / range_ticks ratio:
+          < 5:    0 pts (no absorption signal)
+          5-10:   3 pts
+          10-20:  5 pts
+          >= 20:  7 pts (textbook absorption — extreme effort, tight range)
+    """
+    debug = {"absorption_ratio": 0.0, "absorption_tier": 0}
+
+    delta = latest.get("delta", 0)
+    high = latest.get("high")
+    low = latest.get("low")
+    if high is None or low is None:
+        return 0, debug
+
+    # Direction filter — only count absorption when delta opposes the trade
+    if direction == "long" and delta >= 0:
+        return 0, debug
+    if direction == "short" and delta <= 0:
+        return 0, debug
+
+    range_ticks = max(1.0, (high - low) / tick_size)
+    abs_ratio = abs(delta) / range_ticks
+    debug["absorption_ratio"] = round(abs_ratio, 2)
+
+    # Also require a minimum |delta| floor to avoid scoring tiny-delta /
+    # tiny-range bars as "absorption" (they're just no-volume bars).
+    if abs(delta) < cfg.absorption_min_delta * 0.5:  # half the v1 floor
+        return 0, debug
+
+    if abs_ratio >= 20:
+        debug["absorption_tier"] = 3
+        return 7, debug
+    if abs_ratio >= 10:
+        debug["absorption_tier"] = 2
+        return 5, debug
+    if abs_ratio >= 5:
+        debug["absorption_tier"] = 1
+        return 3, debug
+    return 0, debug
+
+
 def _score_footprint(
     latest: dict, direction: str, cfg: FootprintCVDConfig, tick_size: float,
 ) -> tuple[int, dict]:
+    """Combined footprint score: imbalances (0-18) + absorption (0-7), cap 25.
+
+    v2 uses the per-level imbalances array (was unused in v1) and a
+    graduated absorption metric (was binary AND-gate in v1). Total
+    distribution moves from sparse {0, 5, 15, 20, 25} to continuous 0-25.
+    Backwards-compatibility: when imbalances array is absent (legacy
+    bars or older TickStreamer), falls back to v1 stacked_buy/sell flags.
+    """
     debug = {"stacked": False, "absorption": False, "oversized": False}
     score = 0
 
-    if direction == "long":
-        if latest.get("stacked_buy", False):
-            debug["stacked"] = True
-            score += 15
-        if latest.get("delta", 0) < 0:
-            range_ticks = abs(latest["high"] - latest["low"]) / tick_size
-            if (abs(latest["delta"]) > cfg.absorption_min_delta
-                    and range_ticks < cfg.absorption_max_range_ticks):
-                debug["absorption"] = True
-                score += 15
-    else:
-        if latest.get("stacked_sell", False):
-            debug["stacked"] = True
-            score += 15
-        if latest.get("delta", 0) > 0:
-            range_ticks = abs(latest["high"] - latest["low"]) / tick_size
-            if (abs(latest["delta"]) > cfg.absorption_min_delta
-                    and range_ticks < cfg.absorption_max_range_ticks):
-                debug["absorption"] = True
-                score += 15
+    # New per-level imbalance scoring (consumes imbalances[] array)
+    imb_score, imb_debug = _score_imbalances(latest, direction, cfg, tick_size)
+    debug.update(imb_debug)
 
-    if latest.get("max_imbalance_ratio", 0) >= cfg.oversized_imbalance_ratio:
+    # Fallback: if imbalances array missing, use v1 binary flags as a
+    # bridge while older bars/replays don't yet carry the array. The
+    # imb_debug.oversized check still adds +4 since max_imbalance_ratio
+    # is independent of the array — so this just ADDS the stacked points.
+    if not latest.get("imbalances"):
+        if direction == "long" and latest.get("stacked_buy", False):
+            debug["stacked"] = True
+            imb_score += 12  # equivalent to 3 same-side imbalances in v2
+        elif direction == "short" and latest.get("stacked_sell", False):
+            debug["stacked"] = True
+            imb_score += 12
+        imb_score = min(18, imb_score)  # respect imbalance sub-cap
+
+    # Mark legacy "stacked" debug flag on for back-compat with downstream
+    # confluences list / dashboards that key off it.
+    if imb_debug.get("imbalance_count", 0) >= 3:
+        debug["stacked"] = True
+    if imb_debug.get("oversized"):
         debug["oversized"] = True
-        score += 5
+    score += imb_score
+
+    # Graduated absorption (replaces the binary AND-conditioned v1 check)
+    abs_score, abs_debug = _score_absorption_graduated(
+        latest, direction, cfg, tick_size,
+    )
+    debug.update(abs_debug)
+    if abs_score > 0:
+        debug["absorption"] = True
+    score += abs_score
 
     return min(25, score), debug
 
@@ -665,6 +885,102 @@ def _emit_tape_read_event(eval_data: dict, root: Path | None = None) -> None:
 _data_unavailable_logged = False
 
 
+# ──────────────────────────────────────────────────────────────────
+# Sprint L (2026-05-08) — N+1 confirmation gate
+#
+# Research finding: discretionary footprint reversal traders WAIT for
+# the next bar to confirm the trigger bar's wick held. Coders fire on
+# the bar that triggers the condition. This single rule kills most
+# discretionary→code translation losses.
+#
+# Implementation:
+#   On bar N: IQS >= threshold → store pending state (trigger_ts,
+#   trigger_low/high, full signal context). Return None instead of
+#   firing. Subsequent evaluations on the SAME bar (multiple ticks
+#   between bar closes) refresh the pending state.
+#
+#   On bar N+1 (when latest["ts"] != pending.trigger_ts): check that
+#   the new bar didn't violate the trigger bar's wick. If confirmed,
+#   fire the signal NOW with the trigger bar's wick anchoring the stop.
+#   If violated (trigger bar's low broken for LONG, or high broken for
+#   SHORT), discard the pending — the absorption thesis failed.
+#
+#   Stale pendings (trigger > 3 bars old) are discarded so the strategy
+#   doesn't fire on stale state if the bot is paused/restarted.
+#
+# Keyed by direction so a LONG pending doesn't clash with a SHORT
+# pending (they're independent reversal opportunities at different levels).
+# ──────────────────────────────────────────────────────────────────
+_pending_signals: dict[str, dict] = {}
+_PENDING_MAX_AGE_BARS = 3
+
+
+def _check_pending_confirmation(
+    direction: str, latest: dict, bars_history: list[dict],
+) -> tuple[Optional[dict], str]:
+    """Check if a pending signal should fire, be discarded, or stay pending.
+
+    Returns (action, reason):
+      - (pending_data, "FIRE")     — fire now, with trigger-bar context
+      - (None, "DISCARD_VIOLATED") — pending invalidated by new bar's price action
+      - (None, "DISCARD_STALE")    — pending too old (>3 bars), drop it
+      - (None, "WAIT")             — same bar still, keep waiting
+      - (None, "NONE")             — no pending exists for this direction
+    """
+    pending = _pending_signals.get(direction)
+    if pending is None:
+        return None, "NONE"
+
+    # Same bar still — keep waiting (state will refresh in caller)
+    if pending["trigger_ts"] == latest.get("ts"):
+        return None, "WAIT"
+
+    # New bar has arrived — check confirmation
+    if direction == "long":
+        # Confirmed if latest bar's low stayed at or above trigger's low.
+        # tick_size buffer absorbs floating-point noise.
+        if latest.get("low", 0) >= pending["trigger_low"] - 1e-9:
+            return pending, "FIRE"
+        return None, "DISCARD_VIOLATED"
+    else:
+        if latest.get("high", float("inf")) <= pending["trigger_high"] + 1e-9:
+            return pending, "FIRE"
+        return None, "DISCARD_VIOLATED"
+
+
+def _is_pending_stale(direction: str, bars_history: list[dict]) -> bool:
+    """Drop pendings whose trigger bar is no longer in recent history."""
+    pending = _pending_signals.get(direction)
+    if pending is None or not bars_history:
+        return False
+    trigger_ts = pending["trigger_ts"]
+    # If we can't find the trigger ts in the last N bars of history,
+    # it's old enough to discard.
+    recent_ts = {b.get("ts") for b in bars_history[-_PENDING_MAX_AGE_BARS:]}
+    return trigger_ts not in recent_ts
+
+
+def _compute_atr_from_history(
+    bars_history: list[dict], tick_size: float, period: int = 14,
+) -> float:
+    """ATR of last `period` volumetric bars, in ticks.
+
+    Volumetric bars are activity-driven, so this is a per-tick-bar ATR
+    (different scale than time-bar ATR). For 1,500-tick MNQ bars, expect
+    roughly 8-25 ticks ATR depending on regime.
+    """
+    if not bars_history:
+        return 0.0
+    recent = bars_history[-period:]
+    if not recent:
+        return 0.0
+    total_range = sum(
+        max(0.0, b.get("high", 0) - b.get("low", 0)) / tick_size
+        for b in recent
+    )
+    return total_range / len(recent)
+
+
 class FootprintCVDReversal(BaseStrategy):
     """Phoenix BaseStrategy subclass.
 
@@ -817,14 +1133,29 @@ class FootprintCVDReversal(BaseStrategy):
                 latest, bars_history, direction,
             )
 
+            # Sprint L: pattern × level-confluence multiplier.
+            # Research finding: a 50-IQS pattern at a 3-level confluence
+            # beats a 75-IQS pattern at a 1-level confluence. Levels are
+            # categorical (something to be trapped against) — pure
+            # additive scoring can't capture that. Multiply the
+            # non-level score components by 1 + 0.25*extra_levels. Keeps
+            # level_score additive (no double-count); caps at 100.
+            extra_levels, confluence_labels = _count_extra_htf_confluences(
+                price, market, cfg.level_buffer_ticks, tick_size,
+            )
+            confluence_multiplier = 1.0 + 0.25 * extra_levels  # 0:1.00, 1:1.25, 2:1.50, 3:1.75
+            non_level_raw = div_score + fp_score + comp_score + tape_bonus
+            non_level_adjusted = int(round(non_level_raw * confluence_multiplier))
+
             base_iqs = level_score + div_score + fp_score + comp_score
-            iqs = min(100, base_iqs + tape_bonus)
+            iqs = min(100, level_score + non_level_adjusted)
             tier = _classify_tier(iqs)
 
             logger.info(
                 f"[FOOTPRINT_CVD][{direction}] IQS={iqs} "
                 f"(L={level_score} D={div_score} F={fp_score} "
-                f"C={comp_score} +B={tape_bonus}) "
+                f"C={comp_score} +B={tape_bonus} "
+                f"x{confluence_multiplier:.2f}@{extra_levels}lvl) "
                 f"level={level_name} tier={tier}"
             )
 
@@ -870,19 +1201,94 @@ class FootprintCVDReversal(BaseStrategy):
                 "bar_ts": latest.get("ts", ""),
             })
 
-            if iqs < cfg.entry_threshold_iqs:
+            # Sprint L: N+1 confirmation gate.
+            # Before firing, check pending state from the prior bar:
+            # - If a pending exists for this direction and the new bar's
+            #   wick held the trigger bar's extreme: FIRE NOW with the
+            #   trigger bar (not current bar) anchoring the stop.
+            # - If the wick was violated: discard pending (absorption failed).
+            # - If still on the same bar: refresh pending and don't fire yet.
+            # - If no pending and current IQS qualifies: store pending and
+            #   wait for next bar's confirmation.
+            #
+            # Stale pendings (trigger no longer in recent history) get
+            # cleared so a paused/restarted bot doesn't fire on stale state.
+            if _is_pending_stale(direction, bars_history):
+                _pending_signals.pop(direction, None)
+
+            confirm_data, confirm_action = _check_pending_confirmation(
+                direction, latest, bars_history,
+            )
+
+            if confirm_action == "DISCARD_VIOLATED":
+                logger.info(
+                    f"[FOOTPRINT_CVD][{direction}] N+1 FAILED — "
+                    f"trigger wick violated by current bar. Discarding pending."
+                )
+                _pending_signals.pop(direction, None)
                 continue
 
-            # Build the Phoenix Signal — structural stop from latest bar
+            if confirm_action == "FIRE":
+                # Fire on confirmed pending. Anchor stop to TRIGGER bar's
+                # wick, not current bar's wick — that's the level the
+                # absorption defended.
+                _pending_signals.pop(direction, None)
+                trigger_low = confirm_data["trigger_low"]
+                trigger_high = confirm_data["trigger_high"]
+                logger.info(
+                    f"[FOOTPRINT_CVD][{direction}] N+1 CONFIRMED — firing "
+                    f"signal anchored to trigger bar at {confirm_data['trigger_ts']}"
+                )
+            else:
+                # confirm_action in {"NONE", "WAIT"} — IQS qualifies but
+                # we need to defer one bar. Store/refresh pending and continue.
+                if iqs < cfg.entry_threshold_iqs:
+                    continue
+                _pending_signals[direction] = {
+                    "trigger_ts": latest.get("ts"),
+                    "trigger_low": float(latest.get("low", 0)),
+                    "trigger_high": float(latest.get("high", 0)),
+                    "trigger_iqs": iqs,
+                    "trigger_tier": tier,
+                    "level_name": level_name,
+                    "extra_levels": extra_levels,
+                    "confluence_labels": confluence_labels,
+                    "confluence_multiplier": confluence_multiplier,
+                }
+                if confirm_action == "WAIT":
+                    logger.debug(
+                        f"[FOOTPRINT_CVD][{direction}] PENDING refresh — same bar"
+                    )
+                else:
+                    logger.info(
+                        f"[FOOTPRINT_CVD][{direction}] PENDING — "
+                        f"awaiting N+1 confirmation (IQS={iqs}, "
+                        f"trigger_low={latest.get('low')}, trigger_high={latest.get('high')})"
+                    )
+                continue
+
+            # If we got here, confirm_action == "FIRE" — build the Signal.
+            # Sprint L: wick + ATR stop anchoring. Buffer is the larger
+            # of stop_buffer_ticks (categorical floor) and 0.3 × ATR(14)
+            # (volatility-aware). Keeps the wick anchor regardless of
+            # regime: in low-vol the categorical floor dominates; in
+            # high-vol the ATR buffer dominates.
+            atr_ticks = _compute_atr_from_history(bars_history, tick_size, period=14)
+            atr_buffer_ticks = max(
+                float(cfg.stop_buffer_ticks),
+                0.3 * atr_ticks,
+            )
+            buffer_price = atr_buffer_ticks * tick_size
+
             if direction == "long":
-                stop_price = latest["low"] - cfg.stop_buffer_ticks * tick_size
+                stop_price = trigger_low - buffer_price
                 stop_ticks = max(
                     1,
                     min(cfg.max_stop_ticks,
                         int(round((price - stop_price) / tick_size))),
                 )
             else:
-                stop_price = latest["high"] + cfg.stop_buffer_ticks * tick_size
+                stop_price = trigger_high + buffer_price
                 stop_ticks = max(
                     1,
                     min(cfg.max_stop_ticks,
@@ -949,6 +1355,15 @@ class FootprintCVDReversal(BaseStrategy):
                     "divergence_debug": div_debug,
                     "footprint_debug": fp_debug,
                     "compression_debug": comp_debug,
+                    # Sprint L (2026-05-08) additions:
+                    "extra_htf_levels": extra_levels,
+                    "confluence_labels": confluence_labels,
+                    "confluence_multiplier": confluence_multiplier,
+                    "trigger_bar_ts": confirm_data["trigger_ts"],
+                    "trigger_low": trigger_low,
+                    "trigger_high": trigger_high,
+                    "atr_buffer_ticks": round(atr_buffer_ticks, 2),
+                    "atr_ticks": round(atr_ticks, 2),
                 },
             )
 
