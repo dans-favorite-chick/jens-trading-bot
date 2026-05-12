@@ -824,6 +824,151 @@ def _detect_trapped_traders(
     return False, ""
 
 
+def _score_context_bonuses(
+    market: dict,
+    latest: dict,
+    bars_history: list[dict],
+    direction: str,
+) -> tuple[int, dict]:
+    """Sprint M Tier 1: context-alignment bonuses, capped at +20 total.
+
+    Four 5-point sub-bonuses, each fires when external market context
+    agrees with the proposed reversal direction. These are *confirmation*
+    signals — they don't generate a trade alone but boost marginal IQS
+    setups across the entry threshold when institutional / multi-timeframe
+    flow confirms.
+
+    Sub-bonuses (each 0 or 5):
+
+      a. **structural_bias_aligned** — `market["structural_bias"]["label"]`
+         agrees with the trade direction (BULLISH/STRONG_BULLISH on LONG,
+         BEARISH/STRONG_BEARISH on SHORT). Source: composite bias scorer
+         that aggregates ~15 components (VWAP side, EMA stack, swing
+         structure, etc.). When the bias confirms, the reversal entry
+         is *with* the larger structure, not against it.
+
+      b. **sweep_aligned** — there's an active liquidity sweep in the
+         opposite direction of our trade (LONG entry wants a recent
+         `break_direction="down"` sweep = stops below price taken out,
+         likely trapping shorts; SHORT entry wants `break_direction="up"`).
+         Source: `core/liquidity_sweep.SweepWatcher`.
+
+      c. **multi_tf_cvd_aligned** — short-window CVD (sum of last 3 bar
+         deltas), medium-window CVD (sum of last 10 bar deltas), and
+         session CVD (latest bar's cvd_session) all point the same way
+         and agree with the trade direction. Single-TF CVD divergence
+         is already in the base IQS (D-score); this bonus rewards
+         setups where ALL timeframes confirm — much more robust.
+
+      d. **poc_migration_aligned** — the bar-by-bar POC has been migrating
+         in the trade direction over the last `_POC_MIGRATION_WINDOW`
+         bars (POC up for LONG, POC down for SHORT). Migrating POC
+         indicates the value-area centroid is shifting in our direction —
+         a leading signal for trend continuation. Static POC = no bonus.
+
+    Returns (bonus_score, debug_dict).
+    """
+    debug = {
+        "structural_bias_aligned": False, "structural_bias_label": "",
+        "sweep_aligned": False, "sweep_pivot": None,
+        "multi_tf_cvd_aligned": False,
+        "cvd_short": 0.0, "cvd_medium": 0.0, "cvd_session": 0.0,
+        "poc_migration_aligned": False, "poc_migration_ticks": 0.0,
+    }
+    bonus = 0
+
+    # ── (a) Structural bias alignment ───────────────────────────────
+    bias_info = market.get("structural_bias") or {}
+    bias_label = str(bias_info.get("label") or "")
+    debug["structural_bias_label"] = bias_label
+    bullish_labels = ("BULLISH", "STRONG_BULLISH")
+    bearish_labels = ("BEARISH", "STRONG_BEARISH")
+    if direction == "long" and bias_label in bullish_labels:
+        debug["structural_bias_aligned"] = True
+        bonus += 5
+    elif direction == "short" and bias_label in bearish_labels:
+        debug["structural_bias_aligned"] = True
+        bonus += 5
+
+    # ── (b) Liquidity-sweep alignment ───────────────────────────────
+    # An active "down sweep" (stops swept below pivot) supports a LONG
+    # reversal — shorts are trapped, rebound is on. An active "up sweep"
+    # supports a SHORT reversal.
+    sweep_state = market.get("sweep_state") or {}
+    watches = sweep_state.get("watches") or []
+    for w in watches:
+        bd = str(w.get("break_direction") or "")
+        if direction == "long" and bd == "down":
+            debug["sweep_aligned"] = True
+            debug["sweep_pivot"] = w.get("pivot")
+            bonus += 5
+            break
+        if direction == "short" and bd == "up":
+            debug["sweep_aligned"] = True
+            debug["sweep_pivot"] = w.get("pivot")
+            bonus += 5
+            break
+
+    # ── (c) Multi-timeframe CVD alignment ───────────────────────────
+    # Three windows over the volumetric-bar history:
+    #   short  = last 3 bars  (~30s-90s of action at 1500-tick bars)
+    #   medium = last 10 bars (~5-15 min)
+    #   session = cvd_session from the latest bar
+    # All three same sign + agree with direction = +5.
+    if len(bars_history) >= 10:
+        recent3 = bars_history[-3:]
+        recent10 = bars_history[-10:]
+        cvd_short = sum(float(b.get("delta", 0) or 0) for b in recent3)
+        cvd_medium = sum(float(b.get("delta", 0) or 0) for b in recent10)
+        cvd_session = float(latest.get("cvd_session", 0) or 0)
+        debug["cvd_short"] = round(cvd_short, 1)
+        debug["cvd_medium"] = round(cvd_medium, 1)
+        debug["cvd_session"] = round(cvd_session, 1)
+
+        want_positive = (direction == "long")
+        all_aligned = (
+            (cvd_short > 0) == want_positive
+            and (cvd_medium > 0) == want_positive
+            and (cvd_session > 0) == want_positive
+        )
+        # Require ALL three to have meaningful magnitude (avoid +0/-0
+        # noise on quiet bars). Threshold = at least 1 contract net per
+        # bar averaged.
+        meaningful = (
+            abs(cvd_short) >= 3
+            and abs(cvd_medium) >= 10
+            and abs(cvd_session) >= 10
+        )
+        if all_aligned and meaningful:
+            debug["multi_tf_cvd_aligned"] = True
+            bonus += 5
+
+    # ── (d) POC migration alignment ─────────────────────────────────
+    # Trailing-3 POC slope as a directional confirmation. Static or
+    # contradictory POC = no bonus.
+    _POC_MIGRATION_WINDOW = 3
+    if len(bars_history) >= _POC_MIGRATION_WINDOW:
+        recent_pocs = [
+            float(b.get("poc", 0) or 0)
+            for b in bars_history[-_POC_MIGRATION_WINDOW:]
+        ]
+        # Only count if every bar in window has a valid POC.
+        if all(p > 0 for p in recent_pocs):
+            poc_delta = recent_pocs[-1] - recent_pocs[0]
+            # In POINTS (price units). Scale-free comparison across
+            # MNQ vs ES vs other instruments.
+            debug["poc_migration_ticks"] = round(poc_delta * 4, 1)  # 4 ticks/pt MNQ
+            # Threshold: 2+ ticks of migration in the right direction.
+            if direction == "long" and poc_delta * 4 >= 2:
+                debug["poc_migration_aligned"] = True
+                bonus += 5
+            elif direction == "short" and poc_delta * 4 <= -2:
+                debug["poc_migration_aligned"] = True
+                bonus += 5
+
+    return min(20, bonus), debug
+
+
 def _score_tape_bonuses(
     latest: dict,
     bars_history: list[dict],
@@ -1133,6 +1278,15 @@ class FootprintCVDReversal(BaseStrategy):
                 latest, bars_history, direction,
             )
 
+            # Sprint M Tier 1: context-alignment bonuses (cap +20).
+            # Four 5-pt sub-bonuses for structural-bias / sweep / multi-TF
+            # CVD / POC migration alignment. See _score_context_bonuses
+            # docstring for details. Additive to tape_bonus; final IQS
+            # cap is still 100.
+            ctx_bonus, ctx_debug = _score_context_bonuses(
+                market, latest, bars_history, direction,
+            )
+
             # Sprint L: pattern × level-confluence multiplier.
             # Research finding: a 50-IQS pattern at a 3-level confluence
             # beats a 75-IQS pattern at a 1-level confluence. Levels are
@@ -1144,7 +1298,7 @@ class FootprintCVDReversal(BaseStrategy):
                 price, market, cfg.level_buffer_ticks, tick_size,
             )
             confluence_multiplier = 1.0 + 0.25 * extra_levels  # 0:1.00, 1:1.25, 2:1.50, 3:1.75
-            non_level_raw = div_score + fp_score + comp_score + tape_bonus
+            non_level_raw = div_score + fp_score + comp_score + tape_bonus + ctx_bonus
             non_level_adjusted = int(round(non_level_raw * confluence_multiplier))
 
             base_iqs = level_score + div_score + fp_score + comp_score
@@ -1154,7 +1308,7 @@ class FootprintCVDReversal(BaseStrategy):
             logger.info(
                 f"[FOOTPRINT_CVD][{direction}] IQS={iqs} "
                 f"(L={level_score} D={div_score} F={fp_score} "
-                f"C={comp_score} +B={tape_bonus} "
+                f"C={comp_score} +T={tape_bonus} +X={ctx_bonus} "
                 f"x{confluence_multiplier:.2f}@{extra_levels}lvl) "
                 f"level={level_name} tier={tier}"
             )
@@ -1174,7 +1328,8 @@ class FootprintCVDReversal(BaseStrategy):
                 "iqs_breakdown": {
                     "L": level_score, "D": div_score,
                     "F": fp_score, "C": comp_score,
-                    "bonus": tape_bonus,
+                    "T": tape_bonus, "X": ctx_bonus,
+                    "bonus": tape_bonus,  # legacy key kept for older dashboard
                 },
                 "nearest_htf_level": level_name,
                 "absorption_detected": fp_debug.get("absorption", False),
@@ -1319,6 +1474,15 @@ class FootprintCVDReversal(BaseStrategy):
                 confluences.append("finished_auction")
             if tape_debug["trapped_traders"]:
                 confluences.append("trapped_traders")
+            # Sprint M Tier 1 context-alignment confluences
+            if ctx_debug["structural_bias_aligned"]:
+                confluences.append("bias_aligned")
+            if ctx_debug["sweep_aligned"]:
+                confluences.append("sweep_aligned")
+            if ctx_debug["multi_tf_cvd_aligned"]:
+                confluences.append("multi_tf_cvd_aligned")
+            if ctx_debug["poc_migration_aligned"]:
+                confluences.append("poc_migration_aligned")
 
             return Signal(
                 direction="LONG" if direction == "long" else "SHORT",
@@ -1345,6 +1509,8 @@ class FootprintCVDReversal(BaseStrategy):
                     "base_iqs": base_iqs,            # Sprint K1: pre-bonus
                     "tape_bonus": tape_bonus,        # Sprint K1: pattern bonuses
                     "tape_debug": tape_debug,        # Sprint K1
+                    "ctx_bonus": ctx_bonus,          # Sprint M Tier 1: context bonuses
+                    "ctx_debug": ctx_debug,          # Sprint M Tier 1
                     "level_score": level_score,
                     "divergence_score": div_score,
                     "footprint_score": fp_score,

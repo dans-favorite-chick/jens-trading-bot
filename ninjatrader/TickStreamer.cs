@@ -121,9 +121,31 @@ namespace NinjaTrader.NinjaScript.Indicators
         // chart is NOT a volumetric series, EmitVolumetricBar() logs ONCE
         // and silently no-ops — strategy stays dormant logging
         // DATA_NOT_AVAILABLE without crashing the tick loop.
-        private const double IMBALANCE_RATIO     = 3.0;   // ≥3:1 = imbalanced level
+        //
+        // Sprint M Tier 1.1 (2026-05-12): IMBALANCE_RATIO is now adaptive
+        // per-bar based on the bar's price range (volatility proxy). A
+        // fixed 3.0 ratio meant quiet evening bars produced almost no
+        // imbalances (real institutional flow drowned in low-noise tape)
+        // while volatile RTH-open bars produced false-positive stacks
+        // from noise. Scaling with range catches more on quiet days and
+        // filters more on chaotic ones. Thresholds chosen from MNQ
+        // 1,500-tick bars: <5pt range = thin overnight tape;
+        // 5-15pt = normal session; 15-30pt = elevated; 30pt+ = volatile.
+        // The chosen ratio is emitted in the JSON as "imbalance_ratio"
+        // so downstream consumers can record what threshold each bar used.
         private const int    STACKED_THRESHOLD   = 3;     // 3+ consecutive same-side
         private const int    VOLUMETRIC_BAR_SIZE = 1500;  // emitted in JSON for context
+
+        // Adaptive imbalance ratio: pure function of bar range (in points).
+        // Kept private+static so unit-testable from a separate harness
+        // without instantiating the full indicator.
+        private static double GetAdaptiveImbalanceRatio(double rangePoints)
+        {
+            if (rangePoints < 5.0)  return 2.5;   // very quiet
+            if (rangePoints < 15.0) return 3.0;   // normal (legacy default)
+            if (rangePoints < 30.0) return 3.5;   // elevated
+            return 4.0;                            // volatile
+        }
         private long         sessionCvd          = 0;     // cumulative session delta
         private DateTime     sessionCvdResetDate = DateTime.MinValue;
         private int          lastEmittedVolBar   = -1;    // dedupe guard
@@ -570,6 +592,10 @@ namespace NinjaTrader.NinjaScript.Indicators
             double barLow   = Bars.GetLow(barIdx);
             double barClose = Bars.GetClose(barIdx);
 
+            // Sprint M Tier 1.1: per-bar adaptive imbalance ratio.
+            double barRangePoints = barHigh - barLow;
+            double imbalanceRatio = GetAdaptiveImbalanceRatio(barRangePoints);
+
             // Daily session-CVD reset on date boundary.
             DateTime barTime = Bars.GetTime(barIdx);
             if (barTime.Date != sessionCvdResetDate)
@@ -629,7 +655,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
                 double ratio;
                 string side;
-                if (askVol >= IMBALANCE_RATIO * bidVol)
+                if (askVol >= imbalanceRatio * bidVol)
                 {
                     ratio = (double)askVol / (double)bidVol;
                     side = "buy";
@@ -637,7 +663,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                     consecutiveSell = 0;
                     if (consecutiveBuy >= STACKED_THRESHOLD) stackedBuy = true;
                 }
-                else if (bidVol >= IMBALANCE_RATIO * askVol)
+                else if (bidVol >= imbalanceRatio * askVol)
                 {
                     ratio = (double)bidVol / (double)askVol;
                     side = "sell";
@@ -691,6 +717,7 @@ namespace NinjaTrader.NinjaScript.Indicators
             msg.Append(",\"stacked_buy\":").Append(stackedBuy ? "true" : "false");
             msg.Append(",\"stacked_sell\":").Append(stackedSell ? "true" : "false");
             msg.Append(",\"max_imbalance_ratio\":").Append(maxRatio.ToString("F2"));
+            msg.Append(",\"imbalance_ratio\":").Append(imbalanceRatio.ToString("F2"));
             msg.Append(",\"cvd_session\":").Append(sessionCvd);
             msg.Append("}");
 

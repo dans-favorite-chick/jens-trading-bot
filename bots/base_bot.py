@@ -2690,6 +2690,25 @@ class BaseBot:
         _day_suppressed = set(self._day_classifier.params.get("suppressed_strategies", []))
         _day_target_rr  = self._day_classifier.params.get("default_target_rr", 0)
 
+        # ── Sprint M Tier 1.2: enrich `market` with context fields ───
+        # sweep_watcher.get_state() and structural_bias.to_dict() are
+        # computed up in the shadow-pipeline block (~line 2563) into a
+        # separate `_enriched` dict, but until today the strategy loop
+        # passed the un-enriched `market` to evaluate(), so strategies
+        # never saw these context signals. footprint_cvd_reversal's
+        # IQS context-bonus (Sprint M) needs them, so we merge selectively
+        # here. Selective rather than wholesale-replace because some
+        # strategies are sensitive to dict shape; only fields with known
+        # consumers get plumbed.
+        try:
+            if getattr(self, "_last_structural_bias", None):
+                market["structural_bias"] = self._last_structural_bias
+            _sweep_state = self.sweep_watcher.get_state()
+            if _sweep_state:
+                market["sweep_state"] = _sweep_state
+        except Exception as _e:
+            logger.debug(f"[CONTEXT_ENRICH] market enrich failed: {_e!r}")
+
         best_signal = None
         for strat in self.strategies:
             if not strat.enabled:
