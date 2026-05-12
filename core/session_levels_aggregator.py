@@ -330,6 +330,15 @@ class SessionLevelsAggregator:
         if today != self._current_date:
             self._current_date = today
             self._init_live_state()
+            # 2026-05-11: reload prior-day on day-rollover. Without this,
+            # load_prior_day() only ran at bot startup; on a 5-day-uptime
+            # bot the prior_day_high/low/vah/val/poc + pivots stayed frozen
+            # at startup-day-minus-1 values, which broke classify_opening_type
+            # and zeroed every opening_session sub-evaluator after day 2.
+            try:
+                self.load_prior_day(target_date=today)
+            except Exception as e:
+                logger.warning("[SESSION_LEVELS] daily prior-day reload failed: %s", e)
 
     def _update_premarket(self, now_ct: datetime, bar_1m: Any) -> None:
         if bar_1m is None:

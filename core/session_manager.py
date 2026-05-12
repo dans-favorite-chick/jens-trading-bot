@@ -19,19 +19,31 @@ logger = logging.getLogger("SessionManager")
 
 
 # ─── Market Regimes ─────────────────────────────────────────────────
-# ─── PROD Regime Config (conservative, proven windows only) ─────────
+# ─── PROD Regime Config ────────────────────────────────────────────
+#
+# 2026-05-11 — opened up. Previously the per-regime allowed_strategies
+# whitelists silently blocked opening_session / orb / noise_area /
+# vwap_band_pullback / vwap_band_reversion / footprint_cvd_reversal in
+# AFTERNOON_CHOP (10:00-13:30 CT) and the off-hours regimes. spring_setup
+# was retired 2026-04-24 so the OVERNIGHT_RANGE/AFTERHOURS whitelists
+# pointed at a disabled strategy and effectively zeroed those regimes.
+# prod_bot now runs Sim101 (paper) with only_validated=False — there is
+# no live-money downside to letting every enabled strategy fire and the
+# strategies themselves carry intrinsic time gates (opening_session
+# day_flat_time_ct=14:30, orb session window, etc.).
 REGIME_CONFIG = {
     "OVERNIGHT_RANGE": {
         "min_confluence_override": None,
         "size_multiplier": 0.5,
-        "allowed_strategies": ["spring_setup"],
-        "notes": "Thin volume, fade extremes only",
+        "allowed_strategies": None,
+        "notes": "Thin volume — strategies self-gate via session windows; size reduced.",
     },
     "PREMARKET_DRIFT": {
         "min_confluence_override": None,
         "size_multiplier": 0.3,
-        "allowed_strategies": ["bias_momentum"],
-        "notes": "Reduced size — lower confidence regime",
+        "allowed_strategies": None,
+        "notes": "Pre-RTH — opening_session.premarket_breakout (08:30-08:45) fires here; "
+                 "reduced size for lower confidence.",
     },
     "OPEN_MOMENTUM": {
         "min_confluence_override": None,
@@ -48,16 +60,15 @@ REGIME_CONFIG = {
     "AFTERNOON_CHOP": {
         "min_confluence_override": 4.0,
         "size_multiplier": 0.5,
-        # Only level-based strategies in the death zone.
-        # bias_momentum and high_precision_only are momentum chasers — they need price
-        # moving with conviction. AFTERNOON_CHOP is mean-reverting lunch chop; the only
-        # valid trades here are: spring reversal at an extreme, VWAP reclaim, or DOM
-        # absorption pullback to a level. Momentum entries stop out on noise instantly.
-        # This applies even on TREND days (session_unrestricted bypasses the window
-        # check but NOT the per-regime allowed_strategies check here).
-        "allowed_strategies": ["dom_pullback", "spring_setup", "vwap_pullback",
-                               "ib_breakout", "compression_breakout"],
-        "notes": "DEATH ZONE — level-based entries only (dom_pullback, spring, vwap), no momentum chasing",
+        # 2026-05-11: was a 5-strategy whitelist that silently blocked
+        # opening_session, orb, noise_area, vwap_band_pullback,
+        # vwap_band_reversion, footprint_cvd_reversal during 10:00-13:30 CT.
+        # Replaced with None + raised min_confluence_override=4.0 + half
+        # size — quality bar stays elevated, but the regime no longer
+        # zeros 6 strategies for 3+ hours every day.
+        "allowed_strategies": None,
+        "notes": "Higher quality bar (min_conf 4.0) + half size — strategies still get to "
+                 "fire on high-confluence setups; replaces prior all-block whitelist.",
     },
     "LATE_AFTERNOON": {
         "min_confluence_override": 3.0,   # Slightly higher bar than open — be selective
@@ -75,8 +86,8 @@ REGIME_CONFIG = {
     "AFTERHOURS": {
         "min_confluence_override": None,
         "size_multiplier": 0.3,
-        "allowed_strategies": ["spring_setup"],
-        "notes": "Very selective, mean reversion only",
+        "allowed_strategies": None,
+        "notes": "After hours — strategies self-gate via session windows; reduced size.",
     },
 }
 
