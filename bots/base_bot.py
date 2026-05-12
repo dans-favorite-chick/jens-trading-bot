@@ -643,6 +643,12 @@ class BaseBot:
         # State for dashboard
         self.status = "IDLE"
         self._ws = None  # Active websocket (for heartbeat sender)
+        # 2026-05-12: timestamp of the last WS message received from the
+        # bridge (any type — tick / dom / trade_ack / etc). Drives the
+        # application-level WS watchdog (_ws_watchdog_loop) that defends
+        # against silent half-close. Sentinel 0 = no message yet, watchdog
+        # skips its check until first message arrives.
+        self._last_ws_message_time: float = 0.0
         self.last_signal: dict | None = None
         self.last_rejection: str | None = None
         self._last_eval: dict = {}
@@ -1177,6 +1183,13 @@ class BaseBot:
         # Hourly decay health check + 15:10 CT daily summary Telegram push.
         asyncio.ensure_future(self._decay_monitor_loop())
 
+        # 2026-05-12: application-level WS watchdog. Forces a reconnect
+        # if the WS goes silent for >90s outside the NT8 daily-maintenance
+        # window. Defends against silent half-close (bridge-side TCP dies
+        # without FIN, `async for message in ws` blocks forever). See
+        # `_ws_watchdog_loop` docstring for the 2026-05-12 08:09 CT incident.
+        asyncio.ensure_future(self._ws_watchdog_loop())
+
         # 2026-04-24: FMP market-data cross-check loop. Fetches NDX/QQQ
         # from financialmodelingprep.com, converts to MNQ-equivalent, and
         # compares against the local accepted tick. If local drifts more
@@ -1543,6 +1556,13 @@ class BaseBot:
             self.status = "SCANNING"
 
             async for message in ws:
+                # 2026-05-12: stamp last-message time on EVERY frame
+                # received (any type), independent of dispatch outcome.
+                # Drives _ws_watchdog_loop's silent-half-close detection.
+                # Set here BEFORE json parsing so even a malformed message
+                # counts as proof the WS is alive.
+                self._last_ws_message_time = time.time()
+
                 # BUG-TL2 guard: the dispatch phase (json.loads + msg_type
                 # routing) has its own inner json guard; non-tick messages
                 # early-return via `continue`. Wrap the whole dispatch just
@@ -4317,6 +4337,88 @@ class BaseBot:
                 logger.debug(f"[DECAY_MONITOR] loop error: {_outer}")
 
             await asyncio.sleep(3600)  # check once per hour
+
+    # ─── WebSocket Watchdog (application-level keepalive) ─────────────
+
+    async def _ws_watchdog_loop(self) -> None:
+        """Force-reconnect if no WS message in WS_STALE_THRESHOLD_S.
+
+        Defends against silent WebSocket half-close: the bridge-side
+        socket dies (TCP keepalive failure, OS-level close without
+        FIN, container kill) but the bot's ``async for message in ws``
+        blocks forever on a frame that will never arrive. The websocket
+        connection is configured with ``ping_interval=None`` (no
+        protocol-level keepalive — see `_connect_and_listen`), so
+        without an application-level timeout the bot is deaf.
+
+        Symptom observed 2026-05-12 ~08:09 CT:
+          - Bot process alive, async tasks (FMPSanity / MarketIntel /
+            CalendarRisk / StartupReconciliation) all firing on schedule
+          - Bridge ``bots_connected`` no longer lists this bot
+          - ``local=`` price stuck at last received value
+          - No ``[BAR 1m]`` log entries for >5 min
+          - Dashboard reports prod as "reconnecting"
+
+        Strategy: every CHECK_INTERVAL_S, compare ``time.time()`` to
+        ``self._last_ws_message_time``. If the gap exceeds
+        WS_STALE_THRESHOLD_S, force-close the WS — that bubbles a
+        ``ConnectionClosedError`` out of ``async for message in ws``,
+        which the outer ``while True`` reconnect loop in ``run()`` then
+        catches and re-establishes.
+
+        Skip-windows:
+          - 16:00-17:00 CT: NT8 daily maintenance break, no ticks
+            expected, would false-positive
+          - sentinel ``self._last_ws_message_time == 0``: no message
+            received since connect, watchdog has nothing to compare yet
+            (first connect, or just-restarted)
+        """
+        WS_STALE_THRESHOLD_S = 90.0
+        CHECK_INTERVAL_S = 15.0
+
+        from zoneinfo import ZoneInfo as _ZI
+        ct_tz = _ZI("America/Chicago")
+
+        while True:
+            await asyncio.sleep(CHECK_INTERVAL_S)
+
+            try:
+                # Skip during NT8 daily maintenance break.
+                if datetime.now(ct_tz).hour == 16:
+                    continue
+
+                last_msg = self._last_ws_message_time
+                if not last_msg:
+                    continue  # haven't received first message yet
+
+                age = time.time() - last_msg
+                if age <= WS_STALE_THRESHOLD_S:
+                    continue
+
+                ws = self._ws
+                if ws is None:
+                    continue
+
+                logger.warning(
+                    f"[WS_WATCHDOG] no WS message in {age:.0f}s "
+                    f"(threshold {WS_STALE_THRESHOLD_S:.0f}s) — "
+                    f"force-closing WS to trigger reconnect"
+                )
+                try:
+                    await asyncio.wait_for(
+                        ws.close(code=1011, reason="bot-side ws-stale watchdog"),
+                        timeout=5.0,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("[WS_WATCHDOG] ws.close timed out after 5s")
+                except Exception as _close_err:
+                    logger.warning(f"[WS_WATCHDOG] ws.close failed: {_close_err!r}")
+
+                # Reset so we don't immediately re-close after reconnect.
+                self._last_ws_message_time = time.time()
+
+            except Exception as _outer:
+                logger.debug(f"[WS_WATCHDOG] loop error: {_outer!r}")
 
     # ─── News Scanner Background Loop ─────────────────────────────────
     async def _news_scanner_loop(self):
