@@ -101,24 +101,27 @@ def _session_start_ct_epoch(now_ct=None) -> float:
 
 
 def _load_session_trades_by_bot() -> dict[str, list[dict]]:
-    """Read logs/trade_memory.json and bucket current-session trades by
-    bot_id. Returns {"prod": [...], "sim": [...], "lab": [...]}.
+    """Bucket current-session trades by bot_id.
 
-    Each bucket is sorted newest-first by exit_time. Trades without a
-    recognized bot_id land under "unknown" so nothing is silently dropped.
+    Returns {"prod": [...], "sim": [...], "lab": [...]}. Reads the merged
+    view via `TradeMemory.load_all_trades()` — that pulls from the legacy
+    shared file AND every per-bot `trade_memory_<bot>.json` (split was
+    introduced 2026-05-12 to fix the prod/sim file-write race).
 
-    Graceful failure: missing / corrupt / non-list file → empty buckets.
+    Each bucket is sorted oldest-first (the template expects that;
+    dashboard.html::renderTrades reverses for display). Trades without
+    a recognized bot_id land under "unknown" so nothing is silently
+    dropped.
     """
-    tm_path = os.path.join(PROJECT_ROOT, "logs", "trade_memory.json")
     try:
-        with open(tm_path, encoding="utf-8") as f:
-            rows = json.load(f)
+        from core.trade_memory import load_all_trades
+        rows = load_all_trades(logs_dir=os.path.join(PROJECT_ROOT, "logs"))
     except Exception as e:
-        logger.warning(f"[SESSION_TRADES] trade_memory.json read failed: {e!r}")
+        logger.warning(f"[SESSION_TRADES] load_all_trades failed: {e!r}")
         return {}
     if not isinstance(rows, list):
         logger.warning(
-            f"[SESSION_TRADES] trade_memory.json wrong shape "
+            f"[SESSION_TRADES] load_all_trades returned wrong shape "
             f"(got {type(rows).__name__}) — treating as empty"
         )
         return {}

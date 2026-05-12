@@ -539,7 +539,10 @@ class BaseBot:
         # P0.1 (D13): load durable trade history so dashboard P&L and any
         # in-process consumer of trade_history survive bot restart.
         self.positions = PositionManager(load_history=True)
-        self.trade_memory = TradeMemory()
+        # 2026-05-12: per-bot trade memory file (avoids prod/sim shared-file
+        # write race that previously dropped prod's closed trades when sim
+        # rewrote the file with its older in-memory view).
+        self.trade_memory = TradeMemory(bot_id=self.bot_name)
         self.history = HistoryLogger(bot_name=self.bot_name)
         self.tracker = StrategyTracker()
         self.strategies: list[BaseStrategy] = []
