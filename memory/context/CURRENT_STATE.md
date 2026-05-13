@@ -1,5 +1,85 @@
 # Phoenix Bot — Current State
 
+_Last updated: 2026-05-13 PM (post-audit, all dashboard surfaces reconciled)._
+_Next Claude session: read **RECENT_CHANGES.md FIRST** for the running log
+of dated changes. This file's lower sections are historical sprint context
+(May 4 onwards) — still useful, but always cross-check operational state
+against RECENT_CHANGES + the bot itself._
+
+## STATE AS OF 2026-05-13 PM
+
+### Operational
+
+- **Bot stack**: bridge :8765/:8766, dashboard :5000, watchdog :5001,
+  watcher_agent (PhoenixWatcher scheduled task), prod_bot, sim_bot — all
+  running on code through commit `d7e081a` after a deliberate full bounce.
+- **Branch**: `weekly-evolution/2026-05-10`, pushed to origin and up-to-date
+  through `d7e081a`. Not merged to main.
+- **Test suite**: 1,737 pass / 4 skip / 0 fail.
+- **Today's P&L**: sim 4 wins / $114.22, prod 0 trades. Both the TODAY
+  (CME Globex) summary card and the Daily Stats panel correctly show the
+  same numbers (this consistency is itself a 2026-05-13 fix — see below).
+- **NT8**: live, tick rate ~10/s during RTH. The user had an internet outage
+  this morning that caused 0-tick conditions and the documented 106s
+  WS watchdog reconnect cycle — resolved when NT8 reconnected.
+
+### Alerting
+
+- **PhoenixWatcher scheduled task**: now has a `Repetition: PT5M` pattern
+  on its `AtLogOn` trigger. Max alerting downtime ever is ≤ 5 minutes;
+  fully self-healing across Ctrl+C kills, logoffs, etc. (Was previously a
+  silent-failure mode: AtLogOn fires once, daemon dies, no auto-respawn
+  until next logon.)
+- **Telegram + Twilio**: ready and tested today.
+- **Gemini investigator**: working on a fresh GCP project. The old key on
+  the "Default Gemini Project" had billing "Unavailable · Postpay" plus
+  free-tier-quota-exhausted state. Replaced via "Create API key in new
+  project" path in AI Studio. New key now lives under
+  `GOOGLE_API_KEY` in `.env`. Old backup at
+  `.env.backup_pre_gemini_swap_20260513_114349` (kept as rollback safety
+  net; intentionally NOT committed to git).
+
+### Data integrity (2026-05-13 audit results)
+
+The 2026-05-12 split of trade memory into per-bot files broke every
+reader that raw-opened the legacy `logs/trade_memory.json` — they
+silently returned pre-split-only data. A 12-file audit (commit `c9099d7`)
+routed every reader through `core.trade_memory.load_all_trades()`, the
+canonical merger. Plus three follow-ups:
+- `dda680c` — graceful /shutdown via dashboard command queue (replaces
+  the CTRL_BREAK_EVENT path lost in `8b471af`)
+- `4d523bf` — dashboard `/api/today-pnl` per-bot fix (this was the
+  user-visible discrepancy on the dashboard)
+- `4e29ce5` + `d7e081a` — RiskManager hydrates today's daily counters
+  from trade_history on bot startup AND filters by `bot_id` to prevent
+  cross-attribution (Daily Stats panel now survives restarts)
+
+**Outcome**: every dashboard surface, every operator-facing tool
+(`validation_tracker`, `indicator_audit`, `audit_l2_roi`, daily
+`post_session_debrief`), and every analytical script now sees the same
+unified trade history regardless of which file each trade lives in.
+
+### Open items (not blocking)
+
+- **106s reconnect cycle when NT8 ticks=0**. Pre-existing WS watchdog
+  defense kicks in during NT8 silent windows (overnight maintenance,
+  weekend gaps, today's internet outage). Logged in KNOWN_ISSUES.md.
+- **TickStreamer.cs F5 recompile in NT8**. Sprint M Tier 1 C# side
+  (adaptive imbalance ratio) still pending operator hands-on step.
+  Python side has been deployed since commit `a4ab967`.
+- **vwap_pullback bleed diagnosed 2026-05-13**: 52 trades / 65% WR but
+  net -$169.64. Realized R:R = 0.446 (vs configured 1.8). Losers cluster
+  at full stop (~-$60), winners exit via `ema_dom_exit` at ~$25.
+  Diagnostic at `tools/diagnose_vwap_pullback.py`. No fix shipped — data
+  reviewed, decision pending.
+
+---
+
+## HISTORICAL SPRINT CONTEXT (May 4 onwards)
+_Below is the previous "current state" snapshot from 2026-05-04. Retained
+for sprint-by-sprint context. Operational truth has moved on — defer to
+the section above and to RECENT_CHANGES.md for anything time-sensitive._
+
 _Last updated: 2026-05-04 (Sprint H v3 — footprint_cvd_reversal with IQS scoring)_
 _Next Claude session: read this FIRST for situational awareness_
 
