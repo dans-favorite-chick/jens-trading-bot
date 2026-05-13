@@ -47,6 +47,53 @@ Test suite: 1,727 pass / 4 skip / 0 fail (no delta, no regressions).
 
 ---
 
+### 2026-05-13 ~16:35 CDT — prod trading-window gate REMOVED (commit `1e07000`)
+
+Investigated "why didn't prod_bot trade today?" Root cause traced to a
+silent gate in `BaseBot._evaluate_strategies` (lines 2422-2430):
+
+```python
+if self.bot_name == "prod":
+    if not self.session.is_prod_trading_window(...):
+        return   # NO log, NO _last_eval update
+```
+
+Restricted prod to 08:30-11:00 + 13:00-14:30 CST. Sim_bot's override of
+`_evaluate_strategies` already bypassed this gate (sim trades 24/7).
+Today's incident: NT8 internet outage during prod's primary window
+(08:30-11:09) meant prod missed its entire trading day. Sim took 4
+vwap_pullback wins / $114.22 after NT8 came back. Operator confusion:
+"why isn't prod trading?" — bot looked healthy (SCANNING / no rejection
+log / no halt) but was silently skipping every evaluation.
+
+Textbook 'silent failure' anti-pattern (per memory/feedback_silent_failures.md).
+
+Fix: removed the gate entirely. Prod now evaluates all 10 strategies
+24/7, matching sim's cadence. Per-trade risk limits ($5/trade, $15/day,
+4 trades/day in SimpleSizer + RiskManager) are the actual constraints
+— not the window. Strategy-level time windows (orb 08:30-14:30,
+opening_session 08:30-08:45) still apply.
+
+`is_prod_trading_window()` function in core/session_manager.py is left
+intact for future log-only / dashboard-display use. Only the gate
+inside `_evaluate_strategies` was removed.
+
+Verified live: prod_bot bounce at 16:32 CT, first `[strategies.noise_area]
+INFO [EVAL]` line appeared in prod log within seconds — first strategy
+evaluation prod ran ALL DAY. `/api/status -> prod._last_eval` now
+populated with all 10 strategies' decisions per bar close.
+
+Tests (tests/test_prod_no_window_gate.py, 3 new):
+- Static: no `bot_name == "prod"` check + no `is_prod_trading_window`
+  call in active code of `_evaluate_strategies`
+- Static: preserved gates (HALT, circuit breakers) still log
+- Behavioral: `is_prod_trading_window()` still callable for any future
+  log-only / display use
+
+Test suite: 1,737 → 1,740 pass (+3), 0 fail.
+
+---
+
 ### 2026-05-13 ~12:20 CDT — /api/today-pnl reads per-bot trade_memory files (commit `4d523bf`)
 
 Live-observed bug on the dashboard: TODAY (CME GLOBEX) card showed $0 /

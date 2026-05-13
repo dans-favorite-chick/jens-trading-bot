@@ -73,6 +73,19 @@ unified trade history regardless of which file each trade lives in.
   Diagnostic at `tools/diagnose_vwap_pullback.py`. No fix shipped — data
   reviewed, decision pending.
 
+### Prod trading windows — REMOVED 2026-05-13 (commit `1e07000`)
+
+ProdBot used to be restricted to 08:30-11:00 + 13:00-14:30 CST via a
+SILENT gate in `BaseBot._evaluate_strategies` (no log, no `_last_eval`
+update). Removed today after the 2026-05-13 incident: NT8 internet
+outage 08:30-11:09 meant prod missed its entire primary window, and the
+silent skip during the secondary window left no breadcrumbs about why.
+Prod now evaluates all 10 strategies 24/7 (same cadence as sim, just
+with the stricter $5/trade + $15/day + 4-trades/day caps in SimpleSizer
++ RiskManager as the actual risk limits). Strategy-level time windows
+(orb 08:30-14:30, opening_session 08:30-08:45) still apply — those are
+intentional per-strategy filters, not a bot gate.
+
 ---
 
 ## HISTORICAL SPRINT CONTEXT (May 4 onwards)
