@@ -156,6 +156,13 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 _bot_processes: dict[str, subprocess.Popen] = {}
 _bot_proc_lock = threading.Lock()
 
+# 2026-05-13: max seconds _stop_bot waits for the bot to honor a queued
+# "shutdown" command before falling back to terminate(). The bot polls
+# /api/commands every 2s; 7s = 3 poll cycles + 1s slack. Exposed at
+# module level so unit tests can patch a smaller value to keep the
+# "graceful-timeout falls back to terminate" test fast.
+_GRACEFUL_SHUTDOWN_TIMEOUT_S = 7.0
+
 
 def _start_bot(name: str) -> dict:
     """Start a bot subprocess. name = 'prod', 'lab', or 'sim'."""
@@ -231,12 +238,39 @@ def _stop_bot(name: str, force: bool = False) -> dict:
     # Path 1: dashboard-spawned subprocess (always run, regardless of force).
     with _bot_proc_lock:
         proc = _bot_processes.pop(name, None)
-        if proc and proc.poll() is None:
+
+    if proc and proc.poll() is None:
+        # 2026-05-13: graceful shutdown FIRST via the command queue.
+        # The bot polls /api/commands every 2s — queueing a "shutdown"
+        # command lets it close its WS and exit run() cleanly. If it
+        # doesn't exit within _GRACEFUL_SHUTDOWN_TIMEOUT_S, fall through
+        # to the hard terminate() path. This restores graceful-shutdown
+        # semantics lost when CREATE_NEW_PROCESS_GROUP was removed from
+        # _start_bot (commit 8b471af) — CTRL_BREAK_EVENT no longer worked
+        # with creationflags=0, so the bot would have been hard-killed on
+        # every stop, losing whatever state hadn't been persisted yet.
+        with _state_lock:
+            _state.setdefault(f"_commands_{name}", []).append({
+                "type": "shutdown",
+                "ts": time.time(),
+            })
+        deadline = time.time() + _GRACEFUL_SHUTDOWN_TIMEOUT_S
+        while time.time() < deadline and proc.poll() is None:
+            time.sleep(0.1)
+
+        if proc.poll() is not None:
+            logger.info(
+                f"{name} bot exited gracefully via /shutdown command"
+            )
+        else:
+            # Bot didn't honor the shutdown command (older code without
+            # the shutdown handler, or stuck event loop). Fall back to
+            # hard terminate — preserves the previous behavior verbatim.
+            logger.warning(
+                f"{name} bot did not exit within "
+                f"{_GRACEFUL_SHUTDOWN_TIMEOUT_S}s — terminating"
+            )
             try:
-                # 2026-05-13: graceful CTRL_BREAK_EVENT was contingent on the
-                # _start_bot's CREATE_NEW_PROCESS_GROUP flag, which we
-                # removed. Send a plain terminate() instead — bot persists
-                # state on every bar so the lost-state surface is small.
                 proc.terminate()
                 proc.wait(timeout=3)
             except subprocess.TimeoutExpired:
@@ -244,7 +278,7 @@ def _stop_bot(name: str, force: bool = False) -> dict:
             except Exception:
                 try: proc.kill()
                 except Exception: pass
-            killed_pids.append(proc.pid)
+        killed_pids.append(proc.pid)
 
     # Path 2: externally-started bots — only kill when force=True.
     # When force=False (the safe default), operator-launched cmd-window

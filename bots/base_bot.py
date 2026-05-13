@@ -703,6 +703,15 @@ class BaseBot:
         self.gamma_levels = None
         self._gamma_mtime = 0.0  # Reload watcher reads this, sees no change
 
+        # 2026-05-13: graceful shutdown flag — set when the dashboard
+        # queues a {"type": "shutdown"} command (see
+        # _handle_dashboard_command). Replaces the CTRL_BREAK_EVENT path
+        # that was lost when we removed CREATE_NEW_PROCESS_GROUP from
+        # dashboard _start_bot in commit 8b471af. On set: WS is closed →
+        # async-for in _connect_and_listen unblocks → run()'s outer loop
+        # exits → asyncio.run() returns → process exits cleanly.
+        self._shutdown_requested = False
+
         # Register bar callback
         self.aggregator.on_bar(self._on_bar)
 
@@ -1219,13 +1228,18 @@ class BaseBot:
         except Exception as e:
             logger.warning(f"[FMP] sanity loop failed to start (non-blocking): {e!r}")
 
-        while True:
+        while not self._shutdown_requested:
             try:
                 await self._connect_and_listen()
             except Exception as e:
+                if self._shutdown_requested:
+                    break
                 logger.error(f"Connection error: {e}")
+            if self._shutdown_requested:
+                break
             logger.info("Reconnecting in 5s...")
             await asyncio.sleep(5)
+        logger.info("[SHUTDOWN] run() loop exited — process will terminate")
 
     # ─── Dashboard State Pusher ─────────────────────────────────────
     async def _dashboard_loop(self):
@@ -1546,6 +1560,31 @@ class BaseBot:
         elif cmd_type == "test_trade":
             logger.info(f"[TEST TRADE] {cmd.get('action', 'ENTER_LONG')}")
             # TODO: fire test trade
+        elif cmd_type == "shutdown":
+            # 2026-05-13: graceful exit requested by dashboard / watchdog.
+            # Stop scanning, close WS, let run() return → process exits
+            # cleanly. Positions are NOT flattened — they remain to be
+            # managed by NT8 OCO brackets or the next bot start.
+            # Flattening on shutdown would turn a routine restart into a
+            # market-order event, which is too risky for the common
+            # "watchdog restarting after disconnect" case. Replaces the
+            # CTRL_BREAK_EVENT path lost in commit 8b471af.
+            logger.warning(
+                "[SHUTDOWN] command received via dashboard — exiting cleanly"
+            )
+            self._shutdown_requested = True
+            self._shutdown_reconciliation = True  # quiesce the recon loop too
+            # Close WS to unblock the async-for in _connect_and_listen.
+            # Wrap in try/except: ws may already be closed, or there may
+            # be no running event loop on this thread (shouldn't happen
+            # since we're called from _dashboard_loop, but defensive).
+            if self._ws is not None:
+                try:
+                    asyncio.ensure_future(self._ws.close())
+                except Exception as _e:
+                    logger.warning(
+                        f"[SHUTDOWN] ws.close scheduling failed: {_e!r}"
+                    )
 
     async def _connect_and_listen(self):
         uri = f"ws://127.0.0.1:{BOT_WS_PORT}"
