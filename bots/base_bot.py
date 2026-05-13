@@ -547,13 +547,26 @@ class BaseBot:
         # Daily Stats panel show "$0.00 / 0 trades" even when today's
         # trades are visible in the TODAY (CME Globex) summary card and
         # the per-bot trade_memory files on disk.
+        #
+        # CRITICAL: filter to THIS BOT'S trades only (bot_id == bot_name).
+        # position_manager.trade_history is hydrated from load_all_trades()
+        # which merges legacy + EVERY per-bot file — so it contains both
+        # prod's and sim's history. Without the filter, prod's risk
+        # counters would include sim's trades and vice versa (incorrect
+        # daily_pnl attribution; observed live 2026-05-13 first cut where
+        # both bots showed identical $114.22 because they both hydrated
+        # from sim's 4 wins).
         try:
             from datetime import datetime as _dt, time as _dt_time
             _midnight_local_today = _dt.combine(
                 _dt.now().date(), _dt_time.min
             ).timestamp()
+            _my_trades = [
+                t for t in self.positions.trade_history
+                if (t.get("bot_id") or "") == self.bot_name
+            ]
             self.risk.hydrate_from_trades(
-                self.positions.trade_history,
+                _my_trades,
                 since_ts=_midnight_local_today,
             )
         except Exception as _e:

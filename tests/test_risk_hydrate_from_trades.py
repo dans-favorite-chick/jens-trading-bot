@@ -203,6 +203,41 @@ class TestBaseBotInitCallsHydrate(unittest.TestCase):
                            "hydrate_from_trades must come AFTER "
                            "PositionManager(load_history=True)")
 
+    def test_basebot_filters_by_bot_id_before_hydrate(self):
+        """CRITICAL: hydration input must be filtered to THIS bot's
+        trades only (bot_id == bot_name).
+
+        position_manager.trade_history contains EVERY bot's trades
+        (legacy + every per-bot file, via load_all_trades). Hydrating
+        risk_manager from the unfiltered list would attribute sim's
+        trades to prod and vice versa. Observed live 2026-05-13:
+        first-cut fix had both bots showing identical $114.22 because
+        they both hydrated from sim's 4 wins."""
+        src = (Path(__file__).parent.parent / "bots" / "base_bot.py").read_text(
+            encoding="utf-8"
+        )
+        import re
+        m = re.search(
+            r"def __init__\(self\).*?(?=\n    (?:async )?def )",
+            src, re.DOTALL,
+        )
+        body = m.group(0)
+        # Extract the lines between "PositionManager(load_history=True)" and
+        # "hydrate_from_trades" — the bot_id filter must live in this gap.
+        idx_pm = body.find("PositionManager(load_history=True)")
+        idx_hyd = body.find("hydrate_from_trades")
+        gap = body[idx_pm:idx_hyd]
+        self.assertIn(
+            "bot_id", gap,
+            "between PositionManager and hydrate_from_trades, the code "
+            "must filter trade_history by bot_id. Without it, every bot "
+            "hydrates from EVERY bot's trades — cross-attribution bug."
+        )
+        self.assertIn(
+            "self.bot_name", gap,
+            "filter must compare bot_id against self.bot_name"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
