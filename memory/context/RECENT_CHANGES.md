@@ -5,6 +5,60 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+### 2026-05-13 ~08:40 CDT — graceful /shutdown via command queue (commit `dda680c`)
+
+Restores graceful-shutdown semantics that were lost in commit `8b471af`
+(bulletproof launch fix). When CREATE_NEW_PROCESS_GROUP was removed
+from `_start_bot`, the CTRL_BREAK_EVENT graceful-stop path broke too,
+leaving `/api/bot/stop` as a hard terminate() on every call. State
+persistence on every bar made the regression acceptable in the short
+term, but a clean shutdown path is still desirable for routine
+watchdog/operator restarts.
+
+**Approach:** reuse the existing `_state["_commands_<bot>"]` queue (bot
+polls every 2s via `_dashboard_loop`) rather than spinning up a new
+HTTP server on the bot. Surgical extension; no new ports, no new
+threads, no new aiohttp app.
+
+**Files changed:**
+- `bots/base_bot.py` — added `_shutdown_requested` flag in `__init__`,
+  added `"shutdown"` branch to `_handle_dashboard_command` (sets flag +
+  closes WS), modified `run()` outer loop to honor the flag with break
+  paths.
+- `dashboard/server.py` — added `_GRACEFUL_SHUTDOWN_TIMEOUT_S = 7.0`
+  module constant, modified `_stop_bot` to queue the shutdown command
+  + wait up to 7s for self-exit before falling back to terminate(). Old
+  terminate() path preserved verbatim as the fallback.
+- `tests/test_graceful_shutdown.py` (new) — 7 tests across 3 classes:
+  static checks for both files, behavioral tests for both the
+  happy-path (graceful exit skips terminate) and timeout-fallback
+  (terminate IS called after timeout).
+
+**Positions are NOT flattened on shutdown** — they remain to NT8 OCO
+brackets or the next bot start. Flattening on every routine restart
+would turn watchdog disconnect-recovery into a market-order event;
+operator can still flatten manually via Telegram or the 15:54 CT
+daily auto-flatten.
+
+**Test suite:** 1,718 → 1,725 pass (+7), 0 fail, 4 skipped.
+
+**Operational deployment:** the running dashboard (PID 13864) and bots
+(PIDs cycling, see KNOWN_ISSUES.md cyclic-disconnect issue) were
+started before the commit. The new code only takes effect on next
+restart of those processes. Until then, behavior is unchanged from
+the post-`8b471af` baseline (hard terminate on stop).
+
+---
+
+### 2026-05-13 ~08:30 CDT — session_debriefer Any import (commit `1d56862`)
+
+One-line typing fix: `from typing import Optional` →
+`from typing import Any, Optional` in `agents/session_debriefer.py`.
+Surfaced by pre-flight import check during 2026-05-12 evening restart
+investigation. No behavior change.
+
+---
+
 ### 2026-05-13 08:18 Central Daylight Time — Session changes: 1 files modified
 
 **Files changed:**

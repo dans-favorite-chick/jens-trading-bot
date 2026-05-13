@@ -2,7 +2,62 @@
 
 _Open issues that haven't been resolved yet. Resolved issues moved to semantic/lessons_learned.md._
 
-_Last refreshed: 2026-05-12 EOD (Sprint M Tier 2.3 shipped)._
+_Last refreshed: 2026-05-13 AM (graceful /shutdown shipped; 106s reconnect cycle observed)._
+
+## 🟠 OPEN — Bot disconnects every ~106s during 0-tick market conditions
+
+**Symptom (observed 2026-05-13 08:22 – 08:34 CDT, 10 cycles):**
+Both `prod_bot` and `sim_bot` disconnect from the bridge with
+`reason=nt8_stale_NNNs` after exactly ~106 seconds of uptime, every cycle.
+Watchdog auto-restarts via the new bulletproof `_start_bot` path (commit
+`8b471af`) — all restarts succeed; the bots reconnect within ~9s. But
+the cycle repeats indefinitely until ticks start flowing.
+
+**Sample (from `logs/watchdog.log`):**
+
+```
+08:32:39 Restart command sent — PID=7960  (prod)
+08:32:46 RECONNECTED after 9.1s downtime  (prod)
+... 106 seconds of UP ...
+08:34:32 DISCONNECTED — reason=nt8_stale_1215s, uptime_was=107s, total_disconnects=10
+```
+
+**Hypothesis (not yet confirmed):**
+The bot's application-level WS watchdog (`_ws_watchdog_loop` from commit
+`31efe2f`) is designed to force a reconnect if WS goes silent for >90s,
+to defend against silent TCP half-close. During 0-tick market lulls,
+the WS technically IS silent (no tick frames inbound), so the watchdog
+fires a defensive reconnect. The reconnect succeeds, then 90+s later it
+fires again, in a steady cycle.
+
+**Important — this is NOT caused by the CREATE_NEW_PROCESS_GROUP zombie
+bug fixed in 8b471af.** The cycle is a clean disconnect → clean
+auto-restart → reconnect, repeating. The bulletproof fix IS WORKING:
+10 successful restarts via the formerly-zombie path is the strongest
+production verification of `8b471af` to date.
+
+**Side observation:**
+Bridge health endpoint reports `nt8_status: live, nt8_last_heartbeat_age_s:
+0.1` while `ticks:0/s` — meaning TickStreamer's TCP-level heartbeat
+(`HEARTBEAT_MS=3000`) is fine, but no MARKET DATA ticks are flowing.
+This could be an NT8 data subscription issue, a TickStreamer bug, or
+just a genuinely silent overnight window. Whichever it is, the bot's
+WS watchdog shouldn't be reconnecting in a tight loop.
+
+**Action (deferred, not blocking):**
+1. Add a non-tick "is the WS itself alive?" check — e.g., bridge could
+   send a periodic `wsping` to bots that the bot's WS watchdog could
+   count as proof of life, distinct from tick flow.
+2. OR raise the WS watchdog threshold from 90s to e.g. 180-300s for
+   overnight/quiet hours so it doesn't fire on legitimate low-flow.
+3. OR investigate why TickStreamer is sending heartbeats but no ticks
+   during an open market window (likely a NT8 data subscription issue).
+
+**First observed:** 2026-05-13 08:22 CDT.
+**Total disconnects since first observation:** 10+ (still going as of
+08:34 CDT).
+
+## 🟡 Sprint M Tier 2.3 — tape reader tuning candidates (low priority, data-collection phase)
 
 ## 🟡 Sprint M Tier 2.3 — tape reader tuning candidates (low priority, data-collection phase)
 
