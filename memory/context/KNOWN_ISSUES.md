@@ -2,7 +2,27 @@
 
 _Open issues that haven't been resolved yet. Resolved issues moved to semantic/lessons_learned.md._
 
-_Last refreshed: 2026-04-25 EOD._
+_Last refreshed: 2026-05-12 EOD (Sprint M Tier 2.3 shipped)._
+
+## 🟡 Sprint M Tier 2.3 — tape reader tuning candidates (low priority, data-collection phase)
+
+### Tape reader threshold may be too low for active regimes
+
+**Symptom**: with `threshold_contracts=25` (default in `core/tape_reader.py`), the 50-print rolling buffer filled within seconds of bot launch overnight. RTH activity will likely fill it even faster, meaning the "rolling window" effectively becomes a sliding view of the last few minutes only.
+
+**Action**: after a few RTH sessions of data collection, audit the size distribution of recorded prints. If the median is well above 25, raise the threshold (try 50, 100). Pass via `TapeReader(threshold_contracts=N)` in `bots/base_bot.py:__init__`. Or — better — make the threshold adaptive based on session-average size × K (e.g., 5x).
+
+**First observed**: 2026-05-12 23:19 CDT (immediately after Tier 2.3 shipped).
+
+### NT8 `vol` field semantics — per-trade vs aggregated
+
+**Symptom**: tape_reader recorded 218 / 219 / 221 contract single-tick sizes at 23:18:56 CDT all at the same price. Three consecutive identical-price ticks of 200+ contracts each is consistent with an institutional sweep, BUT could also be an artifact of NT8 reporting aggregated bar volume rather than per-trade size on some tick subtypes.
+
+**Why this matters**: side classification via the Lee-Ready quote rule (in `_classify_side`) assumes each tick = one trade. If `vol` is aggregated, the "last price" used for side detection may not represent the actual mix of buy vs sell flow inside the aggregation window.
+
+**Action**: open a forensic pass on `logs/volumetric_history.jsonl` or raw tick stream from the bridge to count how often `vol >= 50` ticks have `bid != ask` consistency with the quote rule. If side classifications match other footprint-side detection (in `footprint_cvd_reversal`), the data is fine. If not, may need to filter by tick subtype or use a different size proxy.
+
+**Reference**: TickStreamer.cs emits tick records as `{"vol": <int>}` per the docstring at line ~332 of base_bot.py.
 
 ## 🔴 OPEN
 
