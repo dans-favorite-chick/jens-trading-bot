@@ -77,6 +77,13 @@ def _session_start_ct_epoch(now_ct=None) -> float:
 
     `now_ct` is an optional CT-aware datetime for testability. Production
     callers pass nothing; tests freeze "now" to verify boundary edges.
+
+    NOTE: this is the Globex-session boundary (resets at 17:00 CT). For
+    the dashboard's TODAY P&L card we now use the calendar-day boundary
+    (resets at 00:00 CT) via `_calendar_day_start_ct_epoch()` instead —
+    so it agrees with the bot's RiskManager (which uses calendar day for
+    daily_pnl reset). The Globex boundary is still used by
+    `_load_session_trades_by_bot()` + the per-session-trade listings.
     """
     from datetime import datetime, timedelta
     try:
@@ -98,6 +105,43 @@ def _session_start_ct_epoch(now_ct=None) -> float:
             hour=17, minute=0, second=0, microsecond=0,
         )
     return session_start.timestamp()
+
+
+def _calendar_day_start_ct_epoch(now_ct=None) -> float:
+    """Unix epoch seconds for the start of TODAY (calendar day) in CT.
+
+    Returns the timestamp of the most recent 00:00 America/Chicago — i.e.
+    today's midnight (CT-local). Used by `/api/today-pnl` so the TODAY
+    card on the dashboard agrees with the bot's RiskManager.daily_pnl
+    (which also resets at calendar midnight via `_maybe_daily_reset`).
+
+    Why not Globex session (17:00 CT)?
+    - The bot's RiskManager resets at calendar midnight.
+    - Pre-2026-05-13, /api/today-pnl used Globex 17:00 boundary while
+      Daily Stats panel showed RiskManager values — so from 17:00 CT
+      to 00:00 CT every evening, the two panels disagreed (TODAY card
+      showed $0 while Daily Stats still showed the day's P&L). 7 hours
+      of operator confusion every night.
+    - Switching the dashboard endpoint to calendar day aligns the two
+      surfaces.
+    - We KEEP `_session_start_ct_epoch()` available (Globex semantic)
+      for any place that genuinely needs session-scoped trade listings
+      (`_load_session_trades_by_bot` still uses it).
+
+    `now_ct` is an optional CT-aware datetime for testability.
+    """
+    from datetime import datetime, timedelta
+    try:
+        from zoneinfo import ZoneInfo
+        ct = ZoneInfo("America/Chicago")
+    except Exception:
+        from datetime import timezone
+        ct = timezone(timedelta(hours=-5))
+
+    if now_ct is None:
+        now_ct = datetime.now(ct)
+    midnight = now_ct.replace(hour=0, minute=0, second=0, microsecond=0)
+    return midnight.timestamp()
 
 
 def _load_session_trades_by_bot() -> dict[str, list[dict]]:
@@ -578,7 +622,13 @@ def api_today_pnl():
             "per_bot": {}, "per_strategy": {}, "trade_count": 0,
         })
 
-    session_start = _session_start_ct_epoch()
+    # 2026-05-13: switched from Globex session boundary (17:00 CT) to
+    # calendar day boundary (00:00 CT) so this endpoint AGREES with the
+    # bot's RiskManager.daily_pnl shown on the Daily Stats panel. The
+    # Globex boundary caused 7 hours of operator confusion every evening
+    # (17:00 → midnight): TODAY card would show $0 while Daily Stats still
+    # showed the day's wins. See _calendar_day_start_ct_epoch() docstring.
+    session_start = _calendar_day_start_ct_epoch()
     per_bot: dict = {}
     per_strategy: dict = {}
     session_rows = []
