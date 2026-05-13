@@ -541,6 +541,25 @@ class BaseBot:
         # P0.1 (D13): load durable trade history so dashboard P&L and any
         # in-process consumer of trade_history survive bot restart.
         self.positions = PositionManager(load_history=True)
+        # 2026-05-13: hydrate today's risk counters from the just-loaded
+        # trade_history. Without this, daily_pnl/trades_today/wins_today/
+        # losses_today reset to 0 on every restart — making the dashboard
+        # Daily Stats panel show "$0.00 / 0 trades" even when today's
+        # trades are visible in the TODAY (CME Globex) summary card and
+        # the per-bot trade_memory files on disk.
+        try:
+            from datetime import datetime as _dt, time as _dt_time
+            _midnight_local_today = _dt.combine(
+                _dt.now().date(), _dt_time.min
+            ).timestamp()
+            self.risk.hydrate_from_trades(
+                self.positions.trade_history,
+                since_ts=_midnight_local_today,
+            )
+        except Exception as _e:
+            logger.warning(
+                "[RISK_HYDRATE] startup hydration failed (non-blocking): %r", _e
+            )
         # 2026-05-12: per-bot trade memory file (avoids prod/sim shared-file
         # write race that previously dropped prod's closed trades when sim
         # rewrote the file with its older in-memory view).

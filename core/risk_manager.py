@@ -293,6 +293,78 @@ class RiskManager:
         self.state.kill_reason = ""
         logger.info("Daily risk state reset")
 
+    def hydrate_from_trades(self, trades: list[dict], since_ts: float) -> None:
+        """Initialize daily counters from historical trades >= since_ts.
+
+        2026-05-13 fix: prior to this method, every bot restart reset
+        daily_pnl / trades_today / wins_today / losses_today to 0 — even
+        though today's trades were already persisted to disk and
+        position_manager hydrated trade_history from them (via the
+        2026-05-13 audit fix to core/position_manager.py). Result: the
+        operator-visible Daily Stats panel showed `$0.00 / 0 trades`
+        after any restart mid-session, while the TODAY (CME Globex)
+        summary card (which reads /api/today-pnl directly from the
+        trade_memory files) correctly showed the day's totals.
+
+        Now BaseBot.__init__ calls this with the merged trade_history
+        + a `since_ts` of local-midnight-today (matching the existing
+        `_maybe_daily_reset` calendar-day boundary). Counters reflect
+        the on-disk truth from boot.
+
+        Args:
+            trades: list of trade dicts from trade_memory (any shape
+                that has `exit_time`/`recorded_at`/`entry_time`/`ts`
+                and `pnl_dollars` or `net_pnl`).
+            since_ts: Unix epoch seconds. Trades exiting at or after
+                this timestamp count toward today.
+        """
+        todays: list[tuple[float, dict]] = []
+        for t in trades:
+            for k in ("exit_time", "recorded_at", "entry_time", "ts"):
+                v = t.get(k)
+                if v is None:
+                    continue
+                try:
+                    if isinstance(v, (int, float)) and float(v) >= since_ts:
+                        todays.append((float(v), t))
+                        break
+                except (TypeError, ValueError):
+                    continue
+
+        # Replay in chronological order so consecutive_losses ends up
+        # accurate (last-N pattern matters for the cooloff gate).
+        todays.sort(key=lambda x: x[0])
+
+        consecutive = 0
+        for ts, t in todays:
+            try:
+                pnl = float(t.get("net_pnl", t.get("pnl_dollars", 0)) or 0)
+            except (TypeError, ValueError):
+                pnl = 0.0
+            self.state.daily_pnl += pnl
+            self.state.trades_today += 1
+            if pnl > 0:
+                self.state.wins_today += 1
+                consecutive = 0
+            elif pnl < 0:
+                self.state.losses_today += 1
+                consecutive += 1
+            if ts > self.state.last_trade_time:
+                self.state.last_trade_time = ts
+
+        self.state.consecutive_losses = consecutive
+        if self.state.daily_pnl <= -RECOVERY_MODE_TRIGGER:
+            self.state.recovery_mode = True
+
+        if todays:
+            logger.info(
+                "[RISK_HYDRATE] %d today's trades replayed — "
+                "daily_pnl=$%.2f W/L=%d/%d consec_losses=%d",
+                len(todays), self.state.daily_pnl,
+                self.state.wins_today, self.state.losses_today,
+                consecutive,
+            )
+
     def to_dict(self) -> dict:
         """Serialize state for dashboard."""
         return {
