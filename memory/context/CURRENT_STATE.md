@@ -15,10 +15,11 @@ _Last updated: **2026-05-13 EOD** (after Sprint M Tier 1 live + 12-file data-int
 | Item | State |
 |---|---|
 | Branch | `weekly-evolution/2026-05-10` (pushed to origin, not merged to main) |
-| HEAD | `0c24a8e` (19 commits today) |
-| Test suite | **1,744 pass / 4 skip / 0 fail** |
+| HEAD | `7f1411f` (21 commits today) |
+| Test suite | **1,751 pass / 4 skip / 0 fail** |
 | Today's P&L | sim **$108.40** (5 trades, 4W/1L, 80% WR) / prod $0 (windows gate removed too late in day) |
 | Dashboard panels | TODAY card + Daily Stats now agree all 24h (calendar-day boundary, commit `0c24a8e`) |
+| bias_momentum fast-abort | FIXED commit `7f1411f` — 8s commission-loss round-trips eliminated via TRAIL min-profit floor + BE uses initial_stop_price + grace covers tighten_stop |
 | Stack health | bridge / dashboard / watchdog / watcher_agent / prod / sim — all alive, all on latest code |
 | NT8 + TickStreamer | Live; new DLL compiled 16:42; `imbalance_ratio` field flowing in volumetric_bar messages |
 | Alerting | Self-healing — PhoenixWatcher 5-min auto-respawn pattern installed |

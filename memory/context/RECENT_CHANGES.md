@@ -47,6 +47,58 @@ Test suite: 1,727 pass / 4 skip / 0 fail (no delta, no regressions).
 
 ---
 
+### 2026-05-13 ~18:00 CDT — bias_momentum fast-abort bug FIXED (commit `7f1411f`)
+
+User flagged: two bias_momentum LONG trades closed in **8s and 20s** at
+near-entry prices with reason=stop_loss despite the market not moving
+adversely. Forensic millisecond log of trade f9781751 (17:39:29→37):
+
+  OPEN @ 29561.0 → TRAIL to 29561.25 (1s later) → BE STOP to 29561.50
+  (same ms) → EXIT_PENDING @ 29561.50 → CLOSE -$3.82 (8s hold)
+
+Three compounding bugs killed the trade within 1 second of entry:
+
+1. `_trail_stop()` had NO minimum-profit guard. `mid = (entry + price)
+   / 2` produced a 1-tick stop on +2t of profit. Any adverse blip
+   killed it.
+2. `BE_STOP` recomputed `stop_dist = abs(entry - pos.stop_price)` AFTER
+   TRAIL had just shrunk stop_price. So stop_dist became 1 tick →
+   BE trigger at 0.5R = +0.5t → BE-stop set to current price →
+   instant exit.
+3. `trend_stall_grace_s` (60s) only suppressed `exit_signal`, not
+   `tighten_stop`. So within the grace window, TRAIL still fired on
+   stall MODERATE, kicking off the death spiral.
+
+Surgical 5-part fix shipped in `7f1411f`:
+
+A. Position dataclass adds `initial_stop_price` field — preserves the
+   entry-time stop independent of subsequent mutations.
+B. `open_position()` captures it.
+C. `_trail_stop()` requires `min_profit_ticks=8` (= 2 MNQ pts default)
+   of in-the-money movement before firing. Below that → no-op.
+D. BE_STOP block reads `pos.initial_stop_price` for `stop_dist`
+   computation. So R is always measured from the original wide stop,
+   not whatever TRAIL shrunk it to.
+E. Grace-window suppression extended to `tighten_stop` in addition to
+   `exit_signal`. New `_trend_tighten_grace_logged` flag.
+
+7 regression tests (`tests/test_fast_abort_fix.py`), including an
+end-to-end replay of the exact 2026-05-13 17:39 forensic state — the
+post-fix code path keeps the stop at the original 29531.75 and the
+trade lives. Test suite: 1,744 → 1,751 pass (+7), 0 fail.
+
+Deployment: sim_bot and prod_bot bounced at 17:58 — fresh PIDs 23972
+and 25236 running the new code. Watchdog auto-restart proven on
+fast-cycle bounces.
+
+Operator impact: bias_momentum's 84% fast-abort loser pattern (avg
+-$9.33 at 1.3 min hold per deep-dive analysis) should collapse to
+either real stop-outs at the proper 117-tick stop or surviving
+winners via ema_dom_exit. The 8-20s commission-loss round-trips are
+gone.
+
+---
+
 ### 2026-05-13 ~17:30 CDT — dashboard panels now agree all 24h (commit `0c24a8e`)
 
 User flagged that the TODAY (CME GLOBEX) card was STILL showing $0 / 0
