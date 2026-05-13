@@ -15,6 +15,7 @@ import logging
 import time
 import urllib.request
 from datetime import datetime, date
+from typing import Optional
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -48,6 +49,7 @@ from core.day_classifier import DayClassifier
 from core.trade_memory import TradeMemory
 from core.history_logger import HistoryLogger
 from core.strategy_tracker import StrategyTracker
+from core.tape_reader import TapeReader
 from core import telegram_notifier as tg
 from core.cockpit import Cockpit
 from core.equity_tracker import EquityTracker
@@ -543,6 +545,13 @@ class BaseBot:
         # write race that previously dropped prod's closed trades when sim
         # rewrote the file with its older in-memory view).
         self.trade_memory = TradeMemory(bot_id=self.bot_name)
+        # Sprint M Tier 2.3 (2026-05-12): tape reader — rolling capture of
+        # large-print (>=25 contract) ticks + aggressor-side classification.
+        # Surfaced in market snapshot as `tape_state`; pure observation
+        # tonight (no IQS gating, no entry influence) so the next ~30 days
+        # accumulate data on whether direction-aligned large prints predict
+        # subsequent moves before we wire them as a bonus.
+        self.tape_reader = TapeReader()
         self.history = HistoryLogger(bot_name=self.bot_name)
         self.tracker = StrategyTracker()
         self.strategies: list[BaseStrategy] = []
@@ -1638,6 +1647,14 @@ class BaseBot:
                 except Exception:
                     pass  # Footprint errors must not break tick loop
 
+                # Sprint M Tier 2.3: feed tape reader on every tick.
+                # record_tick is internally try-safe but wrap defensively
+                # so any future expansion can't break the tick loop.
+                try:
+                    self.tape_reader.record_tick(tick)
+                except Exception:
+                    pass
+
                 # NEW (shadow): feed volume profile
                 try:
                     from datetime import datetime as _dt
@@ -2706,6 +2723,10 @@ class BaseBot:
             _sweep_state = self.sweep_watcher.get_state()
             if _sweep_state:
                 market["sweep_state"] = _sweep_state
+            # Sprint M Tier 2.3: tape reader's rolling large-print window.
+            # Pure observation field — consumed only by future analysis
+            # tooling tonight, no strategy reads it yet.
+            market["tape_state"] = self.tape_reader.get_state()
         except Exception as _e:
             logger.debug(f"[CONTEXT_ENRICH] market enrich failed: {_e!r}")
 
