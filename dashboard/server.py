@@ -546,7 +546,7 @@ def api_strategy_risk():
 
 @app.route("/api/today-pnl")
 def api_today_pnl():
-    """B79 + B82: compute current CME-session P&L from trade_memory.json
+    """B79 + B82: compute current CME-session P&L from trade_memory files
     — the durable source of truth that survives bot and dashboard restarts.
 
     B82 change: "today" now means "current globex session" (most-recent
@@ -554,20 +554,27 @@ def api_today_pnl():
     coherent across the 16:00-17:00 daily-flatten dead zone and matches
     the session boundary used by /api/status and /api/trades.
 
+    2026-05-13 fix: was reading legacy logs/trade_memory.json directly,
+    which has been frozen since commit 02b0efd split trade memory into
+    per-bot files (trade_memory_<bot>.json) to end the prod/sim file-
+    write race. Now uses `load_all_trades()` — the same loader that
+    backs `_load_session_trades_by_bot` — which reads the legacy file
+    AND every per-bot file and merges them, with per-bot files winning
+    on trade_id collision.
+
     Returns per-bot and per-strategy P&L.
     """
-    tm_path = os.path.join(PROJECT_ROOT, "logs", "trade_memory.json")
     try:
-        with open(tm_path, encoding="utf-8") as f:
-            rows = json.load(f)
+        from core.trade_memory import load_all_trades
+        rows = load_all_trades(logs_dir=os.path.join(PROJECT_ROOT, "logs"))
     except Exception as e:
         return safe_jsonify({
-            "error": f"trade_memory read: {e}",
+            "error": f"trade_memory load_all_trades: {e}",
             "per_bot": {}, "per_strategy": {}, "trade_count": 0,
         })
     if not isinstance(rows, list):
         return safe_jsonify({
-            "error": "trade_memory.json shape != list",
+            "error": f"load_all_trades returned wrong shape ({type(rows).__name__})",
             "per_bot": {}, "per_strategy": {}, "trade_count": 0,
         })
 
