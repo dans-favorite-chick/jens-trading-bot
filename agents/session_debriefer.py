@@ -23,7 +23,7 @@ import json
 import logging
 import os
 from datetime import datetime, date
-from typing import Optional
+from typing import Any, Optional
 
 from agents.ai_client import ask, ask_gemini
 
