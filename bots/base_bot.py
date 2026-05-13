@@ -414,50 +414,77 @@ def _move_nt8_stop(pos, old_stop_price: float, new_stop_price: float) -> None:
         logger.error(f"[STOP_MOVE_EXCEPTION:{pos.trade_id}] {e}")
 
 
-def _trail_stop(pos, price: float, min_profit_ticks: int = 8):
+def _trail_stop(pos, price: float, min_profit_ticks: int = 8,
+                trail_distance_ticks: int = 16):
     """
-    Trail stop to midpoint between entry and current price.
-    Only moves in favorable direction — never worsens risk.
+    High-water-mark trailing stop. Stop anchors at the BEST (peak) price
+    seen since entry, trailed `trail_distance_ticks` behind it. Only
+    moves in favorable direction — never worsens risk.
 
-    2026-05-13 fix: requires `min_profit_ticks` of in-the-money price
-    movement before firing. Was unconditional, which caused the fast-
-    abort bug — within seconds of entry, the stall detector would
-    return `tighten_stop=True` on tiny mean-reversion noise, TRAIL
-    would set stop to (entry+price)/2 ≈ entry + 0.5 ticks, the next
-    1-tick adverse blip would trigger the "stop_loss" exit. Net: 8-20s
-    trades closing at -$3 to -$5 commission losses with no real
-    market movement. See 2026-05-13 forensic log of trade f9781751.
+    2026-05-13 v2 (post-7f1411f): replaced the original
+    `(entry + price) / 2` midpoint formula. Midpoint trail gave back
+    50% of every unrealized peak — observed trade 398523b9 closed at
+    +$0.18 after peaking at +23t, because midpoint moved stop to
+    entry+11t and a normal 12t retrace clipped it. Research review
+    (2026-05-13) confirmed midpoint isn't a published pattern;
+    high-water-mark with fixed buffer is the Chandelier shape minus
+    ATR dependency. Buffer of 16t = ~1× ATR(5m) on current MNQ tape.
 
-    With min_profit_ticks=8 (= 2 MNQ pts at 0.25 tick size), TRAIL
-    fires only after the trade has shown ~$4 of unrealized profit —
-    enough to be a real run, not noise.
+    Mechanism:
+      1. Update pos.high_water_price to the new peak if applicable.
+      2. Require min_profit_ticks of peak-profit before activating (so
+         trail can't fire from a momentary tick blip past entry).
+      3. Compute candidate stop = peak - trail_distance_ticks.
+      4. Move pos.stop_price only if candidate is BETTER than current.
 
     B76: after mutating pos.stop_price, emit write_modify_stop OIF to
     actually move the NT8 stop via cancel+replace.
     """
-    # 2026-05-13 fast-abort fix: require minimum profit before trailing.
-    # TICK_SIZE imported at module scope; if not available, use 0.25 MNQ default.
     try:
         _tick = TICK_SIZE
     except NameError:
         _tick = 0.25
-    profit_ticks = ((price - pos.entry_price) / _tick) if pos.direction == "LONG" \
-                   else ((pos.entry_price - price) / _tick)
-    if profit_ticks < min_profit_ticks:
+
+    # 1. Update high-water-mark (peak favorable price since entry)
+    if not getattr(pos, "high_water_price", 0):
+        pos.high_water_price = pos.entry_price
+    if pos.direction == "LONG":
+        if price > pos.high_water_price:
+            pos.high_water_price = price
+    else:  # SHORT
+        if price < pos.high_water_price:
+            pos.high_water_price = price
+
+    # 2. Require minimum peak profit before activating
+    peak_profit_ticks = (
+        (pos.high_water_price - pos.entry_price) / _tick
+        if pos.direction == "LONG"
+        else (pos.entry_price - pos.high_water_price) / _tick
+    )
+    if peak_profit_ticks < min_profit_ticks:
         return
 
-    mid = (pos.entry_price + price) / 2
+    # 3. Compute candidate stop: peak minus the trail buffer
     new_stop = None
-    if pos.direction == "LONG" and mid > pos.stop_price:
-        new_stop = round(mid, 2)
-    elif pos.direction == "SHORT" and mid < pos.stop_price:
-        new_stop = round(mid, 2)
+    if pos.direction == "LONG":
+        candidate = pos.high_water_price - trail_distance_ticks * _tick
+        if candidate > pos.stop_price:
+            new_stop = round(candidate, 2)
+    else:
+        candidate = pos.high_water_price + trail_distance_ticks * _tick
+        if candidate < pos.stop_price:
+            new_stop = round(candidate, 2)
     if new_stop is None:
         return
+
+    # 4. Move the stop (and emit NT8 modify-stop OIF via cancel+replace)
     old_stop = pos.stop_price
     pos.stop_price = new_stop
-    logger.info(f"[TRAIL:{pos.trade_id}] Stop trailed to {pos.stop_price:.2f} (mid) "
-                f"after +{profit_ticks:.0f}t profit")
+    logger.info(
+        f"[TRAIL:{pos.trade_id}] Stop trailed to {pos.stop_price:.2f} "
+        f"(peak={pos.high_water_price:.2f}, buffer={trail_distance_ticks}t, "
+        f"+{peak_profit_ticks:.0f}t peak profit)"
+    )
     _move_nt8_stop(pos, old_stop, new_stop)
 
 

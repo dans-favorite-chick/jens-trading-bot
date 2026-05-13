@@ -89,6 +89,7 @@ def test_trail_stop_does_nothing_under_min_profit():
     pos.entry_price = 29561.0
     pos.direction = "LONG"
     pos.stop_price = 29531.75
+    pos.high_water_price = 29561.0   # initialized at entry
     pos.trade_id = "test-fast-abort"
 
     # Only +2 ticks of profit — well under the default 8-tick floor.
@@ -105,7 +106,8 @@ def test_trail_stop_does_nothing_under_min_profit():
 
 
 def test_trail_stop_fires_above_min_profit():
-    """Once price has moved >= min_profit_ticks favorably, TRAIL fires."""
+    """Once price has moved >= min_profit_ticks favorably, TRAIL fires.
+    With high-water-mark formula and 16-tick default buffer."""
     from bots.base_bot import _trail_stop
 
     pos = MagicMock()
@@ -113,14 +115,55 @@ def test_trail_stop_fires_above_min_profit():
     pos.direction = "LONG"
     pos.stop_price = 29531.75
     pos.trade_id = "test-trail-active"
+    pos.high_water_price = 29561.0  # initialized at entry
 
-    # +10 ticks of profit (= 2.5 MNQ points) — past the 8-tick default floor.
-    _trail_stop(pos, price=29563.5)
+    # Price at +12 ticks of profit (= 3.0 MNQ points) — past the 8-tick floor.
+    # peak = 29564.0 (= entry + 12t). Stop = peak - 16t = 29560.0.
+    # But 29560.0 < pos.stop_price (29531.75 — no wait, 29560 > 29531.75).
+    # So stop should move to 29560.0.
+    _trail_stop(pos, price=29564.0)
 
-    # Mid = (29561.0 + 29563.5)/2 = 29562.25 — should be the new stop
-    assert pos.stop_price == 29562.25, (
-        f"expected stop trailed to 29562.25 (mid of 29561+29563.5), got {pos.stop_price}"
+    # Expected: peak=29564.0, stop=peak - 16t = 29560.0
+    assert pos.stop_price == 29560.0, (
+        f"expected stop trailed to 29560.0 (peak 29564.0 − 16t buffer), got {pos.stop_price}"
     )
+    # high_water_price should have been updated
+    assert pos.high_water_price == 29564.0
+
+
+def test_trail_uses_high_water_not_current():
+    """Trail should anchor at peak price, NOT current price. If price
+    pulls back from peak, trail stays at peak−buffer, doesn't follow
+    price down."""
+    from bots.base_bot import _trail_stop
+
+    pos = MagicMock()
+    pos.entry_price = 29561.0
+    pos.direction = "LONG"
+    pos.stop_price = 29531.75
+    pos.trade_id = "test-hwm-anchor"
+    pos.high_water_price = 29561.0
+
+    # First call: price hits a high of 29577.0 (+64 ticks = 16 pts). Trail kicks in.
+    _trail_stop(pos, price=29577.0)
+    # peak = 29577.0, stop = peak - 16t = 29573.0
+    assert pos.stop_price == 29573.0
+    assert pos.high_water_price == 29577.0
+
+    # Second call: price pulls back to 29570.0 (still profitable but lower than peak)
+    # The high_water_price should NOT update down, and stop should NOT move.
+    _trail_stop(pos, price=29570.0)
+    assert pos.high_water_price == 29577.0, (
+        "high_water must NOT drop when price pulls back from peak"
+    )
+    assert pos.stop_price == 29573.0, (
+        "stop must NOT move down when price pulls back"
+    )
+
+    # Third call: price makes a new high at 29585.0. Trail ratchets up.
+    _trail_stop(pos, price=29585.0)
+    assert pos.high_water_price == 29585.0
+    assert pos.stop_price == 29581.0  # 29585.0 - 16t
 
 
 # ── BE_STOP uses initial_stop_price (static check on the source) ───────
@@ -179,6 +222,51 @@ def test_grace_window_covers_tighten_stop():
 
 
 # ── End-to-end: replay the exact forensic scenario ─────────────────────
+
+def test_398523b9_hwm_trail_keeps_room():
+    """Replay the 2026-05-13 18:00 trade 398523b9 scenario:
+      - Entry @ 29592.25 (LONG)
+      - Peak @ 29597.75 (+22t)
+      - Retrace to 29594.75 (back to +10t, a 12t pullback from peak)
+
+    Pre-v2 fix: midpoint trail moved stop to 29595.12 (entry + 11.5t).
+      The 12t retrace clipped the stop → exit at +10t / $0.18 net.
+
+    Post-v2 fix: HWM trail moves stop to peak - 16t = 29593.75 (entry + 6t).
+      The 12t retrace from peak does NOT trigger (29594.75 > 29593.75).
+      Trade survives to develop further."""
+    from bots.base_bot import _trail_stop
+
+    pos = MagicMock()
+    pos.entry_price = 29592.25
+    pos.direction = "LONG"
+    pos.stop_price = 29562.75  # initial 117t stop
+    pos.high_water_price = 29592.25
+    pos.trade_id = "398523b9-replay"
+
+    # Price runs to peak +22t
+    _trail_stop(pos, price=29597.75)
+    expected_stop = 29597.75 - 16 * 0.25
+    assert pos.stop_price == expected_stop, (
+        f"expected stop at peak-16t = {expected_stop}, got {pos.stop_price}"
+    )
+    assert pos.high_water_price == 29597.75
+
+    # Now price retraces to 29594.75 (12t pullback from peak)
+    # NEW trail should NOT move stop (peak unchanged), and
+    # the stop at 29593.75 is BELOW the retrace low of 29594.75
+    # so the position survives the pullback.
+    _trail_stop(pos, price=29594.75)
+    assert pos.stop_price == 29593.75, (
+        f"expected stop unchanged at 29593.75, got {pos.stop_price}"
+    )
+    assert 29594.75 > pos.stop_price, (
+        "retrace low 29594.75 must remain ABOVE the trail stop 29593.75 — "
+        "this is the entire point of the HWM-trail fix vs the old "
+        "midpoint formula which would have set stop to 29595.0+ and "
+        "been triggered by the same retrace."
+    )
+
 
 def test_forensic_replay_trade_survives_with_fixes():
     """Reproduce the 2026-05-13 17:39 trade f9781751 conditions and confirm

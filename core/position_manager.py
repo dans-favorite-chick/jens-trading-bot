@@ -88,6 +88,20 @@ class Position:
     # reads this field instead of `stop_price`.
     initial_stop_price: float = 0.0   # Set by PositionManager.open_position
 
+    # ── 2026-05-13 v2 (trail too-tight fix): high-water-mark tracker ───
+    # The first fast-abort fix (commit 7f1411f) added a min-profit floor
+    # before TRAIL fires + extended the grace window. But the underlying
+    # `(entry+price)/2` midpoint formula still gave back 50% of every
+    # unrealized peak — observed trade 398523b9 closed at +$0.18 / 10
+    # ticks after peaking at +23 ticks, because the midpoint trail moved
+    # stop to entry+11t and a normal 12t retrace clipped it. Research
+    # confirmed midpoint trail isn't a published pattern. Replaced with
+    # high-water-mark trail (Chandelier-style without ATR dependency):
+    # stop = peak_favorable_price - trail_distance_ticks. This field
+    # tracks the running peak so the trail anchors to the BEST price
+    # seen, not the LIVE price. Initialized to entry_price at open.
+    high_water_price: float = 0.0   # Set by PositionManager.open_position
+
     # ── P0.6 (D7) exit_pending state ───────────────────────────────
     # Flipped by mark_exit_pending(). While exit_pending is True, the
     # Position remains in the PositionManager (NOT yet closed) but is
@@ -519,6 +533,7 @@ class PositionManager:
             contracts=contracts,
             stop_price=stop_price,
             initial_stop_price=stop_price,   # 2026-05-13: preserve original R
+            high_water_price=entry_price,    # 2026-05-13 v2: HWM trail anchor
             target_price=target_price,
             strategy=strategy,
             reason=reason,
