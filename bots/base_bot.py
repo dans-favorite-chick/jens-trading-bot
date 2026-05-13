@@ -4664,6 +4664,7 @@ class BaseBot:
             "volume_profile":        lambda: self.volume_profile.to_dict(),
             "climax_state":          lambda: self.reversal_detector.get_state(),
             "sweep_state":           lambda: self.sweep_watcher.get_state(),
+            "tape_state":            lambda: self.tape_reader.get_state(),
             "chart_patterns_v1":     lambda: self._last_chart_patterns_v1,
             "gamma_flip_state":      lambda: self.gamma_flip_detector.get_state(),
             "vix_term_structure":    lambda: self._last_vix_term,
