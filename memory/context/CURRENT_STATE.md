@@ -64,9 +64,14 @@ unified trade history regardless of which file each trade lives in.
 - **106s reconnect cycle when NT8 ticks=0**. Pre-existing WS watchdog
   defense kicks in during NT8 silent windows (overnight maintenance,
   weekend gaps, today's internet outage). Logged in KNOWN_ISSUES.md.
-- **TickStreamer.cs F5 recompile in NT8**. Sprint M Tier 1 C# side
-  (adaptive imbalance ratio) still pending operator hands-on step.
-  Python side has been deployed since commit `a4ab967`.
+- ~~**TickStreamer.cs F5 recompile in NT8**~~ ✅ DONE 2026-05-13 17:01.
+  DLL rebuilt at 16:42, fresh TickStreamer instance on TCP port 64821
+  from 17:00:09, `data/volumetric_latest.json` now contains
+  `imbalance_ratio: 3.5` and `max_imbalance_ratio: 21.0`. Sprint M
+  Tier 1 fully live end-to-end. F5 won't need to be repeated unless
+  `TickStreamer.cs` source changes again (workflow: copy repo → NT8
+  Indicators dir → F5 in NinjaScript Editor → remove + re-add the
+  indicator on the chart, or close/reopen chart).
 - **vwap_pullback bleed diagnosed 2026-05-13**: 52 trades / 65% WR but
   net -$169.64. Realized R:R = 0.446 (vs configured 1.8). Losers cluster
   at full stop (~-$60), winners exit via `ema_dom_exit` at ~$25.
