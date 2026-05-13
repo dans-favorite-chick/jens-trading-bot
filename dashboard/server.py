@@ -182,12 +182,23 @@ def _start_bot(name: str) -> dict:
             os.makedirs(log_dir, exist_ok=True)
             log_path = os.path.join(log_dir, f"{name}_bot_stdout.log")
             log_file = open(log_path, "a", buffering=1)  # Line-buffered
+            # 2026-05-13: removed `creationflags=CREATE_NEW_PROCESS_GROUP` on
+            # Windows — that flag (originally added so `send_signal(
+            # CTRL_BREAK_EVENT)` could deliver graceful shutdown) was the root
+            # cause of subprocesses dying silently 2-3 min after launch with no
+            # traceback. Documented in memory/context/MORNING_2026-05-12.md
+            # ("Open Issue #1") and confirmed by forensic on 2026-05-12 evening
+            # (8 consecutive watchdog restart attempts, every one a zombie).
+            # Trade-off: _stop_bot's graceful Ctrl+Break path becomes a hard
+            # terminate(). Acceptable — bot persists state on every bar via
+            # tick_aggregator.save_state(), so worst case is losing a few
+            # seconds of state. Reliable stay-alive beats clean-shutdown.
             proc = subprocess.Popen(
                 [sys.executable, "-u", script],  # -u = unbuffered stdout
                 cwd=PROJECT_ROOT,
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
+                creationflags=0,
             )
             _bot_processes[name] = proc
             logger.info(f"Started {name} bot (pid {proc.pid}), log → {log_path}")
@@ -196,24 +207,37 @@ def _start_bot(name: str) -> dict:
             return {"ok": False, "error": str(e)}
 
 
-def _stop_bot(name: str) -> dict:
-    """Stop a running bot — whether started by dashboard or externally.
+def _stop_bot(name: str, force: bool = False) -> dict:
+    """Stop a running bot.
 
-    First kills a tracked subprocess (if any). Then scans for ANY python
-    process whose command line matches `{name}_bot.py` (handles externally
-    started bots from launch_all.bat or PowerShell) and kills those too.
+    Args:
+        name: 'prod', 'sim', or 'lab'.
+        force: when False (default), only kill a dashboard-tracked
+            subprocess. When True, also psutil-scan and kill any other
+            python process whose command line matches `{name}_bot.py`
+            (handles externally started bots from launch_prod.bat, etc).
+
+    The default `force=False` is the 2026-05-13 fix: the prior unconditional
+    Path 2 scan was killing operator-launched cmd-window prod_bots whenever
+    the watchdog called /api/bot/stop, then trying to respawn via
+    _start_bot — which produced zombies that died in 2-3 min, looping into
+    8+ failed restart attempts. With force=False, watchdog auto-restart is
+    safe (it only touches dashboard-managed subprocesses); manual operator
+    "Stop Bot" UI clicks can pass force=True for the old kill-everything
+    behavior.
     """
     killed_pids: list[int] = []
 
-    # Path 1: dashboard-spawned subprocess
+    # Path 1: dashboard-spawned subprocess (always run, regardless of force).
     with _bot_proc_lock:
         proc = _bot_processes.pop(name, None)
         if proc and proc.poll() is None:
             try:
-                if sys.platform == "win32":
-                    proc.send_signal(signal.CTRL_BREAK_EVENT)
-                else:
-                    proc.terminate()
+                # 2026-05-13: graceful CTRL_BREAK_EVENT was contingent on the
+                # _start_bot's CREATE_NEW_PROCESS_GROUP flag, which we
+                # removed. Send a plain terminate() instead — bot persists
+                # state on every bar so the lost-state surface is small.
+                proc.terminate()
                 proc.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 proc.kill()
@@ -222,51 +246,54 @@ def _stop_bot(name: str) -> dict:
                 except Exception: pass
             killed_pids.append(proc.pid)
 
-    # Path 2: externally-started bots (PowerShell, launch_all.bat, etc.)
-    # Use psutil if available for clean cross-platform; fall back to taskkill.
-    target_script = f"{name}_bot.py"
-    try:
-        import psutil  # type: ignore
-        for p in psutil.process_iter(["pid", "name", "cmdline"]):
-            try:
-                if p.info["name"] and "python" in p.info["name"].lower():
-                    cmd = " ".join(p.info["cmdline"] or [])
-                    if target_script in cmd and p.info["pid"] not in killed_pids:
-                        p.terminate()
-                        try:
-                            p.wait(timeout=3)
-                        except psutil.TimeoutExpired:
-                            p.kill()
-                        killed_pids.append(p.info["pid"])
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-    except ImportError:
-        # Fallback: taskkill via command line (Windows)
-        if sys.platform == "win32":
-            try:
-                result = subprocess.run(
-                    ["wmic", "process", "where",
-                     f"name='python.exe' and commandline like '%{target_script}%'",
-                     "get", "processid", "/format:value"],
-                    capture_output=True, text=True, timeout=5,
-                )
-                for line in result.stdout.splitlines():
-                    line = line.strip()
-                    if line.startswith("ProcessId="):
-                        try:
-                            pid = int(line.split("=", 1)[1])
-                            subprocess.run(["taskkill", "/F", "/PID", str(pid)],
-                                           capture_output=True, timeout=5)
-                            killed_pids.append(pid)
-                        except Exception:
-                            pass
-            except Exception as e:
-                logger.warning(f"fallback taskkill for {name} failed: {e}")
+    # Path 2: externally-started bots — only kill when force=True.
+    # When force=False (the safe default), operator-launched cmd-window
+    # prod_bots survive watchdog restart cycles and manual scripts that
+    # call this endpoint without force=True.
+    if force:
+        target_script = f"{name}_bot.py"
+        try:
+            import psutil  # type: ignore
+            for p in psutil.process_iter(["pid", "name", "cmdline"]):
+                try:
+                    if p.info["name"] and "python" in p.info["name"].lower():
+                        cmd = " ".join(p.info["cmdline"] or [])
+                        if target_script in cmd and p.info["pid"] not in killed_pids:
+                            p.terminate()
+                            try:
+                                p.wait(timeout=3)
+                            except psutil.TimeoutExpired:
+                                p.kill()
+                            killed_pids.append(p.info["pid"])
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        except ImportError:
+            # Fallback: taskkill via command line (Windows)
+            if sys.platform == "win32":
+                try:
+                    result = subprocess.run(
+                        ["wmic", "process", "where",
+                         f"name='python.exe' and commandline like '%{target_script}%'",
+                         "get", "processid", "/format:value"],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    for line in result.stdout.splitlines():
+                        line = line.strip()
+                        if line.startswith("ProcessId="):
+                            try:
+                                pid = int(line.split("=", 1)[1])
+                                subprocess.run(["taskkill", "/F", "/PID", str(pid)],
+                                               capture_output=True, timeout=5)
+                                killed_pids.append(pid)
+                            except Exception:
+                                pass
+                except Exception as e:
+                    logger.warning(f"fallback taskkill for {name} failed: {e}")
 
     if killed_pids:
-        logger.info(f"Stopped {name} bot (PIDs: {killed_pids})")
-        return {"ok": True, "pids": killed_pids}
-    return {"ok": True, "message": f"{name} bot was not running"}
+        logger.info(f"Stopped {name} bot (PIDs: {killed_pids}, force={force})")
+        return {"ok": True, "pids": killed_pids, "force": force}
+    return {"ok": True, "message": f"{name} bot was not running", "force": force}
 
 
 def _bot_status(name: str) -> str:
@@ -892,9 +919,14 @@ def api_start_bot():
 def api_stop_bot():
     data = request.get_json(silent=True) or {}
     name = data.get("name", "")
+    # 2026-05-13: `force` defaults to False — only kill dashboard-managed
+    # subprocesses, not externally-launched cmd-window bots. Watchdog auto-
+    # restart uses the default; operator "Stop Bot" UI can opt in to
+    # force=True for the old kill-everything behavior. See _stop_bot docstring.
+    force = bool(data.get("force", False))
     if name not in ("prod", "sim"):
         return jsonify({"ok": False, "error": "name must be 'prod' or 'sim' (lab retired 2026-04-21)"}), 400
-    result = _stop_bot(name)
+    result = _stop_bot(name, force=force)
     return jsonify(result)
 
 

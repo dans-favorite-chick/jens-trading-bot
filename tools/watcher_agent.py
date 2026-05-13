@@ -392,12 +392,18 @@ class InvestigatorAgent:
         try:
             stdout = open(LOGS_DIR / f"{target}_stdout.log", "ab")
             stderr = open(LOGS_DIR / f"{target}_stderr.log", "ab")
-            # CREATE_NEW_PROCESS_GROUP (0x00000200) so we don't die with parent
-            creationflags = 0x00000200 if sys.platform == "win32" else 0
+            # 2026-05-13: removed creationflags=CREATE_NEW_PROCESS_GROUP
+            # (0x00000200) AND stdin=subprocess.DEVNULL. The combination is
+            # the documented "zombie spawn" pattern on Windows — subprocesses
+            # launched this way silently die 15s-3min after startup with no
+            # traceback (asyncio ProactorEventLoop interaction with detached
+            # console). Documented in memory/context/MORNING_2026-05-12.md
+            # "Open Issue #1". Forensically confirmed by the 8 consecutive
+            # watchdog restart failures on 2026-05-12 evening.
             new_proc = subprocess.Popen(
                 cmd, cwd=str(PHOENIX_ROOT),
-                stdout=stdout, stderr=stderr, stdin=subprocess.DEVNULL,
-                creationflags=creationflags,
+                stdout=stdout, stderr=stderr,
+                creationflags=0,
             )
             return True, f"killed pid={killed_pid}, spawned pid={new_proc.pid}"
         except Exception as e:
