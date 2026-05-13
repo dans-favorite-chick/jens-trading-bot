@@ -277,23 +277,58 @@ def _wait_for_grade(grade_path: Path, timeout_s: int) -> dict | None:
 
 
 def _load_today_trades(today: str) -> list[dict]:
-    if not TRADE_MEMORY_PATH.exists():
-        return []
+    """Return trades that exited on `today` (YYYY-MM-DD, CT-local).
+
+    2026-05-13 audit fix — two bugs in one function:
+    1. Was raw-reading TRADE_MEMORY_PATH (the legacy file frozen since
+       the 2026-05-12 per-bot split). Missed every trade written to
+       trade_memory_<bot>.json after the split.
+    2. Filter logic was `if isinstance(v, str) and v.startswith(today)`
+       — but modern trades store exit_time as a Unix float, not an
+       ISO string. The filter never matched, so this function returned
+       [] every day for any post-B16 (mid-2026) trade. The daily
+       16:05 CT PhoenixPostSessionDebrief Telegram has been silently
+       reporting "0 trades today" / YELLOW verdict every day as a
+       result.
+
+    Now uses core.trade_memory.load_all_trades (merges legacy + per-bot)
+    and filters by a CT-local Unix-epoch window for `today`.
+    """
+    # Convert YYYY-MM-DD (CT-local) to an epoch window [00:00 CT, 24:00 CT).
     try:
-        data = json.loads(TRADE_MEMORY_PATH.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+        d = datetime.strptime(today, "%Y-%m-%d").date()
+    except ValueError:
         return []
-    trades = data.get("trades") if isinstance(data, dict) else data
-    if not isinstance(trades, list):
+    start_ct = datetime(d.year, d.month, d.day, 0, 0, 0, tzinfo=CT_TZ)
+    end_ct = start_ct + timedelta(days=1)
+    start_ts = start_ct.timestamp()
+    end_ts = end_ct.timestamp()
+
+    try:
+        from core.trade_memory import load_all_trades
+        rows = load_all_trades(logs_dir=str(TRADE_MEMORY_PATH.parent))
+    except Exception:
         return []
+    if not isinstance(rows, list):
+        return []
+
     out = []
-    for t in trades:
-        # Support multiple timestamp shapes
+    for t in rows:
+        # Modern shape: numeric epoch under exit_time / entry_time.
+        # Legacy shape: ISO string under exit_time / entry_time / ts.
+        # Try both; first match wins.
+        match = False
         for k in ("exit_time", "entry_time", "ts"):
             v = t.get(k)
-            if isinstance(v, str) and v.startswith(today):
-                out.append(t)
+            if isinstance(v, (int, float)) and v > 0:
+                if start_ts <= float(v) < end_ts:
+                    match = True
+                    break
+            elif isinstance(v, str) and v.startswith(today):
+                match = True
                 break
+        if match:
+            out.append(t)
     return out
 
 

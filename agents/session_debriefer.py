@@ -518,12 +518,28 @@ def _load_jsonl(path: _Path) -> list[dict]:
 
 
 def _load_trade_memory(path: _Path) -> dict:
-    if not path.exists():
-        return {}
+    """Return {"trades": [...]} via core.trade_memory.load_all_trades().
+
+    2026-05-13: was raw-reading `path` directly and returning whatever
+    json.loads produced (which for trade_memory.json is a list, NOT a
+    dict). Downstream `_build_payload` does
+    `trade_memory.get("trades", [])[-20:]` guarded by `isinstance(...,
+    dict)` — meaning the list shape was always skipped and the
+    `trade_memory_tail` field in the debrief payload has been silently
+    empty for the entire history of this module. Also: legacy path-only
+    read missed every per-bot trade since the 2026-05-12 split.
+
+    Now wraps load_all_trades' list in the dict shape that downstream
+    callers actually expect. `path.parent` becomes the logs_dir for
+    load_all_trades — tests that pass tmp_path/trade_memory.json still
+    work because tmp_path becomes the scope.
+    """
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        from core.trade_memory import load_all_trades
+        rows = load_all_trades(logs_dir=str(path.parent))
+        return {"trades": rows if isinstance(rows, list) else []}
     except Exception:
-        return {}
+        return {"trades": []}
 
 
 def _build_payload(events: list[dict], trade_memory: dict, target_date: date) -> dict:

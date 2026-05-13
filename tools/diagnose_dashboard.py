@@ -334,13 +334,19 @@ def main():
         L.append("")
 
     # ─── 11. trade_memory today ─────────────────────────────────────────
-    L.append("## 11. `trade_memory.json` today's trades")
+    # 2026-05-13: route through load_all_trades so legacy + every per-bot
+    # file (post-2026-05-12 split) is covered. Previously raw-read
+    # trade_memory.json which became stale after the split — the
+    # operator-facing diagnostic was undercounting today's trades.
+    L.append("## 11. `trade_memory` today's trades (legacy + per-bot merged)")
     L.append("")
     tm_file = data_root / "logs" / "trade_memory.json"
-    if tm_file.exists():
-        trades = json.loads(tm_file.read_text(encoding="utf-8"))
-        if isinstance(trades, dict):
-            trades = trades.get("trades", [])
+    try:
+        from core.trade_memory import load_all_trades
+        trades = load_all_trades(logs_dir=str(data_root / "logs"))
+    except Exception:
+        trades = []
+    if isinstance(trades, list) and trades:
         today_calendar = []
         for t in trades:
             if not isinstance(t, dict):

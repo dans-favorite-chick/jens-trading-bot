@@ -55,16 +55,23 @@ REQUIRED_FIELDS = ("strategy", "param", "current", "proposed",
 # ─── Loading ────────────────────────────────────────────────────────────
 
 def load_trade_memory(path: Path = TRADE_MEMORY_PATH) -> list[dict]:
-    """Return trade records from trade_memory.json. [] on any failure."""
+    """Return merged trade records via core.trade_memory.load_all_trades().
+
+    2026-05-13: was raw-opening `path` directly, which after the 2026-05-12
+    per-bot file split silently lost every trade written to the per-bot
+    files (`trade_memory_<bot>.json`). Now routes through load_all_trades
+    using `path.parent` as the logs_dir — picks up the legacy file AND
+    every per-bot file, deduped by trade_id with per-bot files winning.
+
+    The `path` argument is preserved for backward compatibility with
+    tests + callers that point at a specific trade_memory.json location;
+    its parent directory becomes the load_all_trades scope. [] on any
+    failure (load_all_trades is fail-soft internally).
+    """
     try:
-        if not path.exists():
-            return []
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            # some builds wrap list under "trades"
-            data = data.get("trades", [])
-        return list(data) if isinstance(data, list) else []
+        from core.trade_memory import load_all_trades
+        rows = load_all_trades(logs_dir=str(path.parent))
+        return rows if isinstance(rows, list) else []
     except Exception as e:
         logger.warning("load_trade_memory failed: %s", e)
         return []

@@ -36,10 +36,25 @@ from config.settings import (
 # Falls back to ROOT if cwd has no logs/trade_memory.json but ROOT does —
 # keeps "I ran the tool from a random dir" working without surprise.
 def _data_root() -> Path:
+    """Detect phoenix_bot root via existence of any trade_memory file
+    (legacy `trade_memory.json` OR per-bot `trade_memory_<bot>.json`)."""
+    def _has_trade_memory(p: Path) -> bool:
+        logs = p / "logs"
+        if not logs.is_dir():
+            return False
+        if (logs / "trade_memory.json").exists():
+            return True
+        try:
+            for f in logs.iterdir():
+                if f.name.startswith("trade_memory_") and f.name.endswith(".json"):
+                    return True
+        except OSError:
+            pass
+        return False
     cwd = Path.cwd()
-    if (cwd / "logs" / "trade_memory.json").exists():
+    if _has_trade_memory(cwd):
         return cwd
-    if (ROOT / "logs" / "trade_memory.json").exists():
+    if _has_trade_memory(ROOT):
         return ROOT
     return cwd  # for empty-tmp tests — will print "no trade_memory" and exit cleanly
 
@@ -89,18 +104,19 @@ def parse_ts(t):
 
 def main():
     DATA = _data_root()
-    trades_file = DATA / "logs" / "trade_memory.json"
-    if not trades_file.exists():
-        print(f"No trade_memory at {trades_file}")
-        return 1
-    raw = trades_file.read_text(encoding="utf-8")
+    # 2026-05-13 audit: previously raw-read trade_memory.json which became
+    # stale after the 2026-05-12 per-bot split. Now uses
+    # core.trade_memory.load_all_trades() — merges legacy + every per-bot
+    # file. Still READ-ONLY (per module docstring).
     try:
-        trades = json.loads(raw)
+        from core.trade_memory import load_all_trades
+        trades = load_all_trades(logs_dir=str(DATA / "logs"))
     except Exception as e:
-        print(f"Could not parse trade_memory: {e}")
+        print(f"Could not load trade_memory via load_all_trades: {e}")
         return 2
-    if not isinstance(trades, list):
-        trades = trades.get("trades", []) if isinstance(trades, dict) else []
+    if not isinstance(trades, list) or not trades:
+        print(f"No trade_memory files found under {DATA / 'logs'}")
+        return 1
 
     known = known_strategies()
 

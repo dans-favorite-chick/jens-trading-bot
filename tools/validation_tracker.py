@@ -42,10 +42,24 @@ CT = ZoneInfo("America/Chicago")
 
 # ─── data root: cwd if it has logs/, else fall back to project ROOT ──
 def _data_root() -> Path:
+    """Detect phoenix_bot root via any trade_memory file (legacy or per-bot)."""
+    def _has_trade_memory(p: Path) -> bool:
+        logs = p / "logs"
+        if not logs.is_dir():
+            return False
+        if (logs / "trade_memory.json").exists():
+            return True
+        try:
+            for f in logs.iterdir():
+                if f.name.startswith("trade_memory_") and f.name.endswith(".json"):
+                    return True
+        except OSError:
+            pass
+        return False
     cwd = Path.cwd()
-    if (cwd / "logs" / "trade_memory.json").exists():
+    if _has_trade_memory(cwd):
         return cwd
-    if (ROOT / "logs" / "trade_memory.json").exists():
+    if _has_trade_memory(ROOT):
         return ROOT
     return cwd
 
@@ -107,16 +121,18 @@ def is_post_b13(t: dict) -> bool:
 
 
 def load_all_trades(data_root: Path):
-    trades_file = data_root / "logs/trade_memory.json"
-    if not trades_file.exists():
-        return []
-    raw = trades_file.read_text(encoding="utf-8")
-    try:
-        trades = json.loads(raw)
-    except Exception:
-        return []
-    if isinstance(trades, dict):
-        trades = trades.get("trades", [])
+    """Load merged trade history via core.trade_memory.load_all_trades().
+
+    2026-05-13 audit: previously raw-read logs/trade_memory.json (the
+    legacy file, frozen since the 2026-05-12 per-bot split). This is the
+    operator's tool that drives GRADUATE/SCALE/KILL_CANDIDATE decisions
+    on every weekly review — silently using stale data for those calls
+    is the worst-case audit risk. Now uses the canonical merger so the
+    tier classifier and Wilson CIs reflect ALL trades (legacy + every
+    per-bot file, deduped by trade_id).
+    """
+    from core.trade_memory import load_all_trades as _core_load_all_trades
+    trades = _core_load_all_trades(logs_dir=str(data_root / "logs"))
     if not isinstance(trades, list):
         return []
     return [t for t in trades if isinstance(t, dict)]

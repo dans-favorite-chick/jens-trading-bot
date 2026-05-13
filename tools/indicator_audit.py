@@ -34,10 +34,30 @@ CT = ZoneInfo("America/Chicago")
 
 
 def _data_root() -> Path:
+    """Detect phoenix_bot root via existence of any trade_memory file.
+
+    Accepts either the legacy logs/trade_memory.json OR any per-bot
+    logs/trade_memory_<bot>.json file. Post-2026-05-12 split, the
+    legacy file may be absent in fresh checkouts while per-bot files
+    accumulate.
+    """
+    def _has_trade_memory(p: Path) -> bool:
+        logs = p / "logs"
+        if not logs.is_dir():
+            return False
+        if (logs / "trade_memory.json").exists():
+            return True
+        try:
+            for f in logs.iterdir():
+                if f.name.startswith("trade_memory_") and f.name.endswith(".json"):
+                    return True
+        except OSError:
+            pass
+        return False
     cwd = Path.cwd()
-    if (cwd / "logs" / "trade_memory.json").exists():
+    if _has_trade_memory(cwd):
         return cwd
-    if (ROOT / "logs" / "trade_memory.json").exists():
+    if _has_trade_memory(ROOT):
         return ROOT
     return cwd
 
@@ -97,13 +117,22 @@ def trade_ts(t: dict):
 
 def load_all_trades(post_b13_only=False, since=None, strategy=None,
                     data_root: Path | None = None) -> list[dict]:
+    """Load and filter trades.
+
+    2026-05-13 audit: previously raw-read logs/trade_memory.json which
+    became a stale snapshot after the 2026-05-12 per-bot split. Now
+    routes through core.trade_memory.load_all_trades() (imported as
+    `_core_load_all_trades` to avoid the name collision with this
+    function) to merge legacy + every per-bot file.
+
+    Same filter semantics as before — post_b13_only / since / strategy
+    apply on top of the merged stream.
+    """
+    from core.trade_memory import load_all_trades as _core_load_all_trades
     root = data_root or _data_root()
-    trades_file = root / "logs" / "trade_memory.json"
-    if not trades_file.exists():
+    raw = _core_load_all_trades(logs_dir=str(root / "logs"))
+    if not isinstance(raw, list):
         return []
-    raw = json.loads(trades_file.read_text(encoding="utf-8"))
-    if isinstance(raw, dict):
-        raw = raw.get("trades", [])
     out = []
     for t in raw:
         if not isinstance(t, dict):

@@ -198,37 +198,73 @@ class PositionManager:
             self._load_trade_history()
 
     def _load_trade_history(self) -> None:
-        """Populate self.trade_history from TRADE_MEMORY_PATH.
+        """Populate self.trade_history from the merged trade_memory view.
 
-        - Missing file: stays empty, INFO log.
-        - Corrupt JSON / IO error: stays empty, WARNING log, no crash.
+        Routes through core.trade_memory.load_all_trades() which reads the
+        legacy logs/trade_memory.json (pre-2026-05-12 shared history) AND
+        every per-bot logs/trade_memory_<bot>.json file, deduping by
+        trade_id with per-bot files winning on collision.
+
+        Before 2026-05-13 this method raw-opened TRADE_MEMORY_PATH directly
+        — which silently lost every trade written to the per-bot files after
+        the 2026-05-12 trade_memory file split (commit 02b0efd). Result:
+        bot startup hydrated only pre-split history, so prod's first
+        post-restart trade looked like the bot's first trade ever for
+        anything reading PositionManager.trade_history.
+
+        Graceful failure modes preserved:
+        - Missing dir / no files at all: stays empty, INFO log.
+        - Legacy file corrupt / wrong shape: stays empty, WARNING log.
         - Success: full schema preserved per-row; INFO log with count.
 
-        Module-level TRADE_MEMORY_PATH is read at call-time so tests can
-        monkeypatch position_manager.TRADE_MEMORY_PATH.
+        Module-level TRADE_MEMORY_PATH is still read at call-time so tests
+        can monkeypatch position_manager.TRADE_MEMORY_PATH. Its parent
+        directory becomes the load_all_trades logs_dir — tests that
+        monkeypatch to tmp_path/trade_memory.json get tmp_path as logs_dir,
+        preserving the original test ergonomics.
         """
         # Resolve lazily so tests can monkeypatch the module attribute.
         path = sys.modules[__name__].TRADE_MEMORY_PATH
-        if not os.path.exists(path):
-            logger.info(
-                "[TRADE_MEMORY] no trade_memory.json found at %s — starting fresh",
-                path,
-            )
-            return
+        logs_dir = os.path.dirname(path)
+        legacy_exists = os.path.exists(path)
+
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                rows = json.load(f)
+            from core.trade_memory import load_all_trades
+            rows = load_all_trades(logs_dir=logs_dir)
         except Exception as e:
             logger.warning(
-                "[TRADE_MEMORY] failed to load %s (%s: %s) — starting fresh",
-                path, type(e).__name__, e,
+                "[TRADE_MEMORY] load_all_trades(%s) failed (%s: %s) — "
+                "starting fresh", logs_dir, type(e).__name__, e,
             )
             return
 
-        if not isinstance(rows, list):
-            logger.warning(
-                "[TRADE_MEMORY] %s did not contain a JSON list (got %s) — "
-                "starting fresh", path, type(rows).__name__,
+        # Diagnostic on the legacy file: if it exists but produced no
+        # trades via load_all_trades, it's likely corrupt or wrong-shape
+        # (load_all_trades skips unparseable files silently). Surface that
+        # at WARNING so it doesn't hide. Matches pre-refactor semantics.
+        if legacy_exists and not rows:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if not isinstance(data, list):
+                    logger.warning(
+                        "[TRADE_MEMORY] %s did not contain a JSON list "
+                        "(got %s) — starting fresh",
+                        path, type(data).__name__,
+                    )
+                    return
+                # Empty list is benign — fall through to INFO log below.
+            except Exception as e:
+                logger.warning(
+                    "[TRADE_MEMORY] failed to load %s (%s: %s) — "
+                    "starting fresh", path, type(e).__name__, e,
+                )
+                return
+
+        if not rows:
+            logger.info(
+                "[TRADE_MEMORY] no trade_memory.json found at %s — "
+                "starting fresh", path,
             )
             return
 
@@ -237,8 +273,9 @@ class PositionManager:
         # (verified against 968-row live file 2026-04-22).
         self.trade_history = list(rows)
         logger.info(
-            "[TRADE_MEMORY] loaded %d historical trades from %s",
-            len(self.trade_history), path,
+            "[TRADE_MEMORY] loaded %d historical trades from %s "
+            "(legacy + per-bot files merged)",
+            len(self.trade_history), logs_dir,
         )
 
     # ─── Legacy single-position API (back-compat) ──────────────────────

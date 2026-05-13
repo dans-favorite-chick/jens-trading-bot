@@ -62,16 +62,23 @@ def _load_window(days: int) -> list[dict]:
 
 
 def _load_trade_pnl() -> dict[str, float]:
-    if not os.path.exists(TRADE_MEMORY_PATH):
-        return {}
+    """Map trade_id → pnl_dollars via core.trade_memory.load_all_trades().
+
+    2026-05-13 audit: previously raw-read TRADE_MEMORY_PATH (the legacy
+    file, frozen since 2026-05-12 per-bot split). Conflict P&L attribution
+    was silently missing every post-split trade.
+    """
     try:
-        with open(TRADE_MEMORY_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        from core.trade_memory import load_all_trades
+        trades = load_all_trades(
+            logs_dir=os.path.dirname(TRADE_MEMORY_PATH)
+        )
     except Exception:
         return {}
-    trades = data if isinstance(data, list) else data.get("trades", [])
+    if not isinstance(trades, list):
+        return {}
     out: dict[str, float] = {}
-    for t in trades or []:
+    for t in trades:
         tid = t.get("trade_id")
         if tid:
             try:

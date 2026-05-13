@@ -36,10 +36,27 @@ CT = ZoneInfo("America/Chicago")
 
 
 def _data_root() -> Path:
+    """Detect phoenix_bot root via existence of any trade_memory file
+    (legacy `trade_memory.json` OR per-bot `trade_memory_<bot>.json`).
+    Post-2026-05-12 split, the legacy file may be absent in fresh
+    checkouts while per-bot files accumulate."""
+    def _has_trade_memory(p: Path) -> bool:
+        logs = p / "logs"
+        if not logs.is_dir():
+            return False
+        if (logs / "trade_memory.json").exists():
+            return True
+        try:
+            for f in logs.iterdir():
+                if f.name.startswith("trade_memory_") and f.name.endswith(".json"):
+                    return True
+        except OSError:
+            pass
+        return False
     cwd = Path.cwd()
-    if (cwd / "logs" / "trade_memory.json").exists():
+    if _has_trade_memory(cwd):
         return cwd
-    if (ROOT / "logs" / "trade_memory.json").exists():
+    if _has_trade_memory(ROOT):
         return ROOT
     return cwd
 
@@ -99,13 +116,17 @@ def trade_ts(t: dict):
 
 def load_trades(post_b13_only=False, since=None,
                 data_root: Path | None = None) -> list[dict]:
+    """Load + filter trades via core.trade_memory.load_all_trades().
+
+    2026-05-13 audit: previously raw-read logs/trade_memory.json which
+    became stale after the 2026-05-12 per-bot split. Now merges legacy
+    + every per-bot file so the L2 ROI computation reflects current
+    DOM-keyword usage in recent trades."""
+    from core.trade_memory import load_all_trades
     root = data_root or _data_root()
-    f = root / "logs" / "trade_memory.json"
-    if not f.exists():
+    raw = load_all_trades(logs_dir=str(root / "logs"))
+    if not isinstance(raw, list):
         return []
-    raw = json.loads(f.read_text(encoding="utf-8"))
-    if isinstance(raw, dict):
-        raw = raw.get("trades", [])
     out = []
     for t in raw:
         if not isinstance(t, dict):

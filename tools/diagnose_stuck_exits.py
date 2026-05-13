@@ -82,16 +82,18 @@ def known_routing():
 
 
 def find_stuck_in_trade_memory(data_root: Path):
-    """Return list of trades currently in exit_pending state per trade_memory."""
-    p = data_root / "logs" / "trade_memory.json"
-    if not p.exists():
-        return []
+    """Return list of trades currently in exit_pending state per trade_memory.
+
+    2026-05-13 audit: routes through core.trade_memory.load_all_trades()
+    so the scan covers legacy + every per-bot file (post-2026-05-12 split).
+    """
     try:
-        trades = json.loads(p.read_text(encoding="utf-8"))
+        from core.trade_memory import load_all_trades
+        trades = load_all_trades(logs_dir=str(data_root / "logs"))
     except Exception:
         return []
-    if isinstance(trades, dict):
-        trades = trades.get("trades", [])
+    if not isinstance(trades, list):
+        return []
     stuck = []
     for t in trades:
         if not isinstance(t, dict):
