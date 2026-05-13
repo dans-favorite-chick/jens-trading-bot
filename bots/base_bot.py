@@ -2416,18 +2416,44 @@ class BaseBot:
             }
             return
 
-        # Enforce prod trading window — prod bot only trades during defined session.
-        # Exception: TREND days with session_unrestricted=True bypass window checks —
-        # high-conviction trend days should be traded all session, not just 2 windows.
-        if self.bot_name == "prod":
-            _session_unrestricted = self._day_classifier.params.get("session_unrestricted", False)
-            if _session_unrestricted:
-                pass  # TREND day — trade all day, no window restriction
-            else:
-                _cr_verdict = getattr(self._last_cr, "verdict", None) if self._last_cr else None
-                _cr_score   = getattr(self._last_cr, "momentum_score", 0) if self._last_cr else 0
-                if not self.session.is_prod_trading_window(cr_verdict=_cr_verdict, cr_score=_cr_score):
-                    return  # Prod bot: outside all trading windows, skip evaluation
+        # 2026-05-13: prod trading-window gate REMOVED.
+        #
+        # Was: a 'if self.bot_name == "prod": if not is_prod_trading_window(): return'
+        # check restricting prod to 08:30-11:00 + 13:00-14:30 CST (primary +
+        # secondary windows defined in core/session_manager.py:is_prod_trading_window).
+        # The early-return was SILENT — no log line, no _last_eval update — so
+        # outside-window skips were invisible to dashboard / logs.
+        #
+        # Removed because:
+        #   1. SilentFailures anti-pattern (memory/feedback_silent_failures.md):
+        #      operator saw "SCANNING" status all day with no trades and no
+        #      indication why. 2026-05-13 incident: NT8 internet outage
+        #      08:30-11:09 meant prod missed its entire primary window; by the
+        #      time NT8 came back, the gate silently skipped every eval. Sim
+        #      (which doesn't have this gate) booked 4 wins / $114.22. Prod
+        #      booked nothing.
+        #   2. Operator preference: prod is paper-only (Sim101), capped at
+        #      $5/trade and $15/day. Restricting it to 3.5 hours/day for
+        #      "highest edge" was an over-conservative legacy choice — running
+        #      24/7 like sim gives more behavioral-validation coverage at zero
+        #      real-money risk.
+        #   3. Sprint H (2026-05-04) already opened up STRATEGIES for prod
+        #      (only_validated=False). This is the natural next step.
+        #
+        # Strategy-level time windows (e.g. orb 08:30-14:30, opening_session
+        # 08:30-08:45) still apply — they're intentional per-strategy filters,
+        # not a bot-level gate. The per-trade and daily caps in SimpleSizer +
+        # RiskManager are the actual risk limits.
+        #
+        # Preserved (these DO log, so they're not silent):
+        #   - HALT marker file check     (line ~2403)
+        #   - circuit_breakers.should_halt() (line ~2405)
+        #   - positions.is_flat early return (line ~2393)
+        #   - bars warmup guard          (line ~2458)
+        #
+        # If you ever want to re-introduce a window gate, do it as a
+        # _last_eval-updating + once-per-N-skips logging path so it's
+        # operator-visible — not as a bare `return`.
 
         # Apply runtime profile overrides to strategy configs
         # (Safe/Balanced/Aggressive buttons on dashboard)
