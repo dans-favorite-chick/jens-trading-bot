@@ -47,6 +47,53 @@ Test suite: 1,727 pass / 4 skip / 0 fail (no delta, no regressions).
 
 ---
 
+### 2026-05-13 ~17:30 CDT — dashboard panels now agree all 24h (commit `0c24a8e`)
+
+User flagged that the TODAY (CME GLOBEX) card was STILL showing $0 / 0
+trades for sim, while Daily Stats panel showed $114.22 / 4 wins. The
+earlier per-bot trade_memory fix (`4d523bf`) didn't fully resolve it.
+
+Root cause found this time: the two panels used INCOMPATIBLE definitions
+of "today":
+
+| Panel             | Boundary       | Resets at |
+| TODAY (CME GLOBEX) | Globex session | 17:00 CT  |
+| Daily Stats       | Calendar day   | 00:00 CT  |
+
+Daily Stats reads `bot.risk.daily_pnl` which resets at calendar midnight
+(via `BaseBot._maybe_daily_reset` keyed on `datetime.now().date()`
+change). `/api/today-pnl` was using `_session_start_ct_epoch()` which
+returned the most-recent 17:00 CT.
+
+Result: from 17:00 CT to 00:00 CT every evening, the two panels showed
+different P&L for the same bot, for the same 7 hours every day. The
+operator's lived experience: "we did this same thing yesterday — did
+it not fix?" Yesterday's fix wasn't a fix; the bug was deeper.
+
+Fix: new helper `_calendar_day_start_ct_epoch()` returns today's
+midnight CT. `api_today_pnl()` switched to it. `_session_start_ct_epoch()`
+preserved + still used by `_load_session_trades_by_bot()` (which
+legitimately needs Globex semantic for session-scoped trade listings).
+
+Verified live post-bounce: both panels showed $108.40 / 5 trades for
+sim, $0 / 0 trades for prod — exact match. The TODAY card now updates
+in lockstep with Daily Stats throughout the day.
+
+Tests (tests/test_today_pnl_calendar_day.py, 4 new):
+- Calendar helper returns midnight CT
+- At 02:00 CT the calendar helper diverges from the Globex helper
+  (confirms the bug case is actually exercised)
+- Static check: api_today_pnl uses calendar helper, NOT Globex
+- Behavioral: a trade exiting at 17:00 CT today counts as today
+
+Test suite: 1,740 → 1,744 pass (+4), 0 fail, 4 skipped.
+
+Open follow-up (non-blocking, cosmetic): the dashboard HTML label still
+says "TODAY (CME GLOBEX)" — the data behind it is now calendar-day, so
+the label is slightly misleading. Frontend HTML edit when convenient.
+
+---
+
 ### 2026-05-13 ~16:35 CDT — prod trading-window gate REMOVED (commit `1e07000`)
 
 Investigated "why didn't prod_bot trade today?" Root cause traced to a

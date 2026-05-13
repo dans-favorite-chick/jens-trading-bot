@@ -1,6 +1,6 @@
 # Phoenix Bot — Current State
 
-_Last updated: **2026-05-13 EOD** (after Sprint M Tier 1 live deploy + 12-file data-integrity audit + prod trading-window removal)_
+_Last updated: **2026-05-13 EOD** (after Sprint M Tier 1 live + 12-file data-integrity audit + prod trading-window removal + dashboard panels reconciled)_
 
 **Quick refs:**
 - **[RECENT_CHANGES.md](RECENT_CHANGES.md)** — running dated log of every change, newest first
@@ -15,9 +15,10 @@ _Last updated: **2026-05-13 EOD** (after Sprint M Tier 1 live deploy + 12-file d
 | Item | State |
 |---|---|
 | Branch | `weekly-evolution/2026-05-10` (pushed to origin, not merged to main) |
-| HEAD | `c209202` (17 commits today) |
-| Test suite | **1,740 pass / 4 skip / 0 fail** |
-| Today's P&L | sim **$114.22** (4 wins, 100% WR) / prod $0 (windows gate removed too late in day) |
+| HEAD | `0c24a8e` (19 commits today) |
+| Test suite | **1,744 pass / 4 skip / 0 fail** |
+| Today's P&L | sim **$108.40** (5 trades, 4W/1L, 80% WR) / prod $0 (windows gate removed too late in day) |
+| Dashboard panels | TODAY card + Daily Stats now agree all 24h (calendar-day boundary, commit `0c24a8e`) |
 | Stack health | bridge / dashboard / watchdog / watcher_agent / prod / sim — all alive, all on latest code |
 | NT8 + TickStreamer | Live; new DLL compiled 16:42; `imbalance_ratio` field flowing in volumetric_bar messages |
 | Alerting | Self-healing — PhoenixWatcher 5-min auto-respawn pattern installed |
@@ -40,6 +41,8 @@ All landed, tested, deployed in running processes, pushed to origin.
 | `2b59342` | `tools/diagnose_vwap_pullback.py` + CURRENT_STATE refresh | Surfaced the vwap_pullback bleed structurally |
 | `1e07000` | **Prod trading-window gate REMOVED** | Prod now evaluates 24/7 (was 3.5h/day with silent skips) |
 | `c209202` | Sprint M Tier 1 C# side live end-to-end (operator F5 + chart reload) | `imbalance_ratio` field now flowing in volumetric_bar messages |
+| `4f171e5` | Memory refresh — scannable AT-A-GLANCE + current OPEN_QUESTIONS | Doc readability |
+| `0c24a8e` | `/api/today-pnl` switched to calendar-day boundary (was Globex 17:00) | Dashboard TODAY card + Daily Stats panel now agree all 24h instead of disagreeing 17:00-midnight |
 
 ---
 
