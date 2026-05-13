@@ -5,6 +5,48 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+### 2026-05-13 ~13:30 CDT — trade_memory reader audit (commit `c9099d7`)
+
+12-file follow-up to commit `4d523bf` — every other tool that raw-opened
+the legacy `logs/trade_memory.json` was silently missing post-2026-05-12
+trades. This commit routes them all through
+`core.trade_memory.load_all_trades()` (the canonical merger of legacy
+file + every per-bot file).
+
+Highest-impact fixes:
+- **`tools/validation_tracker.py`** — drives every weekly GRADUATE /
+  SCALE / KILL_CANDIDATE decision. Pre-fix: silently used pre-split data
+  for tier classifier and Wilson 95% CIs. Now sees 1,256 trades instead
+  of 1,254 (the two sim_bot wins booked today are now visible).
+- **`core/position_manager.py`** — bot-startup hydration. Pre-fix: every
+  bot restart reset trade_history to pre-split-only data.
+- **`tools/routines/post_session_debrief.py`** — daily 16:05 CT Telegram
+  digest. Fixed BOTH the per-bot file issue AND a stale ISO-string
+  filter that made `v.startswith(today)` never match Unix-float
+  timestamps. Daily Telegram had been reporting "0 trades today" /
+  YELLOW verdict every day for an unknown duration as a result.
+- **`agents/session_debriefer.py`** — fixed both per-bot file issue AND
+  a latent shape bug: `_load_trade_memory` returned a list but
+  `_build_payload`'s isinstance check expected a dict, so the
+  `trade_memory_tail` field in the Claude debrief payload has been
+  silently empty for the entire lifetime of this module.
+- **`tools/mark_position_flat.py`** — emergency manual flatten tool.
+  Now searches every trade_memory file for the trade_id and writes back
+  to whichever file contained the match (multi-file atomic per-file
+  writes). Pre-fix: would silently fail to persist if the unresolved
+  trade lived in a per-bot file.
+
+Plus 7 other tools (indicator_audit, audit_l2_roi, analyze_conflicts,
+diagnose_stuck_exits, diagnose_dashboard, backfill_commissions,
+historical_learner). All same surgical pattern.
+
+Intentionally not touched: `tools/backfill_bot_id.py` (by design
+legacy-only — new trades have bot_id set at write time).
+
+Test suite: 1,727 pass / 4 skip / 0 fail (no delta, no regressions).
+
+---
+
 ### 2026-05-13 ~12:20 CDT — /api/today-pnl reads per-bot trade_memory files (commit `4d523bf`)
 
 Live-observed bug on the dashboard: TODAY (CME GLOBEX) card showed $0 /

@@ -4,33 +4,46 @@ _Open issues that haven't been resolved yet. Resolved issues moved to semantic/l
 
 _Last refreshed: 2026-05-13 PM (today-pnl per-bot-files fix; tooling audit pending)._
 
-## 🟡 OPEN — Other readers of `trade_memory.json` likely have the same stale-data bug
+## ✅ RESOLVED (2026-05-13 PM, commit `c9099d7`) — trade_memory.json reader audit
 
-**Root issue**: commit `02b0efd` (2026-05-12) split trade memory into
-per-bot files (`trade_memory_<bot>.json`) to fix the prod/sim file-write
-race. The legacy `logs/trade_memory.json` became a frozen historical
-snapshot. Any tool that raw-opens the legacy file and treats it as
-"current trades" will silently miss every post-split trade.
+**Was**: commit `02b0efd` (2026-05-12) split trade memory into per-bot
+files (`trade_memory_<bot>.json`) but many readers still raw-opened the
+legacy `trade_memory.json` and silently missed every post-split trade.
 
-**Dashboard `/api/today-pnl` was caught and fixed today (commit `4d523bf`)**.
-But several other tools still raw-open the legacy file:
+**Audit pass shipped** in commit `c9099d7` — 12 files routed through
+`core.trade_memory.load_all_trades()`:
 
-| File | Line | Purpose | Risk |
-|---|---|---|---|
-| `tools/analyze_conflicts.py` | :30 `TRADE_MEMORY_PATH = .../trade_memory.json` | Conflict audit | Will report no recent trades to analyze |
-| `tools/audit_l2_roi.py` | :40, :103 | DOM/L2 ROI weekly audit | Already running per L2 audit cadence; output will progressively diverge |
-| Tools referenced in CLAUDE.md daily-workflow table | `validation_tracker.py`, `backfill_commissions.py`, `daily_session_summary.py` | All read `logs/trade_memory.json` per the table | NEEDS DEEPER LOOK — these are operator-facing analytics, drift here corrupts every weekly/daily decision |
+Production-path:
+- `core/position_manager.py` (bot startup hydration)
+- `agents/historical_learner.py` (daily 23:30 CT)
+- `agents/session_debriefer.py` (post-session — also fixed latent
+  trade_memory_tail-always-empty bug)
+- `tools/routines/post_session_debrief.py` (daily 16:05 CT — also fixed
+  stale ISO-string filter that made "0 trades today" YELLOW verdict the
+  default every day)
 
-**Action**: dedicated audit pass — grep all `*.py` for `trade_memory.json`
-string, replace raw-open call sites with `core.trade_memory.load_all_trades()`,
-add a regression test along the lines of `test_today_pnl_per_bot_files.py`
-for each touched tool. Sized as a 1-2 hour focused sprint.
+Analytical tools:
+- `tools/validation_tracker.py` (weekly — drives GRADUATE/SCALE calls)
+- `tools/indicator_audit.py` (weekly predictive-feature ranking)
+- `tools/audit_l2_roi.py` (L2 economic ROI)
+- `tools/backfill_commissions.py` (historical P&L recompute — read-only
+  despite name)
+- `tools/analyze_conflicts.py`
+- `tools/diagnose_stuck_exits.py`
+- `tools/diagnose_dashboard.py`
 
-**Why not done today**: scope discipline — fixed the user-visible
-discrepancy on the dashboard, captured the broader risk here for a
-focused audit pass. Daily-workflow tools should be checked BEFORE the
-next time the operator runs `python tools/daily_session_summary.py` and
-trusts its output.
+Write-side:
+- `tools/mark_position_flat.py` — now searches every trade_memory file
+  and writes back to whichever file contained the match. Multi-file
+  writes are atomic per-file; audit log includes `source_file`.
+
+Intentionally not touched:
+- `tools/backfill_bot_id.py` — by design legacy-only. New trades have
+  bot_id set at write time (per-bot file path implies bot_id).
+
+Verified by smoke test: `validation_tracker.load_all_trades()` count
+went 1,254 → 1,256 (the two sim wins booked today). Test suite still
+1,727 / 4 / 0 — no regressions.
 
 
 
