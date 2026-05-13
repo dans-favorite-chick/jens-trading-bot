@@ -1,105 +1,118 @@
 # Phoenix Bot — Current State
 
-_Last updated: 2026-05-13 PM (post-audit, all dashboard surfaces reconciled)._
-_Next Claude session: read **RECENT_CHANGES.md FIRST** for the running log
-of dated changes. This file's lower sections are historical sprint context
-(May 4 onwards) — still useful, but always cross-check operational state
-against RECENT_CHANGES + the bot itself._
+_Last updated: **2026-05-13 EOD** (after Sprint M Tier 1 live deploy + 12-file data-integrity audit + prod trading-window removal)_
 
-## STATE AS OF 2026-05-13 PM
+**Quick refs:**
+- **[RECENT_CHANGES.md](RECENT_CHANGES.md)** — running dated log of every change, newest first
+- **[KNOWN_ISSUES.md](KNOWN_ISSUES.md)** — open technical issues with status
+- **[OPEN_QUESTIONS.md](OPEN_QUESTIONS.md)** — decisions waiting on operator input
+- **This file's lower section** — historical sprint context (May 4 onwards). Always defer to the top section + the bot itself for current operational truth.
 
-### Operational
+---
 
-- **Bot stack**: bridge :8765/:8766, dashboard :5000, watchdog :5001,
-  watcher_agent (PhoenixWatcher scheduled task), prod_bot, sim_bot — all
-  running on code through commit `d7e081a` after a deliberate full bounce.
-- **Branch**: `weekly-evolution/2026-05-10`, pushed to origin and up-to-date
-  through `d7e081a`. Not merged to main.
-- **Test suite**: 1,737 pass / 4 skip / 0 fail.
-- **Today's P&L**: sim 4 wins / $114.22, prod 0 trades. Both the TODAY
-  (CME Globex) summary card and the Daily Stats panel correctly show the
-  same numbers (this consistency is itself a 2026-05-13 fix — see below).
-- **NT8**: live, tick rate ~10/s during RTH. The user had an internet outage
-  this morning that caused 0-tick conditions and the documented 106s
-  WS watchdog reconnect cycle — resolved when NT8 reconnected.
+## AT A GLANCE — 2026-05-13 EOD
 
-### Alerting
+| Item | State |
+|---|---|
+| Branch | `weekly-evolution/2026-05-10` (pushed to origin, not merged to main) |
+| HEAD | `c209202` (17 commits today) |
+| Test suite | **1,740 pass / 4 skip / 0 fail** |
+| Today's P&L | sim **$114.22** (4 wins, 100% WR) / prod $0 (windows gate removed too late in day) |
+| Stack health | bridge / dashboard / watchdog / watcher_agent / prod / sim — all alive, all on latest code |
+| NT8 + TickStreamer | Live; new DLL compiled 16:42; `imbalance_ratio` field flowing in volumetric_bar messages |
+| Alerting | Self-healing — PhoenixWatcher 5-min auto-respawn pattern installed |
+| Gemini AI | Working on fresh GCP project (new `GOOGLE_API_KEY`) |
+| Live trading | PAUSED — prod stays Sim101 until real account ≥ $2,000 (currently $300) |
 
-- **PhoenixWatcher scheduled task**: now has a `Repetition: PT5M` pattern
-  on its `AtLogOn` trigger. Max alerting downtime ever is ≤ 5 minutes;
-  fully self-healing across Ctrl+C kills, logoffs, etc. (Was previously a
-  silent-failure mode: AtLogOn fires once, daemon dies, no auto-respawn
-  until next logon.)
-- **Telegram + Twilio**: ready and tested today.
-- **Gemini investigator**: working on a fresh GCP project. The old key on
-  the "Default Gemini Project" had billing "Unavailable · Postpay" plus
-  free-tier-quota-exhausted state. Replaced via "Create API key in new
-  project" path in AI Studio. New key now lives under
-  `GOOGLE_API_KEY` in `.env`. Old backup at
-  `.env.backup_pre_gemini_swap_20260513_114349` (kept as rollback safety
-  net; intentionally NOT committed to git).
+---
 
-### Data integrity (2026-05-13 audit results)
+## STRUCTURAL FIXES SHIPPED TODAY (2026-05-13)
 
-The 2026-05-12 split of trade memory into per-bot files broke every
-reader that raw-opened the legacy `logs/trade_memory.json` — they
-silently returned pre-split-only data. A 12-file audit (commit `c9099d7`)
-routed every reader through `core.trade_memory.load_all_trades()`, the
-canonical merger. Plus three follow-ups:
-- `dda680c` — graceful /shutdown via dashboard command queue (replaces
-  the CTRL_BREAK_EVENT path lost in `8b471af`)
-- `4d523bf` — dashboard `/api/today-pnl` per-bot fix (this was the
-  user-visible discrepancy on the dashboard)
-- `4e29ce5` + `d7e081a` — RiskManager hydrates today's daily counters
-  from trade_history on bot startup AND filters by `bot_id` to prevent
-  cross-attribution (Daily Stats panel now survives restarts)
+All landed, tested, deployed in running processes, pushed to origin.
 
-**Outcome**: every dashboard surface, every operator-facing tool
-(`validation_tracker`, `indicator_audit`, `audit_l2_roi`, daily
-`post_session_debrief`), and every analytical script now sees the same
-unified trade history regardless of which file each trade lives in.
+| Commit | Fix | Impact |
+|---|---|---|
+| `1d56862` | `session_debriefer.py` typing import fix | One-line correctness |
+| `dda680c` | Graceful /shutdown via dashboard command queue | Replaces lost CTRL_BREAK_EVENT path |
+| `4d523bf` | Dashboard `/api/today-pnl` reads per-bot trade_memory files | Fixed the user-visible $0 vs $114 discrepancy |
+| `c9099d7` | **12-file trade_memory reader audit** — all readers via `load_all_trades()` | Closed silent data drift across all analytical tools |
+| `4e29ce5` + `d7e081a` | RiskManager hydrates daily counters from disk + filters by bot_id | Daily Stats panel survives restarts; correct per-bot attribution |
+| `2b59342` | `tools/diagnose_vwap_pullback.py` + CURRENT_STATE refresh | Surfaced the vwap_pullback bleed structurally |
+| `1e07000` | **Prod trading-window gate REMOVED** | Prod now evaluates 24/7 (was 3.5h/day with silent skips) |
+| `c209202` | Sprint M Tier 1 C# side live end-to-end (operator F5 + chart reload) | `imbalance_ratio` field now flowing in volumetric_bar messages |
 
-### Open items (not blocking)
+---
 
-- **106s reconnect cycle when NT8 ticks=0**. Pre-existing WS watchdog
-  defense kicks in during NT8 silent windows (overnight maintenance,
-  weekend gaps, today's internet outage). Logged in KNOWN_ISSUES.md.
-- ~~**TickStreamer.cs F5 recompile in NT8**~~ ✅ DONE 2026-05-13 17:01.
-  DLL rebuilt at 16:42, fresh TickStreamer instance on TCP port 64821
-  from 17:00:09, `data/volumetric_latest.json` now contains
-  `imbalance_ratio: 3.5` and `max_imbalance_ratio: 21.0`. Sprint M
-  Tier 1 fully live end-to-end. F5 won't need to be repeated unless
-  `TickStreamer.cs` source changes again (workflow: copy repo → NT8
-  Indicators dir → F5 in NinjaScript Editor → remove + re-add the
-  indicator on the chart, or close/reopen chart).
-- **vwap_pullback bleed diagnosed 2026-05-13**: 52 trades / 65% WR but
-  net -$169.64. Realized R:R = 0.446 (vs configured 1.8). Losers cluster
-  at full stop (~-$60), winners exit via `ema_dom_exit` at ~$25.
-  Diagnostic at `tools/diagnose_vwap_pullback.py`. No fix shipped — data
-  reviewed, decision pending.
+## OPERATIONAL CHANGES YOU SHOULD KNOW
 
-### Prod trading windows — REMOVED 2026-05-13 (commit `1e07000`)
+### Prod_bot is now 24/7 (commit `1e07000`)
 
-ProdBot used to be restricted to 08:30-11:00 + 13:00-14:30 CST via a
-SILENT gate in `BaseBot._evaluate_strategies` (no log, no `_last_eval`
-update). Removed today after the 2026-05-13 incident: NT8 internet
-outage 08:30-11:09 meant prod missed its entire primary window, and the
-silent skip during the secondary window left no breadcrumbs about why.
-Prod now evaluates all 10 strategies 24/7 (same cadence as sim, just
-with the stricter $5/trade + $15/day + 4-trades/day caps in SimpleSizer
-+ RiskManager as the actual risk limits). Strategy-level time windows
-(orb 08:30-14:30, opening_session 08:30-08:45) still apply — those are
-intentional per-strategy filters, not a bot gate.
+Pre-today: prod only evaluated strategies during 08:30-11:00 + 13:00-14:30 CST. Outside those windows, the eval function silently returned. **2026-05-13 incident**: NT8 internet outage 08:30-11:09 meant prod missed its entire primary window. Sim caught 4 wins, prod caught 0. Operator confusion: "why isn't prod trading?" — bot looked healthy but was silently skipping.
+
+Now: prod evaluates all 10 strategies on every bar close, all hours, same as sim. Risk limits ($5/trade, $15/day, 4 trades/day in SimpleSizer) are the actual constraints. Strategy-level time windows (e.g. ORB 08:30-14:30) still apply as intentional per-strategy filters.
+
+### Trade memory has ONE canonical reader (commit `c9099d7`)
+
+`core.trade_memory.load_all_trades(logs_dir=...)` merges the legacy `logs/trade_memory.json` (frozen 2026-05-12, holds pre-split history) with every per-bot `logs/trade_memory_<bot>.json` file. Dedupes by `trade_id`, per-bot files win on collision.
+
+**Never raw-open trade_memory.json anywhere.** Today's audit fixed 12 such call sites. Future tools must route through this function (see auto-memory entry `trade_memory_canonical_reader.md`).
+
+### Alerting is now self-healing (PhoenixWatcher Repetition pattern)
+
+Scheduled task `PhoenixWatcher` has `Repetition: PT5M` on its `AtLogOn` trigger. If `watcher_agent.py` ever dies (Ctrl+C, crash, logoff), Windows tries to relaunch it every 5 minutes. Max alerting downtime is ≤ 5 min. Was previously a silent failure mode (AtLogOn fires once, daemon dies, no respawn until next logon — bit us this morning).
+
+### Sprint M Tier 1 fully live (Python `a4ab967` + C# `c209202`)
+
+- Python side deployed since 2026-05-12 (commit `a4ab967`)
+- C# `TickStreamer.cs` recompiled today via operator F5 — DLL mtime 16:42
+- Volumetric chart configured 1500-tick (operator action this evening)
+- New `imbalance_ratio` field confirmed in `data/volumetric_latest.json` at 17:01
+- No further operator action required unless `TickStreamer.cs` source changes again
+
+---
+
+## OPEN / DEFERRED — see linked files for detail
+
+| Item | Status | Where |
+|---|---|---|
+| NT8 silent-stall (106s reconnect cycle) | 🟠 Open, recurring | [KNOWN_ISSUES.md](KNOWN_ISSUES.md) |
+| vwap_pullback bleed (65% WR, net -$169) | 🔴 Decision pending | [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) #1 |
+| Live trading flip | Gated at $2,000 acct | [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) #2 |
+| Sprint M Tier 2 (2.1 / 2.2 / 2.4) | Scheduled 2026-05-19 | `SPRINT_M_TIER_2_SCHEDULED.md` |
+| CPCV / DSR / PBO validation harness | Phase C dependency | [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) deferred |
+
+---
+
+## TOMORROW MORNING CHECK (run these before market open)
+
+```powershell
+# 1. Bot stack alive?
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" | ? CommandLine -match '_bot\.py|bridge_server|dashboard|watchdog|watcher_agent' | Select Id, CreationDate, @{N='Cmd';E={if($_.CommandLine -match '([\w_]+\.py)'){$matches[1]}}}
+
+# 2. NT8 streaming ticks?
+(Invoke-WebRequest 'http://127.0.0.1:8767/health' -UseBasicParsing).Content | ConvertFrom-Json | Select nt8_status, tick_rate_10s, nt8_last_tick_age_s
+
+# 3. Dashboard healthy?
+(Invoke-WebRequest 'http://127.0.0.1:5000/api/today-pnl' -UseBasicParsing).Content | ConvertFrom-Json
+
+# 4. Watcher_agent running (alerting alive)?
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" | ? CommandLine -match 'watcher_agent' | Select Id
+# Empty result = alerting offline. Start manually: `Start-ScheduledTask -TaskName PhoenixWatcher`
+```
+
+Expected first hour:
+- Prod_bot should now start producing `[strategies.*]` log lines from the very first bar close (the window gate is gone)
+- Daily Stats panel should show prod's `daily_pnl` populated from previous day's tail trades, then update with today's
+- Daily 16:05 Telegram debrief should report actual trade counts (was previously broken — fixed in `c9099d7`)
 
 ---
 
 ## HISTORICAL SPRINT CONTEXT (May 4 onwards)
 _Below is the previous "current state" snapshot from 2026-05-04. Retained
-for sprint-by-sprint context. Operational truth has moved on — defer to
-the section above and to RECENT_CHANGES.md for anything time-sensitive._
-
-_Last updated: 2026-05-04 (Sprint H v3 — footprint_cvd_reversal with IQS scoring)_
-_Next Claude session: read this FIRST for situational awareness_
+for sprint-by-sprint context — useful background on strategy designs,
+infrastructure decisions, and incident playbooks. Operational truth has
+moved on; defer to the section above and to RECENT_CHANGES.md for
+anything time-sensitive._
 
 ## Sprint H v3 — Footprint + CVD Reversal w/ IQS (2026-05-04)
 

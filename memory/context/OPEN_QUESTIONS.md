@@ -1,137 +1,129 @@
 # Phoenix Bot — Open Questions
 
-_User follow-ups and architectural questions that haven't been resolved._
-_New Claude sessions: these are things the user wants progress on._
+_User follow-ups, decisions pending, and architectural questions that haven't been resolved._
+_New Claude sessions: these are things to make progress on, in priority order._
 
-_Last refreshed: 2026-04-25 EOD._
+_Last refreshed: 2026-05-13 EOD (post-audit, post-Sprint-M-Tier-1)._
 
-## 🔴 Active questions
+---
 
-### When does live trading flip on?
+## 🔴 Active decisions waiting on operator input
 
-**Status:** Real live account at $300. Live trading PAUSED on prod
-(stays Sim101). Bot will graduate when account reaches $2,000. Sim
-bot continues 24/7 live-sim execution to build the trade dataset
-needed for Phase C statistical validation.
+### 1. vwap_pullback bleed — fix or kill?
 
-### When can CPCV / DSR / PBO checkboxes turn green?
+**State** (per `tools/diagnose_vwap_pullback.py` 2026-05-13):
 
-**Status (2026-04-25):** `weekly_evolution.py` enforces these as
-unchecked in every commit body. We need ~200 sim trades per strategy
-minimum to compute statistically meaningful CPCV folds + DSR p-value
-+ PBO. Sim bot is now generating the dataset. Revisit when
-`out/grades/` has 8+ weekly aggregates.
+- 52 trades post-B13, **65.4% WR** but **net −$169.64**
+- Avg winner: $26.50, avg loser: −$59.49
+- Realized R:R = 0.446 vs configured target_rr = 1.8
+- Break-even WR needed at current R:R: **69.2%** (currently 3.8pp short)
+- Single exit-reason holds the entire bleed: `stop_loss` (18 trades, 0% WR, $-1,070.76)
+- Winners exit cleanly via `ema_dom_exit` (33 trades, 100% WR, $+830.94)
+- `target_hit` fires almost never (1 of 52)
 
-### Should `high_precision_only` be demoted?
+**Hypotheses to investigate before any fix:**
 
-**Status:** Question still open from April but the lab bot was
-decommissioned 2026-04-21, so the source of the 18% WR data is gone.
-Sim bot per-strategy P&L will surface this once enough trades land.
-The new weekly_evolution routine will auto-flag any strategy with
-≥2 consistent failures per week as a proposal candidate.
+- Stops too wide for typical move? Tighter stop would reduce avg loser.
+- Bot using fixed stop, but `ema_dom_exit` trigger is ~$25 ahead — strategy effectively has a 0.5:1 RR even though configured for 1.8.
+- The strategy never actually reaches its target — designed wrong, or target too far.
 
-## 🟡 Operational questions for the next session
+**Decision needed**: tune (tighter stops? scale-out earlier?), kill, or collect more data.
+Re-run `python tools/diagnose_vwap_pullback.py` after every batch of trades.
 
-1. **Re-register the four scheduled tasks dropped by the 14:31 reboot.**
-   Run all five `scripts/register_*.ps1` as Administrator. Verify with
-   `Get-ScheduledTask -TaskName Phoenix*`.
-2. **Verify Monday 06:30 morning_ritual** — look for
-   `out/morning_ritual/2026-04-27.md`, confirm verdict is
-   GREEN/AMBER (not RED), and confirm RED would have triggered
-   immediate Telegram.
-3. **Verify Monday 16:05 consolidated digest** — Telegram should
-   contain morning_ritual snippet + post_session_debrief in ONE
-   message.
-4. **First floor-kill test** — manually push a strategy to -$500
-   cumulative; validate halt + persistence + Telegram alert path.
+### 2. Live trading flip — still gated at account ≥ $2,000
 
-## ✅ Resolved this weekend (2026-04-25)
+**State**: real live account at $300. Prod stays Sim101 (`LIVE_TRADING=False`) until $2,000.
+Today's structural fixes (prod 24/7 evaluation, RiskManager hydration, etc.) all apply to Sim101
+paper-trading. No live-money exposure changes.
 
-### Weekend rebuild: Monday-ready?
+**No action**: gate stays. Revisit when account grows.
 
-**RESOLVED** — yes. 1,221 tests passing, 6 strategy fixes locked in
-by 20 regression tests, defaults all SAFE, scheduled task lattice
-ready to be re-registered after reboot.
+### 3. NT8 silent-stall — recurring all day 2026-05-13
 
-### Will simple_sizing satisfy without Kelly?
+**State**: tracked in [KNOWN_ISSUES.md](KNOWN_ISSUES.md) as 🟠 OPEN.
+- Heartbeats fresh (every 3s) but tick stream dies for 60s+ at a time.
+- Caused today's bots to cycle the WS watchdog repeatedly (the "106s cycle").
+- Workaround: manual NT8 data-feed disconnect/reconnect OR full NT8 restart.
 
-**RESOLVED** — yes for now. Account at $300, simple_sizing.py active.
-Kelly stays gated until account reaches $1,500. Sim bot uses fixed
-$2,000 × 16 strategies, not Kelly.
+**Decision needed**: invest the day to wire NT8 auto-recovery (kill + relaunch NinjaTrader.exe
+when stall exceeds 5min), OR keep manual-recovery as the answer.
 
-### Should all 7 strategies stay active?
+---
 
-**SUPERSEDED** — Phase C runs 10 strategies on 16 dedicated Sim
-accounts (some strategies route to multiple accounts for sub-flavors).
-Per-strategy halts make concentration unnecessary; bad strategies
-auto-disable themselves at -$500 cumulative.
+## 🟡 Forward-looking work on the radar
 
-### Reflector agent (propose-only daily debrief)
+### Sprint M Tier 2 (scheduled 2026-05-19)
 
-**RESOLVED via Phoenix Routines** — `tools/routines/post_session_debrief.py`
-fills this role with deterministic verdicts + AI commentary appendix.
+Per `memory/context/SPRINT_M_TIER_2_SCHEDULED.md`. Tier 2.3 (tape reader, observation only)
+shipped 2026-05-12 in commit `14deff5`. Tier 2.1 / 2.2 / 2.4 still scheduled.
 
-### Strategy concentration analysis
+### CPCV / DSR / PBO validation harness — Phase C dependency
 
-**SUPERSEDED** — `tools/routines/weekly_evolution.py` does this
-automatically every Sunday. Aggregates week, flags consistent failures
-(≥ max(2, n_sessions // 2)), seeds proposals, AI reviews them, opens
-a `weekly-evolution/YYYY-MM-DD` branch (NEVER auto-pushed).
+`weekly_evolution.py` still emits these checkboxes as "NOT YET RUN". Need ~200 sim trades per
+strategy minimum. Sim is now generating dataset continuously. Revisit when `out/grades/` has
+8+ weekly aggregates with consistent data.
 
-### Kelly sizing activation gate
+### Strategy promotion candidates
 
-**RESOLVED** — gate is account ≥ $1,500, hardcoded. Until then
-small_account_config applies.
+After today's data-integrity audit, `validation_tracker` finally sees ALL trades (legacy +
+per-bot files merged). Re-run `python tools/validation_tracker.py --post-b13-only` weekly.
 
-### 2-week shadow validation review
+### Diagnostic-pattern reuse
 
-**SUPERSEDED** — replaced by the weekly_evolution routine + future
-CPCV/DSR/PBO harness.
+`tools/diagnose_vwap_pullback.py` works for any strategy via `--strategy NAME`. Worth running
+against other strategies showing positive WR but suspect P&L (e.g., once `noise_area` or
+`opening_session` have enough post-B13 trades).
 
-### bias_momentum_v2 promotion gate
+---
 
-**RESOLVED** — bias_momentum LONG + SHORT mirror with VCR=1.2 is
-now the canonical implementation. v2 adapter debt cleared. Lock-in
-regression test in `tests/test_lock_in_epic_v1/`.
-
-### Finnhub blackout window (±2 vs ±5 min)
-
-**KEEP ±5 min** — wider is strictly safer. Decision logged
-2026-04-19, no action required. Finnhub real client now active.
-
-### ORB clock anchor / stop cap
-
-**DEFERRED** — ORB now ATR-adaptive per §4 fixes. Audit after 10+
-live trades; not blocking.
-
-### ANTHROPIC_API_KEY missing
-
-**RESOLVED** — fixed 2026-04-21 via `load_dotenv override=True`.
-
-## 🟢 Deferred to later weeks / months
+## 🟢 Deferred to later weeks / months (low priority)
 
 - Context-aware candlestick scoring (v2)
 - Triangle patterns + pattern target projection (v2)
-- NT8 Order Flow+ volumetric bars (C# mod — dedicated session)
-- Microstructure (tick rate, spread analysis, aggressor ratio deep)
+- Microstructure deep-dive (tick rate, spread analysis, aggressor ratio deep)
 - Cross-asset composite score (NQ/ES spread, DXY inverse, yield curve)
 - CalendarRisk fetch fix + pre/post-event gates
-- Regime-tagged memory buckets (need more data)
-- User dispute button (needs reflector live first)
+- Regime-tagged memory buckets (needs more data)
 - UOA / options flow
-- Level 2 tape-reader wired into strategies (footprint built, not yet gated)
-- SQLite migration of trade_memory.json
+- SQLite migration of `trade_memory*.json` (the per-bot JSON split is fine for now)
 - Weekly / multi-day context module
 - Unified feature pool across strategies (Renaissance-style)
-- NT8 SILENT_STALL auto-restart hook (currently watcher-only escalation)
-- TradeMarker.cs custom indicator (NT8 trade arrow display)
-- Phoenix-specific skills under `.claude/skills/` (§3.4 deferred)
+- TradeMarker.cs custom indicator (NT8 trade-arrow display — UX nicety, not blocking)
+- Phoenix-specific skills under `.claude/skills/` (deferred from Phase B+)
 
-## ❓ Questions for user at next morning check-in
+---
 
-1. Did the four `register_*.ps1` scripts re-register cleanly? Confirm
-   `Get-ScheduledTask -TaskName Phoenix*` shows all six (PhoenixLearner,
-   PhoenixGrading, PhoenixRiskGate, PhoenixMorningRitual,
-   PhoenixPostSessionDebrief, PhoenixWeeklyEvolution).
-2. Is MQBridge alive? Check `C:\temp\menthorq_levels.json` timestamp.
-3. Are Telegram notifications reliable since the HTML fix?
+## ✅ Recently resolved (closed since last refresh, included for audit trail)
+
+### 2026-05-13 — All of today's work (see [RECENT_CHANGES.md](RECENT_CHANGES.md) for details)
+
+- ✅ `dda680c` Graceful /shutdown via dashboard command queue
+- ✅ `c9099d7` 12-file trade_memory reader audit (all readers route through `load_all_trades()`)
+- ✅ `4d523bf` Dashboard `/api/today-pnl` per-bot file fix
+- ✅ `4e29ce5` + `d7e081a` RiskManager hydrates daily counters on bot startup (with bot_id filter)
+- ✅ `1e07000` Prod trading-window gate REMOVED — prod now evaluates 24/7
+- ✅ `2b59342` `tools/diagnose_vwap_pullback.py` shipped, vwap_pullback bleed surfaced
+- ✅ Operator side: Gemini AI investigator restored on a fresh GCP project (new GOOGLE_API_KEY)
+- ✅ PhoenixWatcher scheduled task now has `Repetition: PT5M` — max 5-min alerting downtime
+- ✅ `c209202` Sprint M Tier 1 C# side LIVE — TickStreamer recompiled, `imbalance_ratio` field
+  flowing in `data/volumetric_latest.json`
+
+### Older resolutions (collapsed — see git history)
+
+- 2026-04-21: ANTHROPIC_API_KEY missing (`eac5ae4`)
+- 2026-04-25: scheduled task lattice, watcher/finnhub/fred daemons, dual-stream incident cleanup
+- 2026-05-04: Sprint G dashboard UX fixes (`0b4a9db`, `cbaddb7`)
+- 2026-05-04: Sprint H opened up strategies for prod (`only_validated=False`)
+- 2026-05-12: bulletproof subprocess launch (`8b471af`)
+
+---
+
+## ❓ Questions to ask the operator at next session
+
+1. **Tomorrow's open**: did prod trade in its (now-removed) primary window 08:30-11:00 CT?
+   The window gate removal + 24/7 eval should produce activity even outside prime hours —
+   verify via `validation_tracker --post-b13-only`.
+2. **vwap_pullback decision**: review the diagnostic, decide tune/kill/hold-data path.
+3. **NT8 silent-stall**: if it recurs tomorrow, invest the day to auto-recovery OR keep manual?
+4. **Branch merge**: 17 commits on `weekly-evolution/2026-05-10`. Merge to main when ready,
+   or keep as a working branch.
