@@ -44,9 +44,16 @@ _REGIME_OVERRIDES = {
     "AFTERNOON_CHOP":   {"min_momentum": 80, "min_confluence": 5.5},
     "CLOSE_CHOP":       {"min_momentum": 80, "min_confluence": 5.5},
     # Off-hours — slightly looser for lab data collection
-    "OVERNIGHT_RANGE": {"min_momentum": 60, "min_confluence": 4.0},
-    "AFTERHOURS":      {"min_momentum": 60, "min_confluence": 4.0},
-    "PREMARKET_DRIFT":  {"min_momentum": 60, "min_confluence": 4.0},
+    # 2026-05-13: tightened AFTERHOURS/OVERNIGHT/PREMARKET min_confluence
+    # from 4.0 → 5.0 after operator flagged trade dc0c99aa firing on 1/4 TF
+    # alignment in AFTERHOURS. Low-volume regimes have more noise; loose
+    # thresholds were producing tier-C signals with no real bias.
+    # min_momentum kept at 60 (below this == no momentum at all). The new
+    # min_tf_votes=3 hard floor below is the stronger gate; this is the
+    # second line of defense.
+    "OVERNIGHT_RANGE": {"min_momentum": 60, "min_confluence": 5.0},
+    "AFTERHOURS":      {"min_momentum": 60, "min_confluence": 5.0},
+    "PREMARKET_DRIFT":  {"min_momentum": 60, "min_confluence": 5.0},
 }
 
 
@@ -670,6 +677,31 @@ class BiasMomentumFollow(BaseStrategy):
         # not TF votes, so the votes+momentum formula is meaningless. The momentum threshold
         # (20pts = ONE signal) is sufficient — day context IS the primary confluence.
         votes = market.get("tf_votes_bullish" if direction == "LONG" else "tf_votes_bearish", 0)
+
+        # ── 2026-05-13: HARD TF-VOTE FLOOR (operator-flagged 18:24 trade) ────
+        # The strategy's name is "Bias Momentum" — its premise is to trade with
+        # an ESTABLISHED multi-timeframe bias. Pre-fix, trade dc0c99aa fired
+        # LONG with only 1/4 TFs bullish at score=27 in AFTERHOURS regime. That's
+        # not a bias — it's noise with a slight tilt. The existing
+        # `confluence = votes + momentum_score/30` formula apparently allowed
+        # this through (forensic math says 1 + 27/30 = 1.9 < 4.0 should have
+        # rejected, but the SIGNAL still emitted — so either the formula has a
+        # bypass we didn't find or the inputs differ from the log printout).
+        # Hard floor: require min_tf_votes (default 3 of 4) regardless of any
+        # other math. Non-bypassable on non-TREND days. The strategy's whole
+        # premise is multi-TF alignment; firing on 1-2 TF agreement defeats it.
+        min_tf_votes = int(self.config.get("min_tf_votes", 3))
+        if not trend_day and votes < min_tf_votes:
+            self._last_reject = (
+                f"TF_VOTES: only {votes}/4 in {direction} direction, "
+                f"need >= {min_tf_votes} (regime={regime}, day={day_type})"
+            )
+            logger.info(
+                f"[EVAL] {self.name}: NO_SIGNAL tf_votes={votes}<{min_tf_votes} "
+                f"({direction}, score={momentum_score})"
+            )
+            return None
+
         if not trend_day:
             confluence = votes + (momentum_score / 30)
             if confluence < min_confluence:
