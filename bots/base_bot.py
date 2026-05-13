@@ -414,14 +414,38 @@ def _move_nt8_stop(pos, old_stop_price: float, new_stop_price: float) -> None:
         logger.error(f"[STOP_MOVE_EXCEPTION:{pos.trade_id}] {e}")
 
 
-def _trail_stop(pos, price: float):
+def _trail_stop(pos, price: float, min_profit_ticks: int = 8):
     """
     Trail stop to midpoint between entry and current price.
     Only moves in favorable direction — never worsens risk.
 
+    2026-05-13 fix: requires `min_profit_ticks` of in-the-money price
+    movement before firing. Was unconditional, which caused the fast-
+    abort bug — within seconds of entry, the stall detector would
+    return `tighten_stop=True` on tiny mean-reversion noise, TRAIL
+    would set stop to (entry+price)/2 ≈ entry + 0.5 ticks, the next
+    1-tick adverse blip would trigger the "stop_loss" exit. Net: 8-20s
+    trades closing at -$3 to -$5 commission losses with no real
+    market movement. See 2026-05-13 forensic log of trade f9781751.
+
+    With min_profit_ticks=8 (= 2 MNQ pts at 0.25 tick size), TRAIL
+    fires only after the trade has shown ~$4 of unrealized profit —
+    enough to be a real run, not noise.
+
     B76: after mutating pos.stop_price, emit write_modify_stop OIF to
     actually move the NT8 stop via cancel+replace.
     """
+    # 2026-05-13 fast-abort fix: require minimum profit before trailing.
+    # TICK_SIZE imported at module scope; if not available, use 0.25 MNQ default.
+    try:
+        _tick = TICK_SIZE
+    except NameError:
+        _tick = 0.25
+    profit_ticks = ((price - pos.entry_price) / _tick) if pos.direction == "LONG" \
+                   else ((pos.entry_price - price) / _tick)
+    if profit_ticks < min_profit_ticks:
+        return
+
     mid = (pos.entry_price + price) / 2
     new_stop = None
     if pos.direction == "LONG" and mid > pos.stop_price:
@@ -432,7 +456,8 @@ def _trail_stop(pos, price: float):
         return
     old_stop = pos.stop_price
     pos.stop_price = new_stop
-    logger.info(f"[TRAIL:{pos.trade_id}] Stop trailed to {pos.stop_price:.2f} (mid)")
+    logger.info(f"[TRAIL:{pos.trade_id}] Stop trailed to {pos.stop_price:.2f} (mid) "
+                f"after +{profit_ticks:.0f}t profit")
     _move_nt8_stop(pos, old_stop, new_stop)
 
 
@@ -1782,7 +1807,17 @@ class BaseBot:
                             #   a 40t stop = activates at +10 pts, protecting the gain
                             #   before the inevitable chop-day reversal hits.
                             if not pos.be_stop_active:
-                                stop_dist = abs(pos.entry_price - pos.stop_price)
+                                # 2026-05-13 fast-abort fix: use INITIAL stop_dist,
+                                # not the live stop_price (which may have already
+                                # been trailed close to entry by a stall tighten
+                                # earlier in this tick loop). Pre-fix, the
+                                # compounding TRAIL→BE sequence within 1s of entry
+                                # would shrink stop_dist to ~1 tick, making BE
+                                # trigger at +0.5 tick of profit, locking in a
+                                # 2-tick "stop" that exited on entry noise.
+                                _init_stop = getattr(pos, "initial_stop_price", 0) \
+                                             or pos.stop_price
+                                stop_dist = abs(pos.entry_price - _init_stop)
                                 if stop_dist > 0:
                                     # BE trigger: 1R on trend days, 0.5R otherwise
                                     be_mult = 1.0 if self._day_type == "TREND" else 0.5
@@ -1817,7 +1852,8 @@ class BaseBot:
                                     _grace_s = int(_strat.config.get("trend_stall_grace_s", 0) or 0)
                                     break
                             _held_s = time.time() - getattr(pos, "entry_time", time.time())
-                            if stall["exit_signal"] and should_suppress_trend_stall(_held_s, _grace_s):
+                            _in_grace = should_suppress_trend_stall(_held_s, _grace_s)
+                            if stall["exit_signal"] and _in_grace:
                                 # Within grace window — log once-per-position and
                                 # skip the exit. _trend_stall_grace_logged flag
                                 # avoids spamming the log every tick.
@@ -1833,6 +1869,24 @@ class BaseBot:
                                             f"— exiting runner. Reasons: {stall['reasons']}")
                                 await self._exit_trade(ws, price, "trend_stall",
                                                        trade_id=pos.trade_id)
+                            elif stall["tighten_stop"] and _in_grace:
+                                # 2026-05-13 fast-abort fix: extend the grace
+                                # window suppression to tighten_stop too. Pre-fix
+                                # only exit_signal was gated, so within seconds of
+                                # entry the stall detector's MODERATE signal would
+                                # fire TRAIL → BE_STOP → exit, killing trades
+                                # before they could develop. The _trail_stop
+                                # function has its own min-profit guard now, but
+                                # honoring grace here is the cleaner fix at the
+                                # caller level. STRONG exit is still suppressed
+                                # by the original gate above.
+                                if not getattr(pos, "_trend_tighten_grace_logged", False):
+                                    logger.debug(
+                                        f"[STALL_GRACE:{pos.trade_id}] tighten_stop "
+                                        f"suppressed — held {_held_s:.1f}s < grace {_grace_s}s "
+                                        f"(strategy={pos.strategy})"
+                                    )
+                                    pos._trend_tighten_grace_logged = True
                             elif stall["tighten_stop"]:
                                 _trail_stop(pos, price)
 

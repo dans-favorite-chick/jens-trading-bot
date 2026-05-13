@@ -70,11 +70,23 @@ class Position:
     entry_price: float
     entry_time: float
     contracts: int
-    stop_price: float
+    stop_price: float           # Current (live) stop — mutated by TRAIL/BE/chandelier
     target_price: float
     strategy: str
     reason: str
     market_snapshot: dict  # Snapshot of market data at entry
+
+    # ── 2026-05-13 (fast-abort bug fix): preserve the ORIGINAL stop ─────
+    # `stop_price` above gets mutated by TRAIL / BE_STOP / chandelier
+    # logic. When BE_STOP computed `stop_dist = abs(entry - stop_price)`
+    # AFTER a TRAIL had already moved stop close to entry, stop_dist
+    # would be tiny (e.g. 1 tick), so BE-trigger at 0.5R fired at +1
+    # tick of profit — locking in a 0-tick "stop" that exits on entry
+    # noise. Forensically observed 2026-05-13 17:21 and 17:39 trades
+    # closing in 8s and 20s with reason=stop_loss despite price moving
+    # 0-2 ticks. See base_bot.py:1785-1805 for the BE_STOP site that now
+    # reads this field instead of `stop_price`.
+    initial_stop_price: float = 0.0   # Set by PositionManager.open_position
 
     # ── P0.6 (D7) exit_pending state ───────────────────────────────
     # Flipped by mark_exit_pending(). While exit_pending is True, the
@@ -506,6 +518,7 @@ class PositionManager:
             entry_time=time.time(),
             contracts=contracts,
             stop_price=stop_price,
+            initial_stop_price=stop_price,   # 2026-05-13: preserve original R
             target_price=target_price,
             strategy=strategy,
             reason=reason,
