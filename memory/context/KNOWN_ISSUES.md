@@ -2,7 +2,37 @@
 
 _Open issues that haven't been resolved yet. Resolved issues moved to semantic/lessons_learned.md._
 
-_Last refreshed: 2026-05-13 AM (graceful /shutdown shipped; 106s reconnect cycle observed)._
+_Last refreshed: 2026-05-13 PM (today-pnl per-bot-files fix; tooling audit pending)._
+
+## 🟡 OPEN — Other readers of `trade_memory.json` likely have the same stale-data bug
+
+**Root issue**: commit `02b0efd` (2026-05-12) split trade memory into
+per-bot files (`trade_memory_<bot>.json`) to fix the prod/sim file-write
+race. The legacy `logs/trade_memory.json` became a frozen historical
+snapshot. Any tool that raw-opens the legacy file and treats it as
+"current trades" will silently miss every post-split trade.
+
+**Dashboard `/api/today-pnl` was caught and fixed today (commit `4d523bf`)**.
+But several other tools still raw-open the legacy file:
+
+| File | Line | Purpose | Risk |
+|---|---|---|---|
+| `tools/analyze_conflicts.py` | :30 `TRADE_MEMORY_PATH = .../trade_memory.json` | Conflict audit | Will report no recent trades to analyze |
+| `tools/audit_l2_roi.py` | :40, :103 | DOM/L2 ROI weekly audit | Already running per L2 audit cadence; output will progressively diverge |
+| Tools referenced in CLAUDE.md daily-workflow table | `validation_tracker.py`, `backfill_commissions.py`, `daily_session_summary.py` | All read `logs/trade_memory.json` per the table | NEEDS DEEPER LOOK — these are operator-facing analytics, drift here corrupts every weekly/daily decision |
+
+**Action**: dedicated audit pass — grep all `*.py` for `trade_memory.json`
+string, replace raw-open call sites with `core.trade_memory.load_all_trades()`,
+add a regression test along the lines of `test_today_pnl_per_bot_files.py`
+for each touched tool. Sized as a 1-2 hour focused sprint.
+
+**Why not done today**: scope discipline — fixed the user-visible
+discrepancy on the dashboard, captured the broader risk here for a
+focused audit pass. Daily-workflow tools should be checked BEFORE the
+next time the operator runs `python tools/daily_session_summary.py` and
+trusts its output.
+
+
 
 ## 🟠 OPEN — Bot disconnects every ~106s during 0-tick market conditions
 

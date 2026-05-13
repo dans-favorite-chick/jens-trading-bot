@@ -5,6 +5,40 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+### 2026-05-13 ~12:20 CDT — /api/today-pnl reads per-bot trade_memory files (commit `4d523bf`)
+
+Live-observed bug on the dashboard: TODAY (CME GLOBEX) card showed $0 /
+0 trades for both bots while the Daily Stats panel correctly showed 2
+sim_bot wins / $34.36. Root cause: commit `02b0efd` (2026-05-12) split
+trade_memory into per-bot files (`trade_memory_<bot>.json`) but
+`/api/today-pnl` was still reading the now-frozen legacy
+`trade_memory.json` directly.
+
+Fix: route through `core.trade_memory.load_all_trades()` — same loader
+that already powers `_load_session_trades_by_bot`. Reads legacy + every
+per-bot file and dedupes by trade_id.
+
+New regression test at `tests/test_today_pnl_per_bot_files.py` — builds
+an isolated logs dir with ONLY a per-bot file (NO legacy), confirms the
+endpoint counts the per-bot trade. Plus a static check that the handler
+uses `load_all_trades` and not raw `open(tm_path)`.
+
+**Deployment note**: the running dashboard (PID 13864 from 08:10 CT) is
+on old code and will continue showing stale TODAY P&L until it's
+restarted. Restart can wait — the data is correct in the Daily Stats
+panel meanwhile, and a brief dashboard bounce has no impact on bots
+(they push state on an independent 2s cadence).
+
+**Audit follow-up flagged**: other tools also raw-open
+`logs/trade_memory.json` (per `BUILD_MAP.md` line 1316,
+`tools/analyze_conflicts.py:30`, `tools/audit_l2_roi.py`, and the
+weekly/daily reporting tools in `CLAUDE.md`). These will silently miss
+post-split trades the same way. See KNOWN_ISSUES.md.
+
+Test suite: 1,725 → 1,727 pass (+2), 0 fail, 4 skipped.
+
+---
+
 ### 2026-05-13 ~08:40 CDT — graceful /shutdown via command queue (commit `dda680c`)
 
 Restores graceful-shutdown semantics that were lost in commit `8b471af`
