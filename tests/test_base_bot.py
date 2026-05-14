@@ -23,13 +23,20 @@ from strategies.opening_session import OpeningSessionStrategy
 # ═══════════════════════════════════════════════════════════════════
 # opening_session strategy class is registered in base_bot
 # ═══════════════════════════════════════════════════════════════════
-def test_opening_session_strategy_registered_in_base_bot():
+def test_opening_session_class_registered_but_not_loaded_when_retired():
+    """opening_session was retired 2026-05-13 (#5 of roadmap) — only 4
+    trades in months of runtime. The Python class is still imported in
+    base_bot.load_strategies() so a future re-enable is just a config
+    flip, but with enabled=False the load loop must skip it."""
     b = BaseBot()
     b.load_strategies()
     names = [s.name for s in b.strategies]
-    assert "opening_session" in names
-    osi = next(s for s in b.strategies if s.name == "opening_session")
-    assert isinstance(osi, OpeningSessionStrategy)
+    assert "opening_session" not in names, (
+        "opening_session should be skipped while retired=True in "
+        "config/strategies.py. See tests/test_retired_strategies.py."
+    )
+    # And the import must still resolve so re-enable is a one-line config change
+    assert OpeningSessionStrategy is not None
 
 
 # ═══════════════════════════════════════════════════════════════════

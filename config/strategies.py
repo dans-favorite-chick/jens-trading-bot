@@ -185,10 +185,23 @@ STRATEGIES = {
         "max_hold_min": 60,  # Give it room — VWAP pullbacks can run 30-80pts
     },
     "high_precision_only": {
+        # 🚫 RETIRED 2026-05-13 (#5/#6 of roadmap).
+        # 557 trades / 29% WR / -$1,082 net. The 14-tick fixed stop loses
+        # the noise game on NQ; the strategy needs a structural rework
+        # (atr_anchored stop + min_tf_votes=3 + min_precision=65 gate is
+        # NOT enough — see validation_status_2026-05-13.md). Re-enable
+        # only after a from-scratch redesign — flipping enabled=True
+        # without that work will repeat the 557-trade loss pattern.
         "enabled": False,
-        "validated": False,   # Lab only — Research Bot found promise (64% WR solo)
+        "validated": False,
+        "retired": True,
+        "retired_at": "2026-05-13",
+        "retired_reason": (
+            "557 trades / 29% WR / -$1,082 net. 14-tick fixed stop loses "
+            "to NQ noise. Needs structural rework, not parameter tweaks."
+        ),
         "stop_ticks": 14,
-        "target_rr": 5.0,    # 5:1 — high precision setups deserve big targets
+        "target_rr": 5.0,
         "min_confluence": 3.5,
         "min_tf_votes": 3,
         "min_precision": 65,
@@ -280,8 +293,23 @@ STRATEGIES = {
     },
 
     "compression_breakout": {
-        "enabled": True,
-        "validated": False,   # Lab only — PRE-explosion entry, build sample before prod promotion
+        # 🚫 RETIRED 2026-05-13 (#5 of roadmap).
+        # 18 trades total in 5+ weeks at INSUFFICIENT_SAMPLE (n=18) — the
+        # signal is too rare to ever reach TENTATIVE in reasonable time.
+        # 39% WR / -$79.96 net / single-trade concentration 0.89 (one
+        # trade carries 89% of the loss). At current firing rate (~0.5/day)
+        # we would need 12+ weeks just to hit n=30, by which time the
+        # market regime will have shifted. Re-enable only when paired
+        # with a regime-aware re-introduction (#7 regime matrix).
+        "enabled": False,
+        "validated": False,
+        "retired": True,
+        "retired_at": "2026-05-13",
+        "retired_reason": (
+            "18 trades / 39% WR / -$79.96 net. Signal too rare to ever "
+            "validate (would need 12+ weeks just to reach n=30). Reintroduce "
+            "with regime-aware gates only."
+        ),
         # Coil detection — None = use regime default from _REGIME_PARAMS in the strategy file
         #   Primary (8:30-10:30): min_coil_bars=3, tight_mult=0.90
         #   Afternoon:            min_coil_bars=5, tight_mult=1.20-1.50
@@ -310,11 +338,27 @@ STRATEGIES = {
     },
 
     "opening_session": {
+        # 🚫 RETIRED 2026-05-13 (#5 of roadmap).
+        # 4 trades / 25% WR / -$59.58 net after months of being enabled.
+        # The 6-sub-strategy router (open_drive, open_test_drive,
+        # open_auction_in/out, premarket_breakout, orb) is structurally
+        # heavy but rarely fires — the gates are too narrow. Re-introduce
+        # only as individual top-level strategies (e.g. lift open_drive
+        # to its own file) with a focused entry gate, not the nested
+        # router pattern.
         # Opening-window family: 4 opening-type branches + Premarket Breakout
-        # + 15-min ORB. Lab only until Phase 4 wiring.
-        "enabled": True,
-        "stage": "lab",
+        # + 15-min ORB.
+        "enabled": False,
+        "stage": "retired",
         "validated": False,
+        "retired": True,
+        "retired_at": "2026-05-13",
+        "retired_reason": (
+            "Only 4 trades in months of runtime / 25% WR / -$59.58 net. "
+            "Nested 6-sub-strategy router fires too rarely. Lift any "
+            "individual sub (e.g. open_drive) to its own top-level "
+            "strategy with a focused gate instead."
+        ),
 
         # Universal guards
         "max_trades_per_day": 2,
