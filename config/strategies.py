@@ -242,7 +242,12 @@ STRATEGIES = {
     },
     "ib_breakout": {
         "enabled": True,
-        "validated": True,    # Runs in prod bot — 96.2% IB break rate, 74.56% WR
+        # 2026-05-13 (#22): DEMOTED from validated=True to False. Wilson
+        # CI guardrail caught it: only 8 trades in the live record, which
+        # is below TENTATIVE (n>=100). The 75% WR with 8 trades has a
+        # 95% CI of 41-93% — that's noise, not evidence. Stay in lab
+        # until n>=100. Re-promote with `--check-promotion`.
+        "validated": False,
         # 2026-04-24: dropped from 30 → 10 per Jennifer's request after the 48h
         # log analysis showed IB Breakout was 100% blocked on warmup_incomplete
         # — bot mid-session restarts couldn't ever build a 30-min IB before the

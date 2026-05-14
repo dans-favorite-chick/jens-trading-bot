@@ -223,6 +223,45 @@ def _summary_stats(pnls: list[float], strip_top_pct: float = 10.0) -> dict:
     }
 
 
+_TENTATIVE_N = 100
+
+
+def check_promotion_eligibility(
+    trades: list[dict],
+    strategy_configs: dict,
+) -> list[tuple[str, int, str]]:
+    """Wilson-CI promotion guardrail (#22, 2026-05-13).
+
+    A strategy can only carry `validated=True` (which makes it eligible
+    for prod_bot via the only_validated gate) once it has at least
+    TENTATIVE (n >= 100) statistical confidence. A strategy promoted
+    earlier is making a directional call on noise.
+
+    Returns a list of (strategy_name, current_n, reason) tuples for
+    every misclassified strategy — empty list = clean. Caller decides
+    whether to warn or hard-fail.
+    """
+    counts: dict[str, int] = defaultdict(int)
+    for t in trades:
+        counts[t.get("strategy", "unknown")] += 1
+    violations: list[tuple[str, int, str]] = []
+    for name, cfg in strategy_configs.items():
+        if not cfg.get("validated", False):
+            continue
+        # Retired strategies don't need the guard — they can't promote
+        if cfg.get("retired"):
+            continue
+        n = counts.get(name, 0)
+        if n < _TENTATIVE_N:
+            violations.append((
+                name, n,
+                f"validated=True but only {n}/{_TENTATIVE_N} trades — "
+                f"below TENTATIVE tier. Demote to validated=False "
+                f"until n>={_TENTATIVE_N}."
+            ))
+    return violations
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--since", help="YYYY-MM-DD; only count trades on/after this date")
@@ -238,6 +277,12 @@ def main():
                          "'one big trade carrying everything' patterns.")
     ap.add_argument("--outlier-strip-pct", type=float, default=10.0,
                     help="Top N%% by absolute P&L to strip (default 10).")
+    # 2026-05-13 (#22): promotion guardrail. Exits non-zero if any
+    # `validated=True` strategy is below TENTATIVE — catches premature
+    # promotion (e.g. ib_breakout 8 trades / 75% WR / validated=True today).
+    ap.add_argument("--check-promotion", action="store_true",
+                    help="Exit 2 if any validated=True strategy is below "
+                         "TENTATIVE (n<100). Use in CI / pre-flip checks.")
     args = ap.parse_args()
 
     since = None
@@ -248,6 +293,20 @@ def main():
 
     data_root = _data_root()
     trades = load_all_trades(data_root)
+
+    # ── #22 promotion guardrail ──────────────────────────────────────
+    if args.check_promotion:
+        from config.strategies import STRATEGIES
+        violations = check_promotion_eligibility(trades, STRATEGIES)
+        if not violations:
+            print("[promotion-check] OK — no validated=True strategy "
+                  f"is below TENTATIVE (n>={_TENTATIVE_N}).")
+            return 0
+        print(f"[promotion-check] FAIL — {len(violations)} strategies "
+              "below TENTATIVE but flagged validated=True:")
+        for name, n, reason in violations:
+            print(f"  - {name}: {reason}")
+        return 2
 
     # Filter
     filtered = []
