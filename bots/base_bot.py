@@ -2023,17 +2023,32 @@ class BaseBot:
                     # SKIPPED when pos.rider_mode=True — on TREND day runners, DOM wobbles
                     # are noise, not reversals. Stall detector (above) handles those exits.
                     #
-                    # Day-type aware min profit:
-                    #   TREND days:  40t (10pts) — big moves have room, protect real gains
-                    #   Other days:  20t (5pts)  — choppy P50 extension = 25t, gate at 40t
-                    #                              would never fire; 20t still filters noise
+                    # 2026-05-13 (#1c): dynamic min_profit_ticks = 70% of the
+                    # position's target distance. Previous static 20/40 floor
+                    # was either too tight (small-target strategies fired the
+                    # exit early-cycle, leaving money on the table) or too
+                    # loose (big-target strategies kept the exit gate open
+                    # for the entire move). 70% means: "we've captured most
+                    # of the planned move, NOW be willing to bank it if the
+                    # microstructure flips." Static 20/40 are the fallback
+                    # when target_price is missing/invalid.
                     # Phase C: smart-exit per position (iterate all; rider-mode
                     # positions are skipped as before).
                     for _pos in list(self.positions.active_positions):
                         if _pos.rider_mode:
                             continue
                         from config.settings import TICK_SIZE as _TICK_SIZE
-                        _min_profit = 40 if self._day_type == "TREND" else 20
+                        _static_floor = 40 if self._day_type == "TREND" else 20
+                        _target_px = getattr(_pos, "target_price", None) or 0.0
+                        _entry_px = getattr(_pos, "entry_price", None) or 0.0
+                        if _target_px > 0 and _entry_px > 0:
+                            _target_ticks = abs(_target_px - _entry_px) / _TICK_SIZE
+                            _dynamic = int(_target_ticks * 0.70)
+                            # Floor at the static value so we don't fire
+                            # before clearing the noise band entirely.
+                            _min_profit = max(_static_floor, _dynamic)
+                        else:
+                            _min_profit = _static_floor
                         smart = self._stall_detector.check_ema_dom_exit(
                             snapshot, _pos.direction,
                             tick_size=_TICK_SIZE,
