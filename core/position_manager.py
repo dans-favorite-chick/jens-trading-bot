@@ -190,6 +190,20 @@ class Position:
     stop_order_id: str = ""
     target_order_id: str = ""
 
+    # ── 2026-05-13 MAE/MFE tracking (#2) ─────────────────────────────────
+    # Maximum Adverse Excursion (MAE) = the worst price the trade saw against
+    # us. Maximum Favorable Excursion (MFE) = the best price it saw for us.
+    # Both updated on every tick while the position is open; persisted to
+    # trade_memory at close. Sweeney's methodology (Campaign Trading, 1996):
+    # plot MAE of winners vs losers — winners cluster below a threshold,
+    # losers extend past it. That threshold becomes the principled initial
+    # stop. We also persist `mfe_capture_pct` = realized_profit / mfe_profit
+    # which exposes "did we leave money on the table?" per trade.
+    mae_price: float = 0.0       # worst price seen against the trade
+    mfe_price: float = 0.0       # best price seen in favor of the trade
+    # Bookkeeping for first-tick init (so we don't seed with stale zeros)
+    _mae_mfe_initialized: bool = field(default=False, repr=False)
+
     def __post_init__(self):
         """Snapshot initial_stop_price as immutable R reference.
 
@@ -220,6 +234,56 @@ class Position:
             return abs(self.entry_price - self._initial_stop_frozen)
         except (AttributeError, TypeError):
             return 0.0
+
+    def update_mae_mfe(self, price: float) -> None:
+        """Update Maximum Adverse Excursion + Maximum Favorable Excursion
+        based on the latest tick price. Called by base_bot on every tick
+        update for every active position. Cheap (3 comparisons), so the
+        per-tick cost is negligible.
+
+        For LONG positions:
+          - MAE = LOWEST price seen since entry (worst adverse move)
+          - MFE = HIGHEST price seen since entry (best favorable move)
+        For SHORT positions, mirrored.
+        """
+        try:
+            p = float(price)
+        except (TypeError, ValueError):
+            return
+        if not self._mae_mfe_initialized:
+            # First tick — seed with entry_price as both extremes
+            self.mae_price = self.entry_price
+            self.mfe_price = self.entry_price
+            object.__setattr__(self, "_mae_mfe_initialized", True)
+        if self.direction == "LONG":
+            if p < self.mae_price:
+                self.mae_price = p
+            if p > self.mfe_price:
+                self.mfe_price = p
+        else:  # SHORT
+            if p > self.mae_price:
+                self.mae_price = p
+            if p < self.mfe_price:
+                self.mfe_price = p
+
+    @property
+    def mae_ticks(self) -> float:
+        """MAE expressed in ticks (assumes 0.25 tick size for MNQ; the
+        absolute number is what matters for cross-trade comparison)."""
+        if not self._mae_mfe_initialized:
+            return 0.0
+        if self.direction == "LONG":
+            return (self.entry_price - self.mae_price) / 0.25
+        return (self.mae_price - self.entry_price) / 0.25
+
+    @property
+    def mfe_ticks(self) -> float:
+        """MFE expressed in ticks. Positive number = favorable move size."""
+        if not self._mae_mfe_initialized:
+            return 0.0
+        if self.direction == "LONG":
+            return (self.mfe_price - self.entry_price) / 0.25
+        return (self.entry_price - self.mfe_price) / 0.25
 
 
 class PositionManager:
@@ -681,6 +745,33 @@ class PositionManager:
             # the indicator audit can rank A++/A/B/C predictive value.
             # Pre-Sprint-F trades have tier=None.
             "tier": pos.tier,
+            # 2026-05-13 (#2): MAE / MFE / R-multiple tracking. Sweeney's
+            # Maximum Adverse Excursion methodology — winners cluster
+            # below a threshold MAE, losers extend past it. Persisting
+            # lets future analysis answer "did we leave money on the
+            # table?" and calibrate initial stops from data (#17).
+            "mae_price":         round(pos.mae_price, 4) if pos._mae_mfe_initialized else None,
+            "mfe_price":         round(pos.mfe_price, 4) if pos._mae_mfe_initialized else None,
+            "mae_ticks":         round(pos.mae_ticks, 1) if pos._mae_mfe_initialized else None,
+            "mfe_ticks":         round(pos.mfe_ticks, 1) if pos._mae_mfe_initialized else None,
+            "r_distance":        round(pos.r_distance, 4),
+            # MFE capture % = how much of the favorable peak we kept as
+            # realized profit. 1.0 = exited at the peak; 0.0 = gave it
+            # all back. <0 = exited beyond peak (impossible for LONG
+            # exits BELOW peak, but defensive vs floating-point edges).
+            "mfe_capture_pct":   round(
+                (abs(net_pnl) / max(1e-9, abs(pos.mfe_ticks) * 0.5)) if pos._mae_mfe_initialized and pos.mfe_ticks > 0 and net_pnl > 0 else 0.0,
+                3,
+            ),
+            # R-multiple: realized P&L / initial risk. +1R = made one R.
+            # -1R = lost the full initial stop. Per Van Tharp framework.
+            # NB: uses net_pnl in dollars over r_distance_dollars (r_distance
+            # in price points × contracts × dollar_per_point). For MNQ at
+            # 1 contract: 1 point = $2, so r_distance_dollars = r_distance × 2.
+            "r_multiple":        round(
+                net_pnl / max(1e-9, pos.r_distance * 2.0 * pos.contracts) if pos.r_distance > 0 else 0.0,
+                3,
+            ),
         }
 
         self.trade_history.append(trade)

@@ -1834,6 +1834,14 @@ class BaseBot:
                     # strategies hold concurrent positions. list(...) snapshots
                     # the set so in-loop exits don't break iteration.
                     for pos in list(self.positions.active_positions):
+                        # 2026-05-13 (#2): update MAE/MFE on every tick for
+                        # every active position. Cheap (3 comparisons). Drives
+                        # the persisted MAE/MFE/R-multiple analytics at close.
+                        try:
+                            pos.update_mae_mfe(price)
+                        except Exception:
+                            pass  # don't let MAE-tracking break the exit loop
+
                         if not TREND_RIDER_ENABLED:
                             break
 
