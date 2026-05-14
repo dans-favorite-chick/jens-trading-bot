@@ -1,12 +1,23 @@
 """
-B82 — Dashboard session-scoped durable trades.
+B82 — Dashboard durable trades (calendar-day boundary as of 2026-05-14).
 
-The dashboard must show ALL current-session trades (sim + prod + lab)
-from logs/trade_memory.json, not just whatever happens to be cached in
-the bot's last state-push. Session boundary = most-recent 17:00 CT
-(CME globex open), so trades from yesterday afternoon remain visible
-through today's 16:00-17:00 daily-flatten dead zone and only reset
-when the next globex session opens.
+The dashboard must show ALL today's trades (sim + prod + lab) from the
+per-bot trade_memory files, not just whatever happens to be cached in
+the bot's last state-push.
+
+Boundary history:
+  - Pre-2026-05-13: Globex 17:00 CT for every panel.
+  - 2026-05-13 (`0c24a8e`): /api/today-pnl moved to calendar day so the
+    TODAY card agreed with the bot's RiskManager.daily_pnl.
+  - 2026-05-14: `_load_session_trades_by_bot`, `/api/status`, `/api/trades`
+    also moved to calendar day so the Daily Stats trade table agrees
+    with the TODAY card. Operator's 16-vs-(8+1) panel mismatch was the
+    motivating bug.
+
+`TestSessionStart` still pins the Globex helper (`_session_start_ct_epoch`)
+since the helper is preserved — just no longer wired into any dashboard
+surface. The bucketing / endpoint tests now monkeypatch the calendar-day
+helper.
 
 Run: pytest tests/test_dashboard_session_trades.py -v
 """
@@ -94,7 +105,7 @@ class TestLoadSessionTrades:
     def test_buckets_by_bot_id(self, tm_file, monkeypatch):
         # Freeze "now" so session_start is known.
         monkeypatch.setattr(
-            dash, "_session_start_ct_epoch",
+            dash, "_calendar_day_start_ct_epoch",
             lambda: datetime(2026, 4, 21, 17, 0, tzinfo=_CT).timestamp(),
         )
         rows = [
@@ -117,7 +128,7 @@ class TestLoadSessionTrades:
     def test_filters_out_pre_session_trades(self, tm_file, monkeypatch):
         """Trade with exit_time before session_start must NOT appear."""
         monkeypatch.setattr(
-            dash, "_session_start_ct_epoch",
+            dash, "_calendar_day_start_ct_epoch",
             lambda: datetime(2026, 4, 22, 17, 0, tzinfo=_CT).timestamp(),
         )
         # Before session
@@ -136,7 +147,7 @@ class TestLoadSessionTrades:
 
     def test_missing_bot_id_lands_in_unknown_bucket(self, tm_file, monkeypatch):
         monkeypatch.setattr(
-            dash, "_session_start_ct_epoch",
+            dash, "_calendar_day_start_ct_epoch",
             lambda: datetime(2026, 4, 21, 17, 0, tzinfo=_CT).timestamp(),
         )
         self._seed(tm_file, [{
@@ -165,7 +176,7 @@ class TestLoadSessionTrades:
 
     def test_trades_without_exit_time_are_skipped(self, tm_file, monkeypatch):
         monkeypatch.setattr(
-            dash, "_session_start_ct_epoch",
+            dash, "_calendar_day_start_ct_epoch",
             lambda: datetime(2026, 4, 21, 17, 0, tzinfo=_CT).timestamp(),
         )
         self._seed(tm_file, [
@@ -187,7 +198,7 @@ class TestApiTradesEndpoint:
         logs_dir.mkdir()
         monkeypatch.setattr(dash, "PROJECT_ROOT", str(tmp_path))
         monkeypatch.setattr(
-            dash, "_session_start_ct_epoch",
+            dash, "_calendar_day_start_ct_epoch",
             lambda: datetime(2026, 4, 21, 17, 0, tzinfo=_CT).timestamp(),
         )
         rows = [

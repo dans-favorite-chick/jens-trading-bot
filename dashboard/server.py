@@ -78,12 +78,13 @@ def _session_start_ct_epoch(now_ct=None) -> float:
     `now_ct` is an optional CT-aware datetime for testability. Production
     callers pass nothing; tests freeze "now" to verify boundary edges.
 
-    NOTE: this is the Globex-session boundary (resets at 17:00 CT). For
-    the dashboard's TODAY P&L card we now use the calendar-day boundary
-    (resets at 00:00 CT) via `_calendar_day_start_ct_epoch()` instead —
-    so it agrees with the bot's RiskManager (which uses calendar day for
-    daily_pnl reset). The Globex boundary is still used by
-    `_load_session_trades_by_bot()` + the per-session-trade listings.
+    NOTE: this is the Globex-session boundary (resets at 17:00 CT).
+    No dashboard panel uses this anymore — the TODAY card, Daily Stats,
+    and trade tables ALL use `_calendar_day_start_ct_epoch()` so they
+    agree with the bot's RiskManager (which resets at calendar midnight).
+    The Globex helper is preserved for any CME-session-scoped analytics
+    that legitimately need it (currently unused; safe to remove if
+    nothing references it by the next memory-writeback audit).
     """
     from datetime import datetime, timedelta
     try:
@@ -122,11 +123,12 @@ def _calendar_day_start_ct_epoch(now_ct=None) -> float:
       to 00:00 CT every evening, the two panels disagreed (TODAY card
       showed $0 while Daily Stats still showed the day's P&L). 7 hours
       of operator confusion every night.
-    - Switching the dashboard endpoint to calendar day aligns the two
-      surfaces.
-    - We KEEP `_session_start_ct_epoch()` available (Globex semantic)
-      for any place that genuinely needs session-scoped trade listings
-      (`_load_session_trades_by_bot` still uses it).
+    - Switching the dashboard endpoints to calendar day aligns the two
+      surfaces. As of 2026-05-14, every dashboard panel (`/api/today-pnl`,
+      `/api/status`, `/api/trades`, `_load_session_trades_by_bot`) uses
+      this helper.
+    - `_session_start_ct_epoch()` is preserved for CME-session-scoped
+      analytics but is no longer wired into any dashboard surface.
 
     `now_ct` is an optional CT-aware datetime for testability.
     """
@@ -145,7 +147,7 @@ def _calendar_day_start_ct_epoch(now_ct=None) -> float:
 
 
 def _load_session_trades_by_bot() -> dict[str, list[dict]]:
-    """Bucket current-session trades by bot_id.
+    """Bucket today's trades by bot_id.
 
     Returns {"prod": [...], "sim": [...], "lab": [...]}. Reads the merged
     view via `TradeMemory.load_all_trades()` — that pulls from the legacy
@@ -156,6 +158,16 @@ def _load_session_trades_by_bot() -> dict[str, list[dict]]:
     dashboard.html::renderTrades reverses for display). Trades without
     a recognized bot_id land under "unknown" so nothing is silently
     dropped.
+
+    2026-05-14 boundary fix: switched from Globex 17:00 CT to CALENDAR
+    DAY 00:00 CT so the Daily Stats trade table agrees with the TODAY
+    P&L card (`/api/today-pnl`, switched 2026-05-13 `0c24a8e`) and with
+    the bot's RiskManager.daily_pnl (which already resets at calendar
+    midnight). Prior bug: from 17:00 CT to midnight the trade table
+    included yesterday-evening trades that the TODAY card had already
+    rolled out — operator saw "16 trades" in sim's table while sim's
+    "Trades" stat showed 8. Globex helper is kept (`_session_start_ct_epoch`)
+    for any analytics that genuinely need CME-session scope.
     """
     try:
         from core.trade_memory import load_all_trades
@@ -170,7 +182,7 @@ def _load_session_trades_by_bot() -> dict[str, list[dict]]:
         )
         return {}
 
-    session_start = _session_start_ct_epoch()
+    session_start = _calendar_day_start_ct_epoch()
     buckets: dict[str, list[dict]] = {}
     for t in rows:
         exit_ts = t.get("exit_time")
@@ -485,7 +497,10 @@ def api_status():
             "sim": _bot_status("sim"),
         },
         "connection_log": conn_log,
-        "session_start_ts": _session_start_ct_epoch(),
+        # 2026-05-14: calendar-day boundary to match the trade table
+        # bucketing above + the /api/today-pnl TODAY card. See
+        # _load_session_trades_by_bot docstring for the bug history.
+        "session_start_ts": _calendar_day_start_ct_epoch(),
         "ts": time.time(),
     })
 
@@ -558,20 +573,26 @@ def api_connection_log():
 
 @app.route("/api/trades")
 def api_trades():
-    """B82: all current-session trades, bucketed by bot_id, sourced from
-    the durable trade_memory.json so the response survives dashboard and
-    bot restarts. Session = most-recent 17:00 CT → now.
+    """B82 + 2026-05-14 boundary fix: today's trades, bucketed by bot_id,
+    sourced from the merged per-bot trade_memory files via load_all_trades()
+    so the response survives dashboard and bot restarts.
 
-    Response shape is the legacy {prod, lab} plus a new sim bucket.
-    lab is preserved for back-compat with any consumers still reading it
-    (lab was decommissioned 2026-04-21 but the key stays for old UIs).
+    Window: TODAY since 00:00 CT (calendar day). Was Globex 17:00 CT prior
+    to 2026-05-14 — that caused the trade table to include yesterday-evening
+    trades that the TODAY P&L card had already rolled out, so the panels
+    disagreed for 7 hours every night. See `_load_session_trades_by_bot`
+    docstring for the bug history.
+
+    Response shape is the legacy {prod, lab} plus a sim bucket. lab is
+    preserved for back-compat with any consumers still reading it (lab
+    was decommissioned 2026-04-21 but the key stays for old UIs).
     """
     session_trades = _load_session_trades_by_bot()
     return safe_jsonify({
         "prod": session_trades.get("prod", []),
         "sim": session_trades.get("sim", []),
         "lab": session_trades.get("lab", []),
-        "session_start_ts": _session_start_ct_epoch(),
+        "session_start_ts": _calendar_day_start_ct_epoch(),
     })
 
 

@@ -14,9 +14,12 @@ still showed the day's accumulated P&L. Operator confusion was a
 recurring nightly experience.
 
 Fix: switched `/api/today-pnl` to call `_calendar_day_start_ct_epoch()`
-(new helper) instead of `_session_start_ct_epoch()`. The Globex helper
-is preserved + still used by `_load_session_trades_by_bot()` for the
-per-session trade listings.
+(new helper) instead of `_session_start_ct_epoch()`. As of 2026-05-14,
+the same fix has been extended to `_load_session_trades_by_bot()`,
+`/api/status`, and `/api/trades` (see
+`tests/test_dashboard_session_trades.py`) — every dashboard surface now
+uses calendar day, so panels agree. The Globex helper is preserved but
+unused by the dashboard.
 
 This test covers:
 1. `_calendar_day_start_ct_epoch()` returns midnight CT today
