@@ -30,11 +30,12 @@ Priority table (highest priority wins — lowest rank number):
     2  | eod_flat_universal                 | Session-close safety
     3  | chandelier_trail_hit               | Trend reversal (ORB runner)
     4  | signal_flip / managed exit         | Strategy-specific invalidation
-    5  | trend_stall (rider)                | Momentum exhaustion
-    6  | ema_dom_exit (smart)               | Microstructure reversal
-    7  | target_hit (bracket target)        | Planned profit-take
-    8  | time_stop / max_hold               | Hold budget expired
-    9  | scale_out_partial                  | Non-exit; partial size down
+    5  | flow_reversal / cvd_flip / cvd_div | Order-flow opposes (positive evidence)
+    6  | trend_stall (rider)                | Momentum exhaustion (absence of progress)
+    7  | ema_dom_exit (smart)               | Microstructure reversal
+    8  | target_hit (bracket target)        | Planned profit-take
+    9  | time_stop / max_hold               | Hold budget expired
+   10  | scale_out_partial                  | Non-exit; partial size down
 """
 
 from __future__ import annotations
@@ -59,14 +60,27 @@ EXIT_PRIORITY: dict[str, int] = {
     "signal_flip":            4,
     "managed_exit":           4,
     "price_returns_inside_noise_area": 4,
-    "trend_stall":            5,
-    "ema_dom_exit":           6,
-    "target_hit":             7,
-    "bracket_target":         7,
-    "time_stop":              8,
-    "max_hold":               8,
-    "scale_out_partial":      9,   # Not an exit; partial size reduction
+    # 2026-05-13 (#19): "flow reversal" family — order-flow tells us
+    # we're wrong. Ranked above trend_stall (which is just "no progress")
+    # because flow_reversal carries POSITIVE evidence of opposing
+    # institutional activity, not just absence of supporting activity.
+    "flow_reversal":          5,   # Generic alias / explain-friendly name
+    "cvd_flip":               5,   # Per-bar delta flipped N consec bars
+    "cvd_divergence":         5,   # Swing-pivot divergence (bear/bull)
+    "trend_stall":            6,
+    "ema_dom_exit":           7,
+    "target_hit":             8,
+    "bracket_target":         8,
+    "time_stop":              9,
+    "max_hold":               9,
+    "scale_out_partial":      10,  # Not an exit; partial size reduction
 }
+
+# 2026-05-13 (#19): the flow-reversal family. Used by exit_cascade and
+# any analytics that want to group "CVD told us to leave" exits.
+FLOW_REVERSAL_REASONS: frozenset[str] = frozenset({
+    "flow_reversal", "cvd_flip", "cvd_divergence",
+})
 
 # Reasons we treat as actual exits (scale_out_partial is NOT an exit).
 _NON_EXIT_REASONS = {"scale_out_partial"}
