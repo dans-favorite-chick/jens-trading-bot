@@ -175,8 +175,29 @@ class SimpleSizer:
             return 0
         return max(0, self._cooldown_until - time.time())
 
+    # 2026-05-13 (#23): tier multipliers. Statistical confidence drives
+    # how aggressively to size: a TENTATIVE strategy (n=100-384) gets
+    # base size; a VALIDATED strategy (n=385+) earns the right to size
+    # up; an INSUFFICIENT-sample strategy never trades through this
+    # path (the validated gate filters it earlier), but if it slips
+    # through we keep size at 1.
+    _TIER_MULTIPLIER = {
+        "INSUFFICIENT_SAMPLE": 1.0,
+        "PRELIMINARY":         1.0,
+        "TENTATIVE":           1.0,
+        "VALIDATED":           1.5,
+        "HIGH_CONFIDENCE":     2.0,
+    }
+
+    @classmethod
+    def _tier_multiplier(cls, tier: str | None) -> float:
+        if not tier:
+            return 1.0
+        return cls._TIER_MULTIPLIER.get(tier.upper(), 1.0)
+
     def size_trade(self, signal_score: int, daily_pnl: float = 0.0,
-                   trades_today: int = 0) -> dict:
+                   trades_today: int = 0,
+                   strategy_tier: str | None = None) -> dict:
         """
         Decide whether to take a signal and what size.
 
@@ -184,6 +205,11 @@ class SimpleSizer:
             signal_score: Strategy composite score 0-100
             daily_pnl: Current day's P&L in USD (negative for losses)
             trades_today: Count of trades already taken today
+            strategy_tier: Optional statistical tier
+                (INSUFFICIENT_SAMPLE / PRELIMINARY / TENTATIVE /
+                VALIDATED / HIGH_CONFIDENCE). When provided, scales
+                contracts by the tier multiplier. Unknown/None = 1.0x.
+                (#23, 2026-05-13)
 
         Returns:
             {
@@ -192,6 +218,7 @@ class SimpleSizer:
                 "max_loss_dollars": float,
                 "reason": str,  # if take_trade=False, the reason
                 "stop_multiplier_hint": float,  # regime-aware (Saturday enhancement)
+                "tier_multiplier": float,
             }
         """
         cfg = self.config
@@ -238,12 +265,25 @@ class SimpleSizer:
             }
 
         # All gates passed — size the trade
+        base_contracts = int(cfg["contracts_per_trade"])
+        tier_mult = self._tier_multiplier(strategy_tier)
+        # Scale by tier — round down (never inflate from base on rounding).
+        # Floor at 1 contract so a tier_mult < 1.0 doesn't zero out the
+        # trade (the conviction-threshold gate is the right place to
+        # reject, not silent zero-sizing here).
+        scaled = max(1, int(base_contracts * tier_mult))
         return {
             "take_trade": True,
-            "contracts": int(cfg["contracts_per_trade"]),
-            "max_loss_dollars": float(cfg["max_loss_per_trade_usd"]),
-            "reason": f"approved: score={signal_score}, daily_pnl=${daily_pnl:.2f}, trades_today={trades_today}",
+            "contracts": scaled,
+            "max_loss_dollars": float(cfg["max_loss_per_trade_usd"]) * scaled,
+            "reason": (
+                f"approved: score={signal_score}, "
+                f"daily_pnl=${daily_pnl:.2f}, "
+                f"trades_today={trades_today}, "
+                f"tier={strategy_tier or 'unspecified'} ({tier_mult:.2f}x)"
+            ),
             "stop_multiplier_hint": 1.0,  # Saturday: regime-aware override
+            "tier_multiplier": tier_mult,
         }
 
 
