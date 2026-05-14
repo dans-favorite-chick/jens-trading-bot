@@ -1204,6 +1204,11 @@ class BaseBot:
             # to pick eod_flat_time_et = 10:55 ET vs 15:55 ET).
             enriched = dict(config)
             enriched["is_prod_bot"] = is_prod
+            # 2026-05-13 (#13): pass bot_name so strategies that opt
+            # into state persistence (e.g. orb) can scope their state
+            # file per-bot. prod and lab/sim share a Python codebase
+            # but must NOT share state files.
+            enriched["bot_name"] = self.bot_name
             strat = strategy_classes[name](enriched)
 
             # Defensive: strategies that don't inherit BaseStrategy (e.g. v2

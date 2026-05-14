@@ -20,6 +20,7 @@ Mechanics:
 """
 
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import logging
@@ -52,6 +53,69 @@ class OpeningRangeBreakout(BaseStrategy):
         self._last_5m_checked_ts: float = 0  # Dedup: check each new 5m bar once
         # Prod vs lab session window — set by bot via is_prod_bot attribute
         self.is_prod_bot: bool = config.get("is_prod_bot", False)
+        # 2026-05-13 (#13): restore state across bot restarts so a mid-
+        # session crash/restart doesn't lose the OR range that was
+        # observed before the restart. Opt-in via config["bot_name"];
+        # legacy tests / ad-hoc usage that don't supply a bot_name get
+        # the old in-memory-only behavior.
+        self._state_path: Path | None = None
+        _bot_name = config.get("bot_name")
+        if _bot_name:
+            try:
+                from config.settings import PROJECT_ROOT  # type: ignore
+                _root = Path(PROJECT_ROOT)
+            except Exception:
+                _root = Path(__file__).resolve().parent.parent
+            self._state_path = _root / "logs" / f"orb_state_{_bot_name}.json"
+            self._load_state()
+
+    # ── State persistence (#13, 2026-05-13) ──────────────────────────
+    def _load_state(self) -> None:
+        """Restore state from disk if it matches today's date in ET. If
+        the saved date is stale (different day), ignore — the bot will
+        reset fresh when the OR window opens."""
+        if self._state_path is None or not self._state_path.exists():
+            return
+        try:
+            import json
+            data = json.loads(self._state_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning(f"[ORB:state] load failed (non-blocking): {e}")
+            return
+        today_et = datetime.now(_ET).strftime("%Y-%m-%d")
+        if data.get("or_date") != today_et:
+            return  # Different day — silently discard
+        self._or_high = data.get("or_high")
+        self._or_low = data.get("or_low")
+        self._or_set = bool(data.get("or_set", False))
+        self._or_date = data.get("or_date")
+        self._traded_today = bool(data.get("traded_today", False))
+        logger.info(
+            f"[ORB:state] restored {today_et} — OR=[{self._or_low}, "
+            f"{self._or_high}] set={self._or_set} traded={self._traded_today}"
+        )
+
+    def _save_state(self) -> None:
+        """Persist current OR state. Called from _reset_daily,
+        post-OR-set, and post-trade. Best-effort — never blocks the
+        strategy's evaluate() path."""
+        if self._state_path is None:
+            return
+        try:
+            import json
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            self._state_path.write_text(
+                json.dumps({
+                    "or_high": self._or_high,
+                    "or_low": self._or_low,
+                    "or_set": self._or_set,
+                    "or_date": self._or_date,
+                    "traded_today": self._traded_today,
+                }),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            logger.debug(f"[ORB:state] save failed (non-blocking): {e}")
 
     def _reset_daily(self, today: str):
         self._or_high = None
@@ -61,6 +125,7 @@ class OpeningRangeBreakout(BaseStrategy):
         self._or_bars_1m = []
         self._traded_today = False
         self._last_5m_checked_ts = 0
+        self._save_state()
 
     def evaluate(self, market: dict, bars_5m: list, bars_1m: list,
                  session_info: dict) -> Signal | None:
@@ -137,6 +202,7 @@ class OpeningRangeBreakout(BaseStrategy):
 
             if len(self._or_bars_1m) >= or_duration:
                 self._or_set = True
+                self._save_state()  # #13: persist once OR is finalized
             else:
                 logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
                 return None
@@ -213,6 +279,7 @@ class OpeningRangeBreakout(BaseStrategy):
 
         # ── Step 6: Mark traded, emit signal ────────────────────────
         self._traded_today = True
+        self._save_state()  # #13: persist so a restart can't re-trade
 
         # Confidence from OR size relative to ATR
         atr_5m = market.get("atr_5m", 0) or 0
