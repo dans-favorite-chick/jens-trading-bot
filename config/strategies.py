@@ -166,7 +166,12 @@ STRATEGIES = {
         "validated": False,   # Lab only
         # NQ-calibrated ATR-anchored stop (B14 2026-04-20). Replaces fixed 14t.
         "stop_method": "atr_anchored",
-        "stop_atr_mult": 2.0,
+        # 2026-05-13 (#1b): tightened 2.0 → 1.5. vwap_pullback is a mean-
+        # reversion entry into a tight range — the 2.0× multiplier gave it
+        # the same stop width as the trend-following bias_momentum, which
+        # is overcalibrated for the regime. 1.5× still clears noise but
+        # cuts hold-to-stop loss by ~25%.
+        "stop_atr_mult": 1.5,
         "min_stop_ticks": 40,
         "max_stop_ticks": 120,
         "stop_fallback_ticks": 64,
