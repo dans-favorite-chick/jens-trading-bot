@@ -156,11 +156,88 @@ def trade_ts(t: dict):
 
 
 # ─── Main ────────────────────────────────────────────────────────────
+def _percentile(sorted_values: list[float], p: float) -> float:
+    """Linear-interp percentile (p in [0, 100]). Empty -> 0.0."""
+    n = len(sorted_values)
+    if n == 0:
+        return 0.0
+    if n == 1:
+        return float(sorted_values[0])
+    rank = (p / 100.0) * (n - 1)
+    lo = int(rank)
+    hi = min(lo + 1, n - 1)
+    frac = rank - lo
+    return float(sorted_values[lo] * (1 - frac) + sorted_values[hi] * frac)
+
+
+def _summary_stats(pnls: list[float], strip_top_pct: float = 10.0) -> dict:
+    """Robust + outlier-stripped P&L summary stats.
+
+    Returns:
+      mean      : naive mean
+      median    : 50th percentile (the "typical" trade)
+      iqr_lo    : 25th percentile P&L
+      iqr_hi    : 75th percentile P&L
+      p90_abs   : 90th-percentile absolute value (defines the "outliers")
+      n_outliers: count of trades whose |pnl| exceeds p90_abs
+      mean_stripped: mean of trades EXCLUDING those outliers
+      sum_stripped : net P&L excluding the top-10%-by-magnitude outliers
+      single_trade_concentration: largest single trade's P&L / |net|
+                                  (e.g. 1.0 = one trade = all the net,
+                                   0.5 = one trade = half, etc.)
+    """
+    n = len(pnls)
+    if n == 0:
+        return {
+            "mean": 0.0, "median": 0.0, "iqr_lo": 0.0, "iqr_hi": 0.0,
+            "p90_abs": 0.0, "n_outliers": 0, "mean_stripped": 0.0,
+            "sum_stripped": 0.0, "single_trade_concentration": 0.0,
+        }
+    sorted_pnls = sorted(pnls)
+    sorted_abs = sorted(abs(p) for p in pnls)
+    mean = sum(pnls) / n
+    median = _percentile(sorted_pnls, 50)
+    iqr_lo = _percentile(sorted_pnls, 25)
+    iqr_hi = _percentile(sorted_pnls, 75)
+    p_threshold = max(0.0, 100.0 - strip_top_pct)
+    p90_abs = _percentile(sorted_abs, p_threshold)
+    stripped = [p for p in pnls if abs(p) <= p90_abs]
+    n_out = n - len(stripped)
+    mean_stripped = (sum(stripped) / len(stripped)) if stripped else 0.0
+    sum_stripped = sum(stripped)
+    # Concentration: largest |trade| as a fraction of |net|. >= 1 means
+    # one trade equals or exceeds the entire net P&L's magnitude.
+    net = sum(pnls)
+    largest_abs = sorted_abs[-1] if sorted_abs else 0.0
+    concentration = (largest_abs / abs(net)) if abs(net) > 1e-9 else 0.0
+    return {
+        "mean": round(mean, 2),
+        "median": round(median, 2),
+        "iqr_lo": round(iqr_lo, 2),
+        "iqr_hi": round(iqr_hi, 2),
+        "p90_abs": round(p90_abs, 2),
+        "n_outliers": n_out,
+        "mean_stripped": round(mean_stripped, 2),
+        "sum_stripped": round(sum_stripped, 2),
+        "single_trade_concentration": round(concentration, 2),
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--since", help="YYYY-MM-DD; only count trades on/after this date")
     ap.add_argument("--post-b13-only", action="store_true",
                     help="Restrict to trades with B13 cost fields (cleaner baseline)")
+    # 2026-05-13 (#4): outlier-stripped P&L view. Default ON because
+    # bias_momentum's apparent $+808 net was concentrated in 2 outlier
+    # trades carrying ~all the upside. Operator should see both the
+    # naive number AND the outlier-stripped truth.
+    ap.add_argument("--exclude-outliers", action="store_true",
+                    help="Add outlier-stripped P&L stats (median/IQR/p90 + "
+                         "mean excluding top 10%% by magnitude). Helps detect "
+                         "'one big trade carrying everything' patterns.")
+    ap.add_argument("--outlier-strip-pct", type=float, default=10.0,
+                    help="Top N%% by absolute P&L to strip (default 10).")
     args = ap.parse_args()
 
     since = None
@@ -189,6 +266,7 @@ def main():
         "gross_win_total": 0.0, "gross_loss_total": 0.0,
         "net_pnl": 0.0,
         "first_ts": None, "last_ts": None,
+        "pnls": [],
     })
 
     for t in filtered:
@@ -197,6 +275,7 @@ def main():
         pnl = safe_pnl_net(t)
         s["n"] += 1
         s["net_pnl"] += pnl
+        s["pnls"].append(pnl)
         if pnl > 0:
             s["wins"] += 1
             s["gross_win_total"] += pnl
@@ -259,6 +338,51 @@ def main():
                  f"{pf_str} | ${s['net_pnl']:+,.2f} | {decision} |")
     L.append("")
 
+    # ── Outlier-stripped P&L (#4, 2026-05-13) ───────────────────────
+    # Surface the "one-big-trade-carrying-everything" pattern that the
+    # naive net P&L hides. bias_momentum's +$808 was concentrated in
+    # 2 trades; without this view the operator can mistake noise for
+    # edge. single_trade_concentration > 0.5 = red flag (one trade
+    # carries half+ of the net).
+    if args.exclude_outliers:
+        strip_pct = args.outlier_strip_pct
+        L.append(f"## Outlier-Stripped P&L (strips top {strip_pct:.0f}% by |trade|)")
+        L.append("")
+        L.append("_Compare net P&L vs. the outlier-stripped sum to detect_")
+        L.append("_'one big trade carrying everything' patterns._")
+        L.append("")
+        L.append("| strategy | trades | median | IQR (25th-75th) | p90 \\|trade\\| | "
+                 "outliers | mean stripped | sum stripped | single-trade concentration |")
+        L.append("|---|---:|---:|---|---:|---:|---:|---:|---:|")
+        flagged: list[str] = []
+        for strat, s in sorted(per_strat.items(), key=lambda kv: -kv[1]["n"]):
+            if s["n"] == 0:
+                continue
+            stats = _summary_stats(s["pnls"], strip_top_pct=strip_pct)
+            iqr_str = f"${stats['iqr_lo']:+,.2f} → ${stats['iqr_hi']:+,.2f}"
+            conc = stats["single_trade_concentration"]
+            conc_marker = " ⚠️" if conc >= 0.5 else ""
+            if conc >= 0.5:
+                flagged.append(f"`{strat}` (concentration={conc:.2f})")
+            L.append(
+                f"| `{strat}` | {s['n']} | ${stats['median']:+,.2f} | {iqr_str} | "
+                f"${stats['p90_abs']:,.2f} | {stats['n_outliers']} | "
+                f"${stats['mean_stripped']:+,.2f} | ${stats['sum_stripped']:+,.2f} | "
+                f"{conc:.2f}{conc_marker} |"
+            )
+        L.append("")
+        if flagged:
+            L.append("### ⚠️ Concentration Flag")
+            L.append("")
+            L.append("Strategies where a single trade carries ≥50% of net P&L:")
+            L.append("")
+            for f in flagged:
+                L.append(f"- {f}")
+            L.append("")
+            L.append("_These nets are not yet evidence of edge — they are evidence of_")
+            L.append("_a few large outliers. Reassess at TENTATIVE (≥100 trades)._")
+            L.append("")
+
     # Trailing 7-day rate → ETA projection
     L.append("## Trailing 7-Day Trade Rate + ETA")
     L.append("")
@@ -301,8 +425,14 @@ def main():
     for strat, s in sorted(per_strat.items(), key=lambda kv: -kv[1]["n"]):
         if s["n"] == 0: continue
         lo, hi = wilson_ci(s["wins"], s["n"])
-        print(f"  {strat:30s} n={s['n']:5d}  tier={statistical_tier(s['n']):20s}  "
-              f"WR={s['wins']/s['n']:.0%} ({lo:.0%}-{hi:.0%})  net=${s['net_pnl']:+,.2f}")
+        line = (f"  {strat:30s} n={s['n']:5d}  tier={statistical_tier(s['n']):20s}  "
+                f"WR={s['wins']/s['n']:.0%} ({lo:.0%}-{hi:.0%})  net=${s['net_pnl']:+,.2f}")
+        if args.exclude_outliers:
+            stats = _summary_stats(s["pnls"], strip_top_pct=args.outlier_strip_pct)
+            flag = "  (!)" if stats["single_trade_concentration"] >= 0.5 else ""
+            line += (f"  stripped=${stats['sum_stripped']:+,.2f}"
+                     f"  conc={stats['single_trade_concentration']:.2f}{flag}")
+        print(line)
     return 0
 
 
