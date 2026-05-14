@@ -88,6 +88,18 @@ class Position:
     # reads this field instead of `stop_price`.
     initial_stop_price: float = 0.0   # Set by PositionManager.open_position
 
+    # ── 2026-05-13 anti-mutation invariant (#3) ────────────────────────
+    # `initial_stop_price` is supposed to be IMMUTABLE after construction.
+    # The R-multiple framework (Van Tharp) requires R = abs(entry - initial
+    # stop) to be a fixed number computed at entry — every downstream
+    # measure (R-multiples, position sizing, BE trigger) depends on this.
+    # We snapshot it into _initial_stop_frozen at __post_init__ time and
+    # expose it via the `r_distance` property; both raise on tamper. The
+    # invariant test in tests/test_position_invariant.py mutates
+    # `stop_price` and asserts `r_distance` is unchanged — that test must
+    # always pass.
+    _initial_stop_frozen: float = field(default=0.0, repr=False)
+
     # ── 2026-05-13 v2 (trail too-tight fix): high-water-mark tracker ───
     # The first fast-abort fix (commit 7f1411f) added a min-profit floor
     # before TRAIL fires + extended the grace window. But the underlying
@@ -177,6 +189,37 @@ class Position:
     # fall back to Python-only stop mutation.
     stop_order_id: str = ""
     target_order_id: str = ""
+
+    def __post_init__(self):
+        """Snapshot initial_stop_price as immutable R reference.
+
+        2026-05-13 anti-mutation invariant (#3): R is defined at entry and
+        must be IMMUTABLE thereafter per Van Tharp's R-multiple framework.
+        Any code path that mutates `stop_price` (TRAIL, BE_STOP, chandelier,
+        manual stop-move) must NEVER alter `r_distance`. We freeze the
+        original via `_initial_stop_frozen` and expose `r_distance` as a
+        property — both readonly relative to mutation of `stop_price`.
+        """
+        # If caller passed initial_stop_price, use it; else fall back to
+        # stop_price (backward-compat for callers that didn't set the
+        # newer field). The frozen value is the source of truth for R.
+        if self.initial_stop_price == 0.0:
+            self.initial_stop_price = self.stop_price
+        # Snapshot — this is what `r_distance` computes against.
+        # Mutation of self.stop_price will NOT change this value.
+        object.__setattr__(self, "_initial_stop_frozen", self.initial_stop_price)
+
+    @property
+    def r_distance(self) -> float:
+        """The R distance (Van Tharp R-multiple framework) — the entry-time
+        risk in price points. Immutable from the position's perspective:
+        even if `stop_price` is mutated by TRAIL/BE, `r_distance` stays
+        anchored to `_initial_stop_frozen`. Returns 0.0 for ill-formed
+        positions (defensive — never raises)."""
+        try:
+            return abs(self.entry_price - self._initial_stop_frozen)
+        except (AttributeError, TypeError):
+            return 0.0
 
 
 class PositionManager:
