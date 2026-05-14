@@ -5,6 +5,51 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+### 2026-05-14 14:30-14:50 CT — prod_bot restart + dashboard boundary fix (commit `71fc5af`)
+
+**Two related fixes shipped after operator noticed prod was -$106 today:**
+
+**1. Deployment gap caught (no commit — just a process restart):** prod_bot
+PID 24568 had been running since 2026-05-13 21:13:20, which was 52 seconds
+BEFORE the 21-item roadmap batch landed at 21:22:12. Result: every change
+in that batch (#3, #2, #4, #5/#6, #7, #8, #1b, #1c, #13, #14, #15, #17,
+#18, #19, #20, #22, #23, #25, #12) sat on disk while prod ran the old
+in-memory snapshot. Today's three $-65.32 vwap_pullback stops are
+exactly the clamp-from-above pattern #8 (commit `e6ad6da`) skips —
+they wouldn't have fired on the new code.
+
+Killed PID 24568 at 14:30; watchdog respawned as PID 32024 at 14:32:54
+on the latest code. sim PID 27244 had already auto-restarted overnight
+(02:01) so sim was fine.
+
+Memory entry added: [code_changes_dont_auto_deploy.md](../../../Users/Trading%20PC/.claude/projects/C--Trading-Project/memory/code_changes_dont_auto_deploy.md) —
+flag "prod needs restart" after any behavior-affecting commit.
+
+**2. Dashboard calendar-day boundary fix (commit `71fc5af`):** operator
+saw "16 trades on dashboard, 8 sim, 1 prod" — 7+ trade mismatch. Root
+cause: the 2026-05-13 commit `0c24a8e` switched `/api/today-pnl` to
+calendar-day boundary so the TODAY card agreed with RiskManager.daily_pnl,
+but left three sibling call sites on Globex 17:00 CT:
+
+- `_load_session_trades_by_bot()` — drives Daily Stats trade tables
+- `/api/status` — `session_start_ts` field
+- `/api/trades` — `session_start_ts` field
+
+Result was a 7-hour-per-night divergence (17:00 CT → midnight) where
+the trade tables showed yesterday-evening trades that the TODAY card
+had already rolled out. Sim's "16" was the Globex window; "8" was
+calendar day.
+
+Fix: all 3 sites now use `_calendar_day_start_ct_epoch()`. Globex
+helper preserved as dead code. Dashboard restarted on the new code
+~14:50 CT. Verified live: prod table 12→9, sim table 16→8, all
+panels agree.
+
+7 new source-pin tests (test_dashboard_calendar_day_pin.py) catch any
+future regression. Suite: 1,912 → 1,919 pass / 4 skip / 0 fail.
+
+---
+
 ### 2026-05-13 late-night — 21-item roadmap batch + self-audit (commits `c14a3a1` → `3ddf7a9`)
 
 After this morning's bias_momentum fast-abort fix (`7f1411f`), the operator pasted a 25-item roadmap with "do it all". 21 items landed in 22 commits (each item self-contained, easy to revert individually). The 4 paper-trading items were intentionally skipped per operator's directive ("we're live sim trading baby!!!").

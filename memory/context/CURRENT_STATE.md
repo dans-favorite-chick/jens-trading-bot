@@ -1,6 +1,6 @@
 # Phoenix Bot — Current State
 
-_Last updated: **2026-05-13 LATE-NIGHT** (after 21-item roadmap batch + self-audit caught 1 bug + fixed)_
+_Last updated: **2026-05-14 14:50 CT** (after prod_bot restart on new code + dashboard calendar-day boundary fix)_
 
 **Quick refs:**
 - **[RECENT_CHANGES.md](RECENT_CHANGES.md)** — running dated log of every change, newest first
@@ -10,19 +10,20 @@ _Last updated: **2026-05-13 LATE-NIGHT** (after 21-item roadmap batch + self-aud
 
 ---
 
-## AT A GLANCE — 2026-05-13 LATE-NIGHT
+## AT A GLANCE — 2026-05-14 14:50 CT
 
 | Item | State |
 |---|---|
-| Branch | `weekly-evolution/2026-05-10` (NOT pushed to origin yet — 24 commits ahead) |
-| HEAD | `3ddf7a9` (45 commits today total: 21 morning/afternoon + 21 roadmap batch + 1 audit fix + 2 housekeeping) |
-| Test suite | **1,912 pass / 4 skip / 0 fail** (+161 net during roadmap batch) |
-| Today's P&L | sim **$108.40** (5 trades, 4W/1L, 80% WR) / prod $0 (windows gate removed too late in day) |
-| Dashboard panels | TODAY card + Daily Stats agree all 24h (calendar-day boundary, commit `0c24a8e`) |
+| Branch | `weekly-evolution/2026-05-10` (NOT pushed to origin — 26 commits ahead) |
+| HEAD | `71fc5af` (dashboard calendar-day boundary fix) |
+| Test suite | **1,919 pass / 4 skip / 0 fail** |
+| Today's P&L | prod **-$106.38** (9 trades) / sim **+$40.94** (8 trades). Three of prod's 5 losses were $-65.32 clamp-from-above stops that #8 would have skipped — they fired because prod was running stale code. Stack now on fresh code. |
+| **Process freshness** | **prod PID 32024 restarted 14:32:54 on latest code**. sim PID 27244 auto-restarted 02:01 by watchdog. dashboard restarted ~14:50 on latest code. ALL processes now running current commits. |
+| Dashboard panels | TODAY card + Daily Stats + trade table all on calendar-day boundary — agree across all 24h (commits `0c24a8e` + `71fc5af`) |
 | Validated-set | **bias_momentum, spring_setup** only (ib_breakout DEMOTED via #22 Wilson-CI guardrail — n=8 was below TENTATIVE) |
 | Retired strategies | **high_precision_only, opening_session, compression_breakout** (#5/#6 — formal markers + tests pin) |
 | Stack health | bridge / dashboard / watchdog / watcher_agent / prod / sim — all alive, all on latest code |
-| NT8 + TickStreamer | Live; new DLL compiled 16:42; `imbalance_ratio` field flowing in volumetric_bar messages |
+| NT8 + TickStreamer | Live; `imbalance_ratio` field flowing in volumetric_bar messages |
 | Alerting | Self-healing — PhoenixWatcher 5-min auto-respawn pattern installed |
 | Gemini AI | Working on fresh GCP project (new `GOOGLE_API_KEY`) |
 | Live trading | PAUSED — prod stays Sim101 until real account ≥ $2,000 (currently $300) |
