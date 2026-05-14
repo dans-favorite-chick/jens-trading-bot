@@ -3,7 +3,7 @@
 _User follow-ups, decisions pending, and architectural questions that haven't been resolved._
 _New Claude sessions: these are things to make progress on, in priority order._
 
-_Last refreshed: 2026-05-13 EOD (post-audit, post-Sprint-M-Tier-1)._
+_Last refreshed: 2026-05-13 LATE-NIGHT (post-roadmap-batch, post-self-audit)._
 
 ---
 
@@ -21,14 +21,12 @@ _Last refreshed: 2026-05-13 EOD (post-audit, post-Sprint-M-Tier-1)._
 - Winners exit cleanly via `ema_dom_exit` (33 trades, 100% WR, $+830.94)
 - `target_hit` fires almost never (1 of 52)
 
-**Hypotheses to investigate before any fix:**
+**Partial fixes shipped tonight (await verification with new trade data):**
+- `#1b` (commit `4e75d82`) stop_atr_mult 2.0 → 1.5 — tighter stop reduces avg loser by ~25%
+- `#8` (commit `e6ad6da`) skip_on_stop_clamp now active on vwap_pullback — vol-mismatch skips
+- `#1c` (commit `d76b8cb`) ema_dom_exit dynamic 70%-of-target floor — should hold winners longer
 
-- Stops too wide for typical move? Tighter stop would reduce avg loser.
-- Bot using fixed stop, but `ema_dom_exit` trigger is ~$25 ahead — strategy effectively has a 0.5:1 RR even though configured for 1.8.
-- The strategy never actually reaches its target — designed wrong, or target too far.
-
-**Decision needed**: tune (tighter stops? scale-out earlier?), kill, or collect more data.
-Re-run `python tools/diagnose_vwap_pullback.py` after every batch of trades.
+**Re-run** `python tools/diagnose_vwap_pullback.py` after 10+ new trades; if avg loser drops below ~$48 we hit break-even at current 65.4% WR.
 
 ### 2. Live trading flip — still gated at account ≥ $2,000
 
@@ -95,7 +93,31 @@ against other strategies showing positive WR but suspect P&L (e.g., once `noise_
 
 ## ✅ Recently resolved (closed since last refresh, included for audit trail)
 
-### 2026-05-13 — All of today's work (see [RECENT_CHANGES.md](RECENT_CHANGES.md) for details)
+### 2026-05-13 LATE-NIGHT — 21-item roadmap batch (see [RECENT_CHANGES.md](RECENT_CHANGES.md))
+
+Operator pasted a 25-item roadmap with "do it all". 21 shipped tonight (paper-trading items skipped per operator's "live sim only" directive). Commits `c14a3a1` → `3ddf7a9`:
+
+- ✅ `#2` `c14a3a1` — MAE/MFE/R-multiple tracking on every closed trade
+- ✅ `#3` `4d4e15d` — Anti-mutation invariant on `r_distance`
+- ✅ `#4` `56eaf3b` — Outlier-stripped P&L flag (caught bias_momentum noise-vs-edge)
+- ✅ `#5/#6` `f0e6863` — Retired high_precision_only, opening_session, compression_breakout
+- ✅ `#7` `878165b` — `config/regime_matrix.py` typed loader
+- ✅ `#8` `e6ad6da` — skip_on_stop_clamp wired into vwap_pullback + dom_pullback
+- ✅ `#12` `4219719` — `docs/cvd_usage_audit.md`
+- ✅ `#13` `52cede2` + audit-fix `3ddf7a9` — ORB state persistence across restarts
+- ✅ `#14` `e701973` — footprint_cvd_reversal `cvd_div_type` instrumentation
+- ✅ `#15` `30eb1f2` — vwap_band_pullback TF-vote 3→2
+- ✅ `#17` `64c113a` — `tools/mae_stop_calibrator.py` framework
+- ✅ `#18` `32e823f` — BE arms on bar-close, not tick-touch
+- ✅ `#19` `7edaf9b` — Explicit flow_reversal priority in exit cascade
+- ✅ `#1b` `4e75d82` — vwap_pullback stop_atr_mult 2.0→1.5
+- ✅ `#1c` `d76b8cb` — ema_dom_exit dynamic 70%-of-target floor
+- ✅ `#20` `a951dc9` — `tools/strategy_change_log.py`
+- ✅ `#22` `477e31d` — Wilson-CI promotion guardrail + demoted ib_breakout
+- ✅ `#23` `5a71566` — Tier-aware sizing in SimpleSizer
+- ✅ `#25` `6af0689` — `tools/strategy_correlation_audit.py`
+
+### 2026-05-13 earlier — original day's work (commit refs preserved)
 
 - ✅ `dda680c` Graceful /shutdown via dashboard command queue
 - ✅ `c9099d7` 12-file trade_memory reader audit (all readers route through `load_all_trades()`)
@@ -120,10 +142,8 @@ against other strategies showing positive WR but suspect P&L (e.g., once `noise_
 
 ## ❓ Questions to ask the operator at next session
 
-1. **Tomorrow's open**: did prod trade in its (now-removed) primary window 08:30-11:00 CT?
-   The window gate removal + 24/7 eval should produce activity even outside prime hours —
-   verify via `validation_tracker --post-b13-only`.
-2. **vwap_pullback decision**: review the diagnostic, decide tune/kill/hold-data path.
-3. **NT8 silent-stall**: if it recurs tomorrow, invest the day to auto-recovery OR keep manual?
-4. **Branch merge**: 17 commits on `weekly-evolution/2026-05-10`. Merge to main when ready,
-   or keep as a working branch.
+1. **Push `weekly-evolution/2026-05-10` to origin?** 24 commits ahead locally (21 roadmap + 1 audit + 2 housekeeping on top of this morning's bias_momentum fix). Branch verified clean: 1,912 pass / 4 skip / 0 fail.
+2. **Wire `RegimeMatrix` into base_bot evaluate()?** #7 shipped the typed loader but didn't wire it in — that's a behavior change touching every strategy and warrants a separate review pass. Operator decides when to flip the switch.
+3. **bias_momentum data review**: now that MAE/MFE/R-multiple are persisted (#2), after 10+ new closed trades run `python tools/mae_stop_calibrator.py --strategy bias_momentum` to see if the empirical stop should differ from the current `stop_atr_mult=2.0` config.
+4. **Re-verify vwap_pullback bleed**: #1b/#1c/#8 each target a different aspect of the bleed. Re-run `tools/diagnose_vwap_pullback.py` after 10+ trades.
+5. **NT8 silent-stall**: if it recurs tomorrow, invest the day to auto-recovery OR keep manual?

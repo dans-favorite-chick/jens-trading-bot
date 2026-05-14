@@ -5,6 +5,46 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+### 2026-05-13 late-night — 21-item roadmap batch + self-audit (commits `c14a3a1` → `3ddf7a9`)
+
+After this morning's bias_momentum fast-abort fix (`7f1411f`), the operator pasted a 25-item roadmap with "do it all". 21 items landed in 22 commits (each item self-contained, easy to revert individually). The 4 paper-trading items were intentionally skipped per operator's directive ("we're live sim trading baby!!!").
+
+**Position infrastructure (foundation for everything downstream):**
+- **#3 `4d4e15d`** — Anti-mutation invariant on R-distance. `Position.__post_init__` captures `_initial_stop_frozen`; the `r_distance` property reads from that, not the live `stop_price`. TRAIL/BE_STOP can now mutate `stop_price` freely without breaking R-multiple math.
+- **#2 `c14a3a1`** — MAE/MFE tracking persisted per closed trade. `update_mae_mfe(price)` fires on every tick; close_position adds `mae_price`, `mfe_price`, `mae_ticks`, `mfe_ticks`, `r_distance`, `mfe_capture_pct`, `r_multiple` to trade records.
+- **#4 `56eaf3b`** — `validation_tracker.py --exclude-outliers` adds median/IQR/p90 + sum_stripped + single_trade_concentration. **First real-data run flagged bias_momentum: net=+$675 looks like edge, stripped=-$502 / concentration=1.26 = one trade carries >100% of the net.** Same pattern caught dom_pullback, ib_breakout.
+
+**Strategy lifecycle:**
+- **#5/#6 `f0e6863`** — Formal retirement of high_precision_only (557t / 29% WR / -$1,082), opening_session (4t total), compression_breakout (18t total). All carry `retired: True`, `retired_at: 2026-05-13`, `retired_reason: ...`. 9 tests pin the markers.
+- **#22 `477e31d`** — Wilson-CI promotion guardrail. `tools/validation_tracker.py --check-promotion` exits 2 if any `validated=True` strategy has n<100. **Caught ib_breakout: was validated=True with only 8 trades.** Demoted to validated=False. Only bias_momentum (n=292) and spring_setup (n=235) are validated now.
+- **#7 `878165b`** — `config/regime_matrix.py` typed loader for the YAML at `memory/procedural/regime_matrix.yaml`. Handles the YAML 1.1 ON/OFF-as-bool quirk. Not yet wired into base_bot's evaluate() — separate commit when ready.
+
+**Stop / exit improvements:**
+- **#8 `e6ad6da`** — `skip_on_stop_clamp` extended from bias_momentum to vwap_pullback + dom_pullback. Same forensic logic (0W/5L on clamped-from-above stops) applies to both.
+- **#1b `4e75d82`** — vwap_pullback stop_atr_mult 2.0 → 1.5 (mean-reversion entry doesn't need trend-following stop width).
+- **#1c `d76b8cb`** — ema_dom_exit `min_profit_ticks = max(static_floor, int(target_ticks * 0.70))`. Big-target strategies were firing smart-exit too early.
+- **#18 `32e823f`** — BE arms on bar-close confirmation, not tick-touch. Single noisy tick crossing the trigger no longer arms BE; the most-recent CLOSED 1m bar must also be past the trigger. Config-toggleable via `STRATEGY_DEFAULTS["be_on_bar_close"]`.
+- **#15 `30eb1f2`** — vwap_band_pullback TF-vote 3 → 2 (band touches happen on last candle before reversal; 3-of-N over-gated).
+- **#19 `7edaf9b`** — `flow_reversal` / cvd_flip / cvd_divergence get explicit rank-5 in `EXIT_PRIORITY` (above trend_stall at rank 6, below managed_exit at rank 4). Subsequent ranks shifted by +1.
+
+**Instrumentation & tooling:**
+- **#14 `e701973`** — footprint_cvd_reversal emits discrete `cvd_div_type` enum (multi_bar / single_bar / both / none) + `cvd_div_magnitude` in Signal.metadata and `[cvd_div=<type>]` in Signal.reason. Enables post-hoc "which div type wins?" groupby.
+- **#12 `4219719`** — `docs/cvd_usage_audit.md` — cross-strategy CVD usage inventory + 4 surfaced gaps.
+- **#13 `52cede2` + `3ddf7a9`** — ORB state persistence. Opt-in via `config["bot_name"]`. State file at `logs/orb_state_<bot>.json`. **Self-audit caught a regression**: `_or_bars_1m[0]` IndexError silently passed `max_entry_delay_min` after restart. Fixed by persisting `_or_session_start_ts` scalar separately.
+- **#17 `64c113a`** — `tools/mae_stop_calibrator.py` — recommends per-strategy stops based on winning-trade MAE percentiles. Framework only; data ripens in ~2 weeks.
+- **#20 `a951dc9`** — `tools/strategy_change_log.py` — mines git log for per-strategy commit timelines.
+- **#23 `5a71566`** — Tier-aware contract scaling in SimpleSizer. `strategy_tier` arg multiplies base contracts: VALIDATED 1.5×, HIGH_CONFIDENCE 2.0×. Floor at 1 contract.
+- **#25 `6af0689`** — `tools/strategy_correlation_audit.py` — per-pair Jaccard index over time-windowed co-fires. Surfaced retired-pair `high_precision_only`/`spring_setup` at 0.237 jaccard (the canonical "two strategies firing on the same setup" pattern).
+
+**Suite: 1,751 → 1,912 pass (+161 tests). Branch not yet pushed to origin.**
+
+**Operator's key insights from today's batch:**
+1. **Promotion-on-vibes is a real failure mode**: ib_breakout had been flagged `validated=True` manually with only 8 trades. Guardrail now prevents that.
+2. **One big trade can dominate net P&L**: bias_momentum's +$675 net was actually -$502 once 1 outlier was stripped. Without #4's view, the operator would have been trading on noise.
+3. **Self-audit catches what tests don't**: the ORB cutoff regression survived the test suite because the test stubbed bars but didn't exercise the post-restart path. Always trace the actual control flow after writing a feature.
+
+---
+
 ### 2026-05-13 ~13:30 CDT — trade_memory reader audit (commit `c9099d7`)
 
 12-file follow-up to commit `4d523bf` — every other tool that raw-opened

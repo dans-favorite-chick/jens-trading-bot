@@ -1,6 +1,6 @@
 # Phoenix Bot — Current State
 
-_Last updated: **2026-05-13 EOD** (after Sprint M Tier 1 live + 12-file data-integrity audit + prod trading-window removal + dashboard panels reconciled)_
+_Last updated: **2026-05-13 LATE-NIGHT** (after 21-item roadmap batch + self-audit caught 1 bug + fixed)_
 
 **Quick refs:**
 - **[RECENT_CHANGES.md](RECENT_CHANGES.md)** — running dated log of every change, newest first
@@ -10,21 +10,68 @@ _Last updated: **2026-05-13 EOD** (after Sprint M Tier 1 live + 12-file data-int
 
 ---
 
-## AT A GLANCE — 2026-05-13 EOD
+## AT A GLANCE — 2026-05-13 LATE-NIGHT
 
 | Item | State |
 |---|---|
-| Branch | `weekly-evolution/2026-05-10` (pushed to origin, not merged to main) |
-| HEAD | `7f1411f` (21 commits today) |
-| Test suite | **1,751 pass / 4 skip / 0 fail** |
+| Branch | `weekly-evolution/2026-05-10` (NOT pushed to origin yet — 24 commits ahead) |
+| HEAD | `3ddf7a9` (45 commits today total: 21 morning/afternoon + 21 roadmap batch + 1 audit fix + 2 housekeeping) |
+| Test suite | **1,912 pass / 4 skip / 0 fail** (+161 net during roadmap batch) |
 | Today's P&L | sim **$108.40** (5 trades, 4W/1L, 80% WR) / prod $0 (windows gate removed too late in day) |
-| Dashboard panels | TODAY card + Daily Stats now agree all 24h (calendar-day boundary, commit `0c24a8e`) |
-| bias_momentum fast-abort | FIXED commit `7f1411f` — 8s commission-loss round-trips eliminated via TRAIL min-profit floor + BE uses initial_stop_price + grace covers tighten_stop |
+| Dashboard panels | TODAY card + Daily Stats agree all 24h (calendar-day boundary, commit `0c24a8e`) |
+| Validated-set | **bias_momentum, spring_setup** only (ib_breakout DEMOTED via #22 Wilson-CI guardrail — n=8 was below TENTATIVE) |
+| Retired strategies | **high_precision_only, opening_session, compression_breakout** (#5/#6 — formal markers + tests pin) |
 | Stack health | bridge / dashboard / watchdog / watcher_agent / prod / sim — all alive, all on latest code |
 | NT8 + TickStreamer | Live; new DLL compiled 16:42; `imbalance_ratio` field flowing in volumetric_bar messages |
 | Alerting | Self-healing — PhoenixWatcher 5-min auto-respawn pattern installed |
 | Gemini AI | Working on fresh GCP project (new `GOOGLE_API_KEY`) |
 | Live trading | PAUSED — prod stays Sim101 until real account ≥ $2,000 (currently $300) |
+
+---
+
+## ROADMAP BATCH (2026-05-13 late-night, 21 items + 1 audit fix)
+
+All shipped, tested (1,912 pass), committed. **Not yet pushed to origin** — operator review before push.
+
+### Position infrastructure (foundation)
+| # | Commit | What |
+|---|---|---|
+| #3 | `4d4e15d` | Anti-mutation invariant on R-distance — `_initial_stop_frozen` captured in `__post_init__` |
+| #2 | `c14a3a1` | MAE/MFE/R-multiple tracking — persisted per closed trade |
+| #4 | `56eaf3b` | Outlier-stripped P&L view in validation_tracker (`--exclude-outliers`) |
+
+### Strategy lifecycle
+| # | Commit | What |
+|---|---|---|
+| #5/#6 | `f0e6863` | Retired high_precision_only / opening_session / compression_breakout (formal `retired=True` markers) |
+| #22 | `477e31d` | Wilson-CI promotion guardrail + demoted ib_breakout (had validated=True with n=8) |
+| #7 | `878165b` | `config/regime_matrix.py` — typed loader for the operator-editable YAML |
+
+### Stop / exit improvements
+| # | Commit | What |
+|---|---|---|
+| #8 | `e6ad6da` | skip_on_stop_clamp wired into vwap_pullback + dom_pullback (was bias_momentum-only) |
+| #1b | `4e75d82` | vwap_pullback stop_atr_mult 2.0 → 1.5 |
+| #1c | `d76b8cb` | ema_dom_exit dynamic min_profit_ticks (max of static floor and 70% of target) |
+| #18 | `32e823f` | BE arms on bar-close, not tick-touch (config-toggleable, default ON) |
+| #15 | `30eb1f2` | vwap_band_pullback TF-vote gate 3 → 2 (config-driven) |
+| #19 | `7edaf9b` | Explicit `flow_reversal` / cvd_flip / cvd_divergence priority in exit cascade (rank 5) |
+
+### Instrumentation & tooling
+| # | Commit | What |
+|---|---|---|
+| #14 | `e701973` | footprint_cvd_reversal emits `cvd_div_type` enum + `cvd_div_magnitude` in metadata/reason |
+| #12 | `4219719` | docs/cvd_usage_audit.md — single source-of-truth for CVD usage across strategies |
+| #13 | `52cede2` + `3ddf7a9` | ORB state persistence across bot restarts (+ audit caught session_start_ts gap → fixed) |
+| #17 | `64c113a` | MAE-calibrated stop recommender framework (`tools/mae_stop_calibrator.py`) |
+| #20 | `a951dc9` | `tools/strategy_change_log.py` — per-strategy commit timeline from git |
+| #23 | `5a71566` | Tier-aware contract scaling in SimpleSizer (VALIDATED 1.5×, HIGH_CONFIDENCE 2.0×) |
+| #25 | `6af0689` | `tools/strategy_correlation_audit.py` — Jaccard co-fire matrix per strategy pair |
+
+### Audit catch (after the batch)
+| Commit | What |
+|---|---|
+| `3ddf7a9` | ORB cutoff regression: post-restart `_or_bars_1m[0]` raised IndexError → silently passed max_entry_delay_min check. Fixed by persisting `_or_session_start_ts` separately. **Found by self-audit, not by tests** — illustrative of why the "review your own work" pass matters. |
 
 ---
 
