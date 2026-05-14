@@ -170,6 +170,9 @@ STRATEGIES = {
         "min_stop_ticks": 40,
         "max_stop_ticks": 120,
         "stop_fallback_ticks": 64,
+        # 2026-05-13 (#8): skip when natural ATR stop > max_stop_ticks.
+        # Same forensic logic as bias_momentum (0W/5L on clamped stops).
+        "skip_on_stop_clamp": True,
         # Max distance from VWAP to qualify as "near VWAP" (replaces hardcoded 6).
         # 60t = 15pts — a true VWAP pullback can be further out than 6 ticks on NQ.
         "max_vwap_dist_ticks": 60,
@@ -217,6 +220,9 @@ STRATEGIES = {
         "min_stop_ticks": 40,
         "max_stop_ticks": 120,
         "stop_fallback_ticks": 64,
+        # 2026-05-13 (#8): skip when natural ATR stop > max_stop_ticks.
+        # Same forensic logic as bias_momentum (0W/5L on clamped stops).
+        "skip_on_stop_clamp": True,
         "target_rr": 2.5,     # 2.5:1 = 25t = 6.25pts minimum capture
         # DOM absorption threshold — 0=any signal, 100=very strong only
         # 35 is moderate: absorption is visible but not overwhelming

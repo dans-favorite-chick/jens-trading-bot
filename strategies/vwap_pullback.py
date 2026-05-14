@@ -130,9 +130,35 @@ class VWAPPullback(BaseStrategy):
         confluences.append(f"Regime: {session_info.get('regime', '?')}")
 
         # B14: NQ-calibrated ATR-anchored stop (replaces fixed stop_ticks).
-        from strategies._nq_stop import compute_atr_stop
+        from strategies._nq_stop import (
+            compute_atr_stop,
+            compute_natural_stop_ticks,
+        )
         atr_5m = market.get("atr_5m", 0) or 0
         last_5m = bars_5m[-1] if bars_5m else None
+        _max_st = self.config.get("max_stop_ticks", 120)
+
+        # 2026-05-13 (#8): skip_on_stop_clamp — same forensic logic as
+        # bias_momentum (2026-05-03). When the natural ATR stop demands
+        # MORE ticks than max_stop_ticks allows, clamping creates an
+        # undersized stop that gets hit by the vol regime that asked
+        # for the wider stop. Better to skip.
+        if self.config.get("skip_on_stop_clamp", True):
+            _raw_ticks = compute_natural_stop_ticks(
+                direction=direction,
+                entry_price=price,
+                last_5m_bar=last_5m,
+                atr_5m_points=atr_5m,
+                tick_size=tick_size,
+                stop_atr_mult=self.config.get("stop_atr_mult", 2.0),
+            )
+            if _raw_ticks > _max_st:
+                logger.info(
+                    f"[SKIP:{self.name}] stop_clamp: natural={_raw_ticks}t "
+                    f"max={_max_st}t — vol regime mismatch"
+                )
+                return None
+
         stop_ticks, stop_price, atr_override, stop_note = compute_atr_stop(
             direction=direction,
             entry_price=price,
@@ -141,7 +167,7 @@ class VWAPPullback(BaseStrategy):
             tick_size=tick_size,
             stop_atr_mult=self.config.get("stop_atr_mult", 2.0),
             min_stop_ticks=self.config.get("min_stop_ticks", 40),
-            max_stop_ticks=self.config.get("max_stop_ticks", 120),
+            max_stop_ticks=_max_st,
             stop_fallback_ticks=self.config.get("stop_fallback_ticks", 64),
         )
         confluences.append(stop_note)

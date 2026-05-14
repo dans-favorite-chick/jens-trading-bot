@@ -318,9 +318,34 @@ class DOMPullback(BaseStrategy):
         confluences.append(f"Regime: {session_info.get('regime', '?')}")
 
         # B14: NQ-calibrated ATR-anchored stop (replaces fixed stop_ticks=10).
-        from strategies._nq_stop import compute_atr_stop
+        from strategies._nq_stop import (
+            compute_atr_stop,
+            compute_natural_stop_ticks,
+        )
         atr_5m = market.get("atr_5m", 0) or 0
         last_5m = bars_5m[-1] if bars_5m else None
+
+        # 2026-05-13 (#8): skip_on_stop_clamp — same forensic logic as
+        # bias_momentum (2026-05-03). When the natural ATR stop demands
+        # MORE ticks than max_stop_ticks allows, clamping creates an
+        # undersized stop that gets hit by the vol regime that asked
+        # for the wider stop. Better to skip.
+        if self.config.get("skip_on_stop_clamp", True):
+            _raw_ticks = compute_natural_stop_ticks(
+                direction=direction,
+                entry_price=price,
+                last_5m_bar=last_5m,
+                atr_5m_points=atr_5m,
+                tick_size=tick_size,
+                stop_atr_mult=stop_atr_mult,
+            )
+            if _raw_ticks > max_stop_ticks:
+                logger.info(
+                    f"[SKIP:{self.name}] stop_clamp: natural={_raw_ticks}t "
+                    f"max={max_stop_ticks}t — vol regime mismatch"
+                )
+                return None
+
         stop_ticks, stop_price, atr_override, stop_note = compute_atr_stop(
             direction=direction,
             entry_price=price,
