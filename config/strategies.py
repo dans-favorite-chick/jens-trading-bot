@@ -17,6 +17,13 @@ STRATEGY_DEFAULTS = {
     "max_daily_loss": 45.0,          # Slider: $20 – $60, step $5
     "base_rr_ratio": 5.0,            # Default risk:reward (raised from 1.5 — targeting 20+ point moves)
 
+    # 2026-05-13 (#18): BE-stop confirmation gate. When True, BE arming
+    # requires the most-recent CLOSED 1m bar to also be past the trigger
+    # — protects against single-tick spikes that previously activated BE
+    # then immediately reversed and stopped us out on entry noise.
+    # Set False to revert to legacy tick-touch arming.
+    "be_on_bar_close": True,
+
     # ─── Aggression Profiles (dashboard buttons) ────────────────────
     # These override the above sliders when selected
     "profiles": {

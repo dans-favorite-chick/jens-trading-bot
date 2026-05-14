@@ -1875,8 +1875,34 @@ class BaseBot:
                                     be_trigger = (pos.entry_price + stop_dist * be_mult
                                                   if pos.direction == "LONG"
                                                   else pos.entry_price - stop_dist * be_mult)
-                                    if ((pos.direction == "LONG" and price >= be_trigger) or
-                                            (pos.direction == "SHORT" and price <= be_trigger)):
+                                    # 2026-05-13 (#18): bar-close confirmation gate.
+                                    # Previously: a single noisy tick crossing the
+                                    # trigger armed BE, then a retracement could
+                                    # stop us out on entry noise. Now: require the
+                                    # most-recent COMPLETED 1m bar's close to also
+                                    # be past the trigger. Falls back to tick mode
+                                    # when no bar yet (first minute of session).
+                                    _be_bar_close = bool(
+                                        STRATEGY_DEFAULTS.get("be_on_bar_close", True)
+                                    )
+                                    _bar_confirms = True  # default if no bar yet
+                                    if _be_bar_close:
+                                        try:
+                                            _bars = self.aggregator.bars_1m.completed
+                                            _last_bar = _bars[-1] if _bars else None
+                                        except Exception:
+                                            _last_bar = None
+                                        if _last_bar is not None:
+                                            _bar_close = float(getattr(_last_bar, "close", price))
+                                            _bar_confirms = (
+                                                (pos.direction == "LONG"
+                                                 and _bar_close >= be_trigger)
+                                                or (pos.direction == "SHORT"
+                                                    and _bar_close <= be_trigger)
+                                            )
+                                    if (((pos.direction == "LONG" and price >= be_trigger) or
+                                            (pos.direction == "SHORT" and price <= be_trigger))
+                                            and _bar_confirms):
                                         be_stop = (round(pos.entry_price + TICK_SIZE * 2, 2)
                                                    if pos.direction == "LONG"
                                                    else round(pos.entry_price - TICK_SIZE * 2, 2))
