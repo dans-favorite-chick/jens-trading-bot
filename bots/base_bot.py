@@ -765,6 +765,22 @@ class BaseBot:
         self._rider_active = False          # True while holding runner contract
         self._day_classifier = DayClassifier()
         self._day_type = "UNKNOWN"          # TREND | RANGE | VOLATILE | UNKNOWN
+
+        # ── 2026-05-13: CVD-based detectors (operator trade-flow methodology) ──
+        # - cvd_health: pre-entry filter, vetoes trades fighting institutional flow
+        # - cvd_flip:   mid-trade exit signal when per-bar delta flips against position
+        # - cvd_div:    classic bear/bull divergence at confirmed swing points
+        # All three are updated on every bar close in _on_bar. Strategies read
+        # cvd_health.assess() at entry; exit loop reads cvd_flip/cvd_div on the
+        # active position.
+        from core.cvd_trend_health import CVDTrendHealth
+        from core.cvd_bar_flip import BarDeltaFlipDetector
+        from core.cvd_swing_divergence import SwingDivergenceDetector
+        self.cvd_health = CVDTrendHealth(lookback_bars=6, veto_threshold=-0.3)
+        self.cvd_flip = BarDeltaFlipDetector(lookback=5)
+        self.cvd_div = SwingDivergenceDetector(
+            swing_strength=3, min_bars_between=10, max_bars_between=40,
+        )
         self._price_bar_highs: list[float] = []   # Recent bar highs (for stall detector)
         self._price_bar_lows:  list[float] = []   # Recent bar lows
         self._pending_exit_reason = None    # Market close auto-exit
@@ -1917,6 +1933,73 @@ class BaseBot:
                             elif stall["tighten_stop"]:
                                 _trail_stop(pos, price)
 
+                            # ── 2026-05-13: CVD-based exit signals (after grace) ──
+                            # Two additional exit triggers, both respect the same
+                            # 60s grace window as the stall detector (don't fire
+                            # within first N seconds of entry — let the trade
+                            # breathe past entry-tick noise):
+                            #
+                            #   1. cvd_flip: per-bar CVD delta flipped against
+                            #      position for `min_consecutive` consecutive
+                            #      bars OR one big-magnitude bar of opposing
+                            #      delta. Energy fading — exit before the stop
+                            #      catches the full retrace.
+                            #
+                            #   2. cvd_div: classic bear/bull divergence at a
+                            #      confirmed swing point. Price made a new
+                            #      extreme but CVD didn't confirm — institutional
+                            #      flow isn't there to defend the level.
+                            #
+                            # Both are advisory; they fire in addition to the
+                            # existing stall/BE/trail machinery. Configurable
+                            # per-strategy (cvd_exit_enabled, etc.).
+                            if not _in_grace and self.cvd_health.lookback > 0:
+                                # Find this position's strategy config (for the
+                                # per-strategy toggles + thresholds).
+                                _strat_cfg = {}
+                                for _s in self.strategies:
+                                    if getattr(_s, "name", None) == pos.strategy:
+                                        _strat_cfg = _s.config
+                                        break
+
+                                if _strat_cfg.get("cvd_exit_enabled", True):
+                                    # 1. Bar-delta flip exit
+                                    _flip_min_consecutive = int(
+                                        _strat_cfg.get("cvd_flip_min_consecutive", 2)
+                                    )
+                                    flip = self.cvd_flip.check_flip_against(
+                                        pos.direction,
+                                        min_consecutive=_flip_min_consecutive,
+                                    )
+                                    if flip["flipped"]:
+                                        logger.info(
+                                            f"[CVD_FLIP:{pos.trade_id}] exit on "
+                                            f"flow flip — {flip['reason']}"
+                                        )
+                                        await self._exit_trade(
+                                            ws, price, "cvd_flip",
+                                            trade_id=pos.trade_id,
+                                        )
+
+                                    # 2. Swing-divergence exit
+                                    div_sig = self.cvd_div.check_divergence(
+                                        trade_direction=pos.direction
+                                    )
+                                    if div_sig is not None:
+                                        logger.info(
+                                            f"[CVD_DIV:{pos.trade_id}] {div_sig.kind} "
+                                            f"divergence — price "
+                                            f"{div_sig.prior_price:.2f}->"
+                                            f"{div_sig.new_price:.2f}, "
+                                            f"cvd {div_sig.prior_cvd:.0f}->"
+                                            f"{div_sig.new_cvd:.0f}, "
+                                            f"{div_sig.bars_between} bars apart"
+                                        )
+                                        await self._exit_trade(
+                                            ws, price, "cvd_divergence",
+                                            trade_id=pos.trade_id,
+                                        )
+
                         elif SCALE_OUT_ENABLED and not pos.scaled_out and pos.original_contracts >= 2:
                             # Original multi-contract scale-out path.
                             # Per-signal override: ORB et al. can supply
@@ -2306,6 +2389,27 @@ class BaseBot:
             except Exception:
                 pass
 
+            # ── 2026-05-13: feed the CVD detectors on every 1m bar close ──
+            # Inputs:
+            #   - bar_close (price)
+            #   - market["cvd"] (cumulative CVD — read fresh from aggregator
+            #     snapshot to avoid relying on whatever's cached)
+            #   - market["bar_delta"] (this-bar delta — buy_vol minus sell_vol)
+            # Each detector is wrapped in try/except — if a feed fails, the
+            # bar update is skipped but the bot keeps running. CVD updates
+            # are advisory, not safety-critical.
+            try:
+                _snap = self.aggregator.snapshot()
+                _cum_cvd = float(_snap.get("cvd", 0) or 0)
+                _bar_delta = float(_snap.get("bar_delta", 0) or 0)
+                _bar_high = getattr(bar, "high", bar.close)
+                _bar_low = getattr(bar, "low", bar.close)
+                self.cvd_health.update_bar(bar.close, _cum_cvd)
+                self.cvd_flip.update_bar(_bar_delta)
+                self.cvd_div.update_bar(_bar_high, _bar_low, _cum_cvd)
+            except Exception as _cvd_err:
+                logger.debug(f"[CVD] detector update failed: {_cvd_err!r}")
+
         # Phase 7: Feed HMM regime detector on 5m bar completions
         if timeframe == "5m":
             try:
@@ -2576,6 +2680,20 @@ class BaseBot:
         market["rsi"] = self.rsi_divergence.get_current_rsi()
         market["rsi_divergence"] = self._last_rsi_divergence
         market["htf_patterns"] = self.htf_scanner.get_state().get("active_patterns", [])
+
+        # 2026-05-13: CVD trend-health pre-assessment for both directions.
+        # Strategies pick the dict that matches their intended direction at
+        # entry-time. Stored separately to avoid recomputing inside each
+        # strategy. The "cvd_health" key holds the LONG assessment by
+        # default; strategies that consider both should also read
+        # "cvd_health_short". Cheap to compute (linear regression over 6 bars).
+        try:
+            market["cvd_health"] = self.cvd_health.assess("LONG")
+            market["cvd_health_short"] = self.cvd_health.assess("SHORT")
+        except Exception as _cvd_assess_err:
+            logger.debug(f"[CVD] health assess failed: {_cvd_assess_err!r}")
+            market["cvd_health"] = {"veto": False, "agreement": 0.0, "reason": "assess error"}
+            market["cvd_health_short"] = {"veto": False, "agreement": 0.0, "reason": "assess error"}
 
         # B14 Phase 4: enrich with MenthorQ gamma state (regime, nearest wall,
         # pin-zone flag, raw GammaLevels). Strategies can read these for

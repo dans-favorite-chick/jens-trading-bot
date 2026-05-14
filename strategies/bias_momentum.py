@@ -763,6 +763,33 @@ class BiasMomentumFollow(BaseStrategy):
         )
         confluences.append(stop_note)
 
+        # ── 2026-05-13: CVD trend-health veto (entry filter) ──────────────
+        # Read the bot-level CVDTrendHealth detector via market["cvd_health"]
+        # (BaseBot enriches the snapshot with the assess() dict). If the
+        # detector vetoes — meaning EITHER the price slope OR the CVD slope
+        # over the last 6 bars opposes the intended trade direction — skip.
+        # Configurable via strategy config:
+        #   - cvd_health_enabled (bool, default True): can be toggled off
+        #     for a specific strategy that's tested OK without this gate.
+        #   - cvd_health_veto_threshold (float, default -0.3): tighter
+        #     thresholds (e.g. -0.1) catch more setups, looser (e.g. -0.5)
+        #     only the most extreme opposing-flow patterns.
+        if self.config.get("cvd_health_enabled", True):
+            # Pick the direction-appropriate health dict (base_bot enriches
+            # both at snapshot time). "cvd_health" = LONG assessment;
+            # "cvd_health_short" = SHORT assessment.
+            _cvd_key = "cvd_health" if direction == "LONG" else "cvd_health_short"
+            _cvd_h = market.get(_cvd_key) or {}
+            if _cvd_h.get("veto"):
+                self._last_reject = (
+                    f"CVD_HEALTH: {_cvd_h.get('reason', 'opposing flow')}"
+                )
+                logger.info(
+                    f"[EVAL] {self.name}: NO_SIGNAL cvd_health veto for "
+                    f"{direction} (agreement={_cvd_h.get('agreement', 0):+.2f})"
+                )
+                return None
+
         logger.info(f"[EVAL] {self.name}: SIGNAL {direction} entry={price:.2f}")
         sig = Signal(
             direction=direction,
