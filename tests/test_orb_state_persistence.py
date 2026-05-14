@@ -133,3 +133,51 @@ def test_reset_daily_persists_clean_state(isolated_orb):
     assert data["or_set"] is False
     assert data["traded_today"] is False
     assert data["or_date"] == "2026-05-13"
+
+
+# ── #13 regression: post-restart entry-window cutoff ──────────────────
+
+def test_session_start_ts_survives_restart(isolated_orb):
+    """Regression: before the fix, _or_bars_1m didn't survive restart
+    (bar objects don't JSON-serialize), so Step 3 in evaluate() did
+    `_or_bars_1m[0].start_time` → IndexError → silently passed the
+    max_entry_delay_min cutoff. The bot could trade past the cutoff
+    after any mid-session restart.
+
+    Fix: persist the first OR bar's start_time as a separate scalar
+    field (_or_session_start_ts) so Step 3 can still gate correctly
+    even when _or_bars_1m is empty."""
+    orb = _make_orb()
+    today_et = datetime.now(_ET).strftime("%Y-%m-%d")
+    orb._or_high = 20050.0
+    orb._or_low = 20000.0
+    orb._or_set = True
+    orb._or_date = today_et
+    orb._traded_today = False
+    orb._or_session_start_ts = 1700000000.0  # arbitrary epoch
+    orb._save_state()
+    # Verify it's actually in the JSON on disk
+    path = _orb_state_path(isolated_orb, "test")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["or_session_start_ts"] == 1700000000.0
+    # And the new instance restores it
+    orb2 = _make_orb()
+    assert orb2._or_session_start_ts == 1700000000.0
+
+
+def test_session_start_ts_missing_in_legacy_state_doesnt_crash(isolated_orb):
+    """A state file written BEFORE this field existed should still load
+    cleanly; _or_session_start_ts just stays None (fallback to
+    _or_bars_1m[0] in evaluate, which on restart is empty — so the
+    cutoff is bypassed, matching pre-fix behavior). No crash."""
+    path = _orb_state_path(isolated_orb, "test")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    today_et = datetime.now(_ET).strftime("%Y-%m-%d")
+    # Simulate the OLD schema with no or_session_start_ts key
+    path.write_text(json.dumps({
+        "or_high": 20050.0, "or_low": 20000.0, "or_set": True,
+        "or_date": today_et, "traded_today": False,
+    }), encoding="utf-8")
+    orb = _make_orb()
+    assert orb._or_high == 20050.0
+    assert orb._or_session_start_ts is None  # legacy file → None

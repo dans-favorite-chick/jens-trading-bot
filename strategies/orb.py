@@ -49,6 +49,13 @@ class OpeningRangeBreakout(BaseStrategy):
         self._or_set: bool = False
         self._or_date: str | None = None
         self._or_bars_1m: list = []         # 1m bars during OR window
+        # 2026-05-13 (#13): session_start_ts is derived from
+        # _or_bars_1m[0].start_time. We persist it separately so that
+        # after a restart (where _or_bars_1m is NOT restored — bar
+        # objects can't survive JSON), Step 3's max_entry_delay_min
+        # cutoff can still fire correctly. Without this, post-restart
+        # the window check silently passes via IndexError -> pass.
+        self._or_session_start_ts: float | None = None
         self._traded_today: bool = False
         self._last_5m_checked_ts: float = 0  # Dedup: check each new 5m bar once
         # Prod vs lab session window — set by bot via is_prod_bot attribute
@@ -90,9 +97,15 @@ class OpeningRangeBreakout(BaseStrategy):
         self._or_set = bool(data.get("or_set", False))
         self._or_date = data.get("or_date")
         self._traded_today = bool(data.get("traded_today", False))
+        # #13: restore session-start timestamp so post-restart the
+        # max_entry_delay_min cutoff still works (Step 3 in evaluate).
+        _sst = data.get("or_session_start_ts")
+        self._or_session_start_ts = float(_sst) if _sst is not None else None
         logger.info(
             f"[ORB:state] restored {today_et} — OR=[{self._or_low}, "
-            f"{self._or_high}] set={self._or_set} traded={self._traded_today}"
+            f"{self._or_high}] set={self._or_set} "
+            f"traded={self._traded_today} "
+            f"session_start_ts={self._or_session_start_ts}"
         )
 
     def _save_state(self) -> None:
@@ -111,6 +124,7 @@ class OpeningRangeBreakout(BaseStrategy):
                     "or_set": self._or_set,
                     "or_date": self._or_date,
                     "traded_today": self._traded_today,
+                    "or_session_start_ts": self._or_session_start_ts,
                 }),
                 encoding="utf-8",
             )
@@ -123,6 +137,7 @@ class OpeningRangeBreakout(BaseStrategy):
         self._or_set = False
         self._or_date = today
         self._or_bars_1m = []
+        self._or_session_start_ts = None
         self._traded_today = False
         self._last_5m_checked_ts = 0
         self._save_state()
@@ -202,6 +217,15 @@ class OpeningRangeBreakout(BaseStrategy):
 
             if len(self._or_bars_1m) >= or_duration:
                 self._or_set = True
+                # #13: snapshot first-bar start_time before persisting
+                # so post-restart Step 3 can still enforce the cutoff.
+                if self._or_bars_1m:
+                    try:
+                        self._or_session_start_ts = float(
+                            self._or_bars_1m[0].start_time
+                        )
+                    except (AttributeError, TypeError, ValueError):
+                        self._or_session_start_ts = None
                 self._save_state()  # #13: persist once OR is finalized
             else:
                 logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
@@ -222,14 +246,30 @@ class OpeningRangeBreakout(BaseStrategy):
 
         # ── Step 3: Check entry window cutoff ───────────────────────
         # Session start = first OR bar start. Cutoff = start + max_entry_delay.
-        try:
-            session_start = datetime.fromtimestamp(self._or_bars_1m[0].start_time, tz=_ET)
-            minutes_since_open = (bar_dt - session_start).total_seconds() / 60
-            if minutes_since_open > max_entry_delay_min:
-                logger.debug(f"[EVAL] {self.name}: BLOCKED gate:entry_window_expired")
-                return None  # Missed the window — no new OR trades
-        except (OSError, ValueError, TypeError, IndexError):
-            pass
+        # #13 (2026-05-13): after a bot restart, _or_bars_1m is empty
+        # (bar objects don't survive JSON) — fall back to the persisted
+        # _or_session_start_ts so the cutoff still fires. Without that
+        # fallback, the previous IndexError-pass let trades fire well
+        # past the entry-window after any restart.
+        _session_start_ts_value: float | None = None
+        if self._or_bars_1m:
+            try:
+                _session_start_ts_value = float(self._or_bars_1m[0].start_time)
+            except (AttributeError, TypeError, ValueError):
+                _session_start_ts_value = None
+        if _session_start_ts_value is None:
+            _session_start_ts_value = self._or_session_start_ts
+        if _session_start_ts_value is not None:
+            try:
+                session_start = datetime.fromtimestamp(
+                    _session_start_ts_value, tz=_ET,
+                )
+                minutes_since_open = (bar_dt - session_start).total_seconds() / 60
+                if minutes_since_open > max_entry_delay_min:
+                    logger.debug(f"[EVAL] {self.name}: BLOCKED gate:entry_window_expired")
+                    return None  # Missed the window — no new OR trades
+            except (OSError, ValueError, TypeError):
+                pass
 
         # ── Step 4: 5-minute close confirmation ─────────────────────
         # Require a completed 5m bar whose close is outside the OR.
