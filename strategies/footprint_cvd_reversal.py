@@ -1450,10 +1450,30 @@ class FootprintCVDReversal(BaseStrategy):
                         int(round((stop_price - price) / tick_size))),
                 )
 
+            # 2026-05-13 (#14): explicit CVD div-type instrumentation so
+            # post-hoc analysis can answer "do multi-bar divs outperform
+            # single-bar divs, or vice versa? are both-types entries the
+            # highest-quality?" Currently we know A divergence fired but
+            # not WHICH one — instrumenting both confluences AND a discrete
+            # cvd_div_type metadata key.
+            multi_div = bool(div_debug["divergence_present"])
+            single_div = bool(div_debug["single_bar_div"])
+            if multi_div and single_div:
+                cvd_div_type = "both"
+            elif multi_div:
+                cvd_div_type = "multi_bar"
+            elif single_div:
+                cvd_div_type = "single_bar"
+            else:
+                cvd_div_type = "none"
+            cvd_div_magnitude = float(div_debug.get("magnitude", 0.0) or 0.0)
+
             confluences = [f"htf_level:{level_name}"]
-            if div_debug["divergence_present"]:
-                confluences.append("cvd_divergence_multi_bar")
-            if div_debug["single_bar_div"]:
+            if multi_div:
+                confluences.append(
+                    f"cvd_divergence_multi_bar(mag={cvd_div_magnitude:+.2f})"
+                )
+            if single_div:
                 confluences.append("cvd_divergence_single_bar")
             if fp_debug["stacked"]:
                 confluences.append("stacked_imbalance")
@@ -1491,7 +1511,10 @@ class FootprintCVDReversal(BaseStrategy):
                 confidence=float(iqs),
                 entry_score=float(min(60, iqs * 0.6)),  # 0-60 scale
                 strategy=self.name,
-                reason=f"4-confluence reversal at {level_name}, tier {tier}",
+                reason=(
+                    f"4-confluence reversal at {level_name}, tier {tier} "
+                    f"[cvd_div={cvd_div_type}]"
+                ),
                 confluences=confluences,
                 atr_stop_override=True,
                 entry_type="MARKET",
@@ -1513,6 +1536,11 @@ class FootprintCVDReversal(BaseStrategy):
                     "ctx_debug": ctx_debug,          # Sprint M Tier 1
                     "level_score": level_score,
                     "divergence_score": div_score,
+                    # 2026-05-13 (#14): structured fields so a post-hoc
+                    # group-by can answer "which div type wins?" Compact
+                    # enum + magnitude, separate from the verbose debug dict.
+                    "cvd_div_type": cvd_div_type,
+                    "cvd_div_magnitude": cvd_div_magnitude,
                     "footprint_score": fp_score,
                     "compression_score": comp_score,
                     "level_name": level_name,
