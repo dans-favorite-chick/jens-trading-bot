@@ -197,8 +197,13 @@ class VwapBandPullback(BaseStrategy):
         bullish = int(market.get("tf_votes_bullish", 0) or 0)
         bearish = int(market.get("tf_votes_bearish", 0) or 0)
         total = max(bullish + bearish, 1)
-        safe_to_long = bullish >= 3 and bullish > bearish
-        safe_to_short = bearish >= 3 and bearish > bullish
+        # 2026-05-13 (#15): TF-vote threshold dropped from hardcoded 3 to
+        # config-driven (default 2). VWAP-band touches happen on the LAST
+        # candle before reversal, when only the lowest TF has flipped —
+        # 3-of-N over-gated the entry.
+        min_votes = int(self.config.get("min_tf_votes", 2))
+        safe_to_long = bullish >= min_votes and bullish > bearish
+        safe_to_short = bearish >= min_votes and bearish > bullish
         if safe_to_long:
             htf = "UP"
         elif safe_to_short:

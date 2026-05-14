@@ -421,6 +421,13 @@ STRATEGIES = {
         "atr_period": 14,
         "min_volume_ratio": 0.8,
         "target_rr": 2.0,
+        # 2026-05-13 (#15): TF-alignment gate dropped 3→2. The mean-reversion
+        # entry already has RSI(2) extreme + bar-reversal + volume confirmation,
+        # so demanding 3-of-N timeframes align directionally was over-gating
+        # — bands tend to touch on the LAST candle before a reversal, when
+        # only the lowest TF has flipped. 2/N keeps the trend-day filter
+        # (NEUTRAL → no signal) but lets early-reversal touches through.
+        "min_tf_votes": 2,
         # NQ-research clamps (matches Fix 7 values). If natural 2σ-band
         # stop > max_stop_ticks, signal is skipped (Fix 8-style guard).
         "min_stop_ticks": 40,
