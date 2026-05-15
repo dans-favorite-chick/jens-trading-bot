@@ -13,10 +13,20 @@ from config.strategies import STRATEGIES
 
 
 def test_noise_area_band_mult_is_07():
+    """band_mult and trade_freq_minutes stay pinned at the Fix C values
+    so that any re-enable starts from the calibrated config.
+
+    2026-05-15 update: noise_area was RETIRED after the MAE/MFE asymmetry
+    analysis found MFE/MAE=0.44x (losers go 2.3× farther adverse than
+    winners go favorable). enabled=False until the cone-detection logic
+    is rebuilt for MNQ's vol profile."""
     cfg = STRATEGIES["noise_area"]
     assert cfg["band_mult"] == 0.7
     assert cfg["trade_freq_minutes"] == 30
-    assert cfg["enabled"] is True
+    # Was enabled=True pre-2026-05-15. Now retired — see retired_reason
+    # in config/strategies.py and tools/mae_mfe_asymmetry.py.
+    assert cfg["enabled"] is False
+    assert cfg.get("retired") is True
 
 
 def test_noise_area_strategy_silent_cadence_pattern():

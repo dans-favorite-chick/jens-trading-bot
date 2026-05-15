@@ -3621,6 +3621,53 @@ class BaseBot:
                      f"SL={stop_price:.2f} TP={_tp_str} "
                      f"risk=${risk_dollars} tier={tier} strat={signal.strategy}")
 
+        # ── 2026-05-15: Hard dollar-budget gate on ACTUAL placed stop ──
+        # The operator's standing constraint: NEVER lose more than ~$50
+        # per trade. Phoenix's prior model — risk-reference stop for
+        # sizing + structural stop for OCO bracket (B21 managed-exit
+        # pattern) — could report $18 of risk while exposing $137 in
+        # practice (today's noise_area trades). The fix: compute the
+        # ACTUAL dollar loss if the placed stop hits, and skip if it
+        # exceeds MAX_ACTUAL_STOP_DOLLARS_PER_TRADE. The strategy's
+        # entry may be valid; just SKIP this particular signal if its
+        # natural-stop placement exceeds the operator's risk budget.
+        # This is per the Bandy / Tomasini-Jaekle principle: position
+        # sizing controls dollar risk; stops are placed where the signal
+        # invalidates. On MNQ we can't size below 1 contract, so the
+        # only honest action when natural stop > budget is to skip.
+        import config.settings as _settings_mod
+        _ts_budget = getattr(_settings_mod, "TICK_SIZE", 0.25)
+        _tv_budget = getattr(_settings_mod, "TICK_VALUE_PER_CONTRACT", 0.50)
+        _MAX_ACTUAL_STOP_DOLLARS = float(getattr(
+            _settings_mod, "MAX_ACTUAL_STOP_DOLLARS_PER_TRADE", 50.0,
+        ))
+        _actual_stop_ticks = abs(price - stop_price) / _ts_budget
+        _actual_stop_dollars = _actual_stop_ticks * _tv_budget * max(1, contracts)
+        if _actual_stop_dollars > _MAX_ACTUAL_STOP_DOLLARS:
+            logger.warning(
+                f"[BUDGET_SKIP:{tid}] {signal.strategy} {signal.direction}: "
+                f"actual stop ${_actual_stop_dollars:.2f} > budget "
+                f"${_MAX_ACTUAL_STOP_DOLLARS:.2f} "
+                f"(stop={_actual_stop_ticks:.0f}t × {contracts}ct × "
+                f"${_tv_budget:.2f}/t). Signal valid but stop too wide "
+                f"for risk budget — skipping."
+            )
+            self.last_rejection = (
+                f"BUDGET_SKIP: stop ${_actual_stop_dollars:.0f} > "
+                f"${_MAX_ACTUAL_STOP_DOLLARS:.0f}"
+            )
+            try:
+                sig_dict = {"direction": signal.direction, "strategy": signal.strategy,
+                            "confidence": signal.confidence, "entry_score": signal.entry_score,
+                            "reason": signal.reason}
+                self.history.log_near_miss(
+                    sig_dict, market,
+                    f"budget_skip:stop_${_actual_stop_dollars:.0f}_gt_${_MAX_ACTUAL_STOP_DOLLARS:.0f}",
+                )
+            except Exception:
+                pass
+            return
+
         # B62 Universal sanity gate — fail-closed geometry & distance check.
         # Runs AFTER stop/target resolution, BEFORE any OCO submission.
         # 2026-05-15: pass is_managed_exit so managed-exit strategies (e.g.

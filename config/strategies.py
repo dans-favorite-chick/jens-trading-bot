@@ -312,10 +312,30 @@ STRATEGIES = {
     },
 
     "noise_area": {
+        # RETIRED 2026-05-15 — data verdict from tools/mae_mfe_asymmetry.py:
+        # 20 trades, 10% WR, -$693.90, avgMAE 165t / avgMFE 73t.
+        # MFE/MAE ratio 0.44x — losers go 2.3× farther adverse than winners
+        # go favorable. losC% = 98% (losers ride to full MAE). winC% = 89%
+        # (winners realize most of MFE — but MFE itself is too small).
+        # No exit tuning fixes "the average loser is 2× the average winner."
+        # The Zarattini noise-cone strategy is designed for SPY (low vol);
+        # MNQ's volatility profile makes the structural stop unworkable on
+        # a $50/trade budget. Re-introduce only if the cone-detection
+        # logic is replaced with something MNQ-native (e.g., gamma-aware
+        # bands, regime-conditioned widths).
+        "enabled": False,
+        "retired": True,
+        "retired_at": "2026-05-15",
+        "retired_reason": (
+            "10% WR, MFE/MAE=0.44x — losers go 2.3× farther adverse than "
+            "winners go favorable. Strategy has anti-edge on MNQ. "
+            "Retired per tools/mae_mfe_asymmetry.py verdict."
+        ),
         # Noise Area Intraday Momentum — Zarattini, Aziz, Barbon (2024) SSRN 4824172
         # Published: SPY 19.6% annual, Sharpe 1.33; NQ 24.3% annual, Sharpe 1.67.
-        "enabled": True,
-        "validated": False,         # Lab only — new strategy, 10+ day warmup needed
+        # (NQ published number was a paper-backtest; live trading on MNQ
+        # has not reproduced it across 20 trades.)
+        "validated": False,
         "lookback_days": 14,
         # 2026-04-24: dropped 1.0 → 0.7. Published spec is for SPY (low vol);
         # MNQ is more volatile and price rarely breaks the 1σ cone. Tightened

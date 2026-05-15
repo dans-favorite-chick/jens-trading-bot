@@ -23,6 +23,20 @@ ROLL_DAYS_BEFORE_EXPIRATION = 8      # Auto-switch N trading days before expirat
 ACCOUNT = "Sim101"
 LIVE_TRADING = False  # Flip to True for real money (requires ATI enabled in NT8)
 TICK_SIZE = 0.25
+TICK_VALUE_PER_CONTRACT = 0.50    # MNQ: $0.50 per tick per 1 contract
+
+# ─── Hard $-Budget Per Trade (2026-05-15) ───────────────────────────
+# Operator constraint: NEVER lose more than this on a single trade.
+# Enforced in base_bot._handle_signal() AFTER the strategy's stop is
+# resolved — if the actual placed stop's dollar exposure exceeds this
+# budget, the trade is SKIPPED with a [BUDGET_SKIP] log. NOT a stop
+# tightening (that would break strategy edge); just a refusal to take
+# trades whose natural stop exceeds the budget. On MNQ we can't size
+# below 1 contract, so this is the only honest dollar-risk control.
+# Bandy / Tomasini-Jaekle principle: stops at signal invalidation,
+# position sizing controls $; when sizing is fixed at 1, skip-or-take
+# is the actual control.
+MAX_ACTUAL_STOP_DOLLARS_PER_TRADE = 50.0
 
 # ─── Network Ports ──────────────────────────────────────────────────
 NT8_WS_PORT = 8765       # Bridge listens, NT8 indicator connects as client

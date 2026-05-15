@@ -22,7 +22,13 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-RETIRED = ("high_precision_only",)
+RETIRED = ("high_precision_only", "noise_area")
+# noise_area RETIRED 2026-05-15 — MFE/MAE asymmetry analysis found
+# losers go 2.3× farther adverse than winners go favorable (0.44x ratio,
+# 10% WR, -$693.90 lifetime). Strategy has anti-edge on MNQ. The
+# Zarattini noise-cone paper was for SPY (low vol); MNQ's volatility
+# profile makes the structural cone-boundary stop unworkable. See
+# tools/mae_mfe_asymmetry.py for the data-driven verdict.
 # compression_breakout was retired 2026-05-13 and UN-RETIRED 2026-05-15 after
 # the deep-dive identified the failure mode as miscalibration (rarely
 # accumulates consecutive compressed bars on MNQ vol profile) rather than
