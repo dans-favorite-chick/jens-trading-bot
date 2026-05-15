@@ -142,6 +142,41 @@ class OpeningRangeBreakout(BaseStrategy):
         self._last_5m_checked_ts = 0
         self._save_state()
 
+    # 2026-05-15 fix — moved out of __init__ so config takes effect.
+    @staticmethod
+    def _parse_session_open(session_open_et_str: str) -> tuple[int, int]:
+        """Parse 'HH:MM' (ET local) into (hour, minute). Defaults to
+        09:30 (US cash open) on any parse error."""
+        try:
+            h, m = session_open_et_str.split(":")
+            return int(h), int(m)
+        except Exception:
+            return 9, 30
+
+    def _session_open_today_et(self, ref_dt_et: datetime) -> datetime:
+        """Compute today's (ET) session-open datetime, e.g. 2026-05-15 09:30 ET.
+
+        Reference is `ref_dt_et` — the latest 1m bar's end_time in ET.
+        We anchor the "session day" off this so a bar at 11:55 ET on
+        2026-05-14 returns 2026-05-14 09:30 ET (the open it belongs to),
+        and a bar at 08:00 ET on 2026-05-15 returns 2026-05-14 09:30 ET
+        (the LAST open we passed — pre-market activity still belongs to
+        the prior session's "today"). Once we cross 09:30 ET on the
+        15th, we return the 15th's open.
+        """
+        h, m = self._parse_session_open(
+            str(self.config.get("session_open_et", "09:30"))
+        )
+        # First, try today's session_open at this ET date
+        candidate = ref_dt_et.replace(hour=h, minute=m, second=0, microsecond=0)
+        if ref_dt_et >= candidate:
+            return candidate
+        # ref is BEFORE today's open → use yesterday's open as the
+        # current "session day". This keeps the same ORB context active
+        # through overnight (until next 09:30 ET rolls in).
+        from datetime import timedelta
+        return candidate - timedelta(days=1)
+
     def evaluate(self, market: dict, bars_5m: list, bars_1m: list,
                  session_info: dict) -> Signal | None:
 
@@ -192,23 +227,57 @@ class OpeningRangeBreakout(BaseStrategy):
                     f"(regime={_adv.get('market_regime')})"
                 )
 
-        # ── Detect date, reset daily (anchored to ET calendar) ───────
+        # ── Detect session day, reset on each new market open ───────
+        # 2026-05-15 fix — previously anchored to ET midnight (or bot
+        # startup), which built the "OR" from arbitrary overnight bars.
+        # Today's OR was 393pt wide because of this — 5× the cap. Now
+        # we anchor to the configured session_open_et (default 09:30
+        # ET = US cash open, matches Zarattini's published spec).
         last_bar = bars_1m[-1]
         try:
             bar_dt = datetime.fromtimestamp(last_bar.end_time, tz=_ET)
         except (OSError, ValueError, TypeError):
             bar_dt = datetime.now(tz=_ET)
-        today = bar_dt.strftime("%Y-%m-%d")
+        session_open_et = self._session_open_today_et(bar_dt)
+        session_open_ts = session_open_et.timestamp()
+        today = session_open_et.strftime("%Y-%m-%d")
         if self._or_date != today:
             self._reset_daily(today)
+            # Re-anchor so Step 3 cutoff uses THIS session's open, not
+            # the first bar in the deque (which is usually overnight).
+            self._or_session_start_ts = session_open_ts
 
-        # ── Step 1: Build the Opening Range (first 15 1m bars) ──────
+        # Don't build the OR before the session even opens — if the
+        # last bar is older than today's session_open, we're in the
+        # pre-market or weekend window. Wait for a fresh bar.
+        try:
+            last_bar_ts = float(last_bar.end_time)
+        except (AttributeError, TypeError, ValueError):
+            last_bar_ts = 0.0
+        if last_bar_ts < session_open_ts:
+            logger.debug(
+                f"[EVAL] {self.name}: SKIP pre_session_open "
+                f"(last bar {bar_dt.strftime('%H:%M ET')} < open "
+                f"{session_open_et.strftime('%H:%M ET')})"
+            )
+            return None
+
+        # ── Step 1: Build the Opening Range (first 15 1m bars AFTER open) ──
         if not self._or_set:
-            seen_count = len(self._or_bars_1m)
-            if len(bars_1m) > seen_count:
-                for bar in bars_1m[seen_count:]:
-                    self._or_bars_1m.append(bar)
+            # Only consider bars whose end_time is at-or-after the
+            # session open. The aggregator's deque carries overnight
+            # bars that must NOT contaminate the OR.
+            in_session_bars = [
+                b for b in bars_1m
+                if float(getattr(b, "end_time", 0) or 0) >= session_open_ts
+            ]
+            # Replace whatever was accumulating with the filtered set.
+            # This is idempotent — re-running won't double-count bars.
+            self._or_bars_1m = list(in_session_bars[:or_duration])
 
+            # Recompute OR high/low from the filtered bars only.
+            self._or_high = None
+            self._or_low = None
             for bar in self._or_bars_1m:
                 if self._or_high is None or bar.high > self._or_high:
                     self._or_high = bar.high
@@ -217,18 +286,25 @@ class OpeningRangeBreakout(BaseStrategy):
 
             if len(self._or_bars_1m) >= or_duration:
                 self._or_set = True
-                # #13: snapshot first-bar start_time before persisting
-                # so post-restart Step 3 can still enforce the cutoff.
-                if self._or_bars_1m:
-                    try:
-                        self._or_session_start_ts = float(
-                            self._or_bars_1m[0].start_time
-                        )
-                    except (AttributeError, TypeError, ValueError):
-                        self._or_session_start_ts = None
+                # #13: snapshot the SESSION open (not the first-bar's
+                # exact start_time, which may be a few seconds off) so
+                # post-restart Step 3 cutoff fires at the configured
+                # session boundary.
+                self._or_session_start_ts = session_open_ts
                 self._save_state()  # #13: persist once OR is finalized
+                logger.info(
+                    f"[EVAL] {self.name}: OR_SET {today} "
+                    f"[{self._or_low:.2f}, {self._or_high:.2f}] "
+                    f"size={self._or_high-self._or_low:.2f}pt "
+                    f"after {len(self._or_bars_1m)} bars from "
+                    f"{session_open_et.strftime('%H:%M ET')}"
+                )
             else:
-                logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
+                logger.debug(
+                    f"[EVAL] {self.name}: SKIP warmup_incomplete "
+                    f"({len(self._or_bars_1m)}/{or_duration} bars since "
+                    f"{session_open_et.strftime('%H:%M ET')})"
+                )
                 return None
 
         # ── Step 2: Validate OR size ────────────────────────────────

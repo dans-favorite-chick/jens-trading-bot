@@ -280,9 +280,15 @@ STRATEGIES = {
         # Published: QQQ 46% annual, Sharpe 2.4; NQ backtest 74% WR, PF 2.51.
         "enabled": True,
         "validated": False,         # Lab only until 20+ live trades collected
+        # 2026-05-15 fix: session_open_et anchors the daily reset to the
+        # US cash open. Pre-fix the daily reset fired at ET-midnight,
+        # which built the "OR" from arbitrary overnight bars (393pt wide
+        # = 5× the cap → every breakout rejected as `or_too_wide`).
+        # Now Zarattini's published 9:30 ET anchor is honored.
+        "session_open_et": "09:30",
         "or_duration_minutes": 15,
         "confirmation_close_minutes": 5,
-        "max_entry_delay_minutes": 60,     # Cutoff at 10:30 ET / 9:30 CST
+        "max_entry_delay_minutes": 60,     # Cutoff at 10:30 ET / 8:30 CT
         "min_or_size_points": 10,          # Skip low-vol days
         # 2026-04-24: was a hard 60-pt cap, blocked 98% of evals (`gate:or_too_wide`).
         # Now ATR-adaptive: max width = max(max_or_size_points, atr_5m * max_or_size_atr_mult)

@@ -84,13 +84,86 @@ def test_stop_distance_too_tight_rejected():
 
 
 def test_stop_distance_too_wide_rejected():
-    """250t stop is above ceiling (200t)."""
+    """250t stop is above the default bracket ceiling (200t)."""
     sig = _make_signal("LONG")
     ok, reason = _sanity_check_entry(sig, entry_price=26834.0,
                                      stop_price=26834.0 - 250 * TICK,
                                      target_price=26900.0)
     assert not ok
     assert "outside 5-200 range" in reason
+
+
+# ─── Managed-exit stop bound (2026-05-15 fix) ──────────────────────────
+
+def test_managed_exit_allows_wide_stop_up_to_1000t():
+    """noise_area's stop is the opposite cone boundary +2t. On wide-cone
+    days this exceeds the default 200t bound; today's 11 signals dropped
+    at 776t. With is_managed_exit=True the upper bound is 1000t."""
+    sig = _make_signal("LONG", strategy="noise_area")
+    # 776t stop — today's actual failing case
+    ok, reason = _sanity_check_entry(
+        sig, entry_price=29629.5,
+        stop_price=29629.5 - 776 * TICK,
+        target_price=None,
+        is_managed_exit=True,
+    )
+    assert ok, f"managed-exit 776t rejected: {reason}"
+
+
+def test_managed_exit_still_rejects_over_1000t():
+    """The wider bound still exists — a 1500t stop is clearly broken
+    even for a managed-exit strategy."""
+    sig = _make_signal("LONG", strategy="noise_area")
+    ok, reason = _sanity_check_entry(
+        sig, entry_price=29629.5,
+        stop_price=29629.5 - 1500 * TICK,
+        target_price=None,
+        is_managed_exit=True,
+    )
+    assert not ok
+    assert "outside 5-1000 range" in reason
+    assert "managed mode" in reason
+
+
+def test_managed_exit_still_rejects_under_5t():
+    """Lower bound (5t) applies regardless of mode — too-tight stops
+    are noise sweeps no matter the strategy."""
+    sig = _make_signal("LONG", strategy="noise_area")
+    ok, reason = _sanity_check_entry(
+        sig, entry_price=29629.5,
+        stop_price=29629.5 - 3 * TICK,
+        target_price=None,
+        is_managed_exit=True,
+    )
+    assert not ok
+    assert "outside 5-1000 range" in reason
+
+
+def test_bracket_strategy_unaffected_by_managed_flag():
+    """Default (is_managed_exit=False) keeps the original 200t cap so
+    ordinary bracket strategies don't accidentally widen their cap."""
+    sig = _make_signal("LONG", strategy="bias_momentum")
+    ok, reason = _sanity_check_entry(
+        sig, entry_price=29629.5,
+        stop_price=29629.5 - 250 * TICK,
+        target_price=29700.0,
+        is_managed_exit=False,
+    )
+    assert not ok
+    assert "5-200" in reason
+    assert "bracket mode" in reason
+
+
+def test_default_keyword_is_bracket_mode():
+    """Backward-compat: omitting is_managed_exit keeps the strict 200t cap."""
+    sig = _make_signal("LONG", strategy="bias_momentum")
+    ok, reason = _sanity_check_entry(
+        sig, entry_price=29629.5,
+        stop_price=29629.5 - 250 * TICK,
+        target_price=29700.0,
+    )
+    assert not ok
+    assert "5-200" in reason
 
 
 # ─── Managed-exit: target_price=None is tolerated ───────────────────────

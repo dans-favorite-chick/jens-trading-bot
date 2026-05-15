@@ -489,7 +489,20 @@ def _trail_stop(pos, price: float, min_profit_ticks: int = 8,
 
 
 # ── B62: Universal stop/target sanity gate (Exit Sprint S1) ──────────────
-def _sanity_check_entry(signal, entry_price, stop_price, target_price):
+# 2026-05-15 fix: split the upper-bound check by exit mode so noise_area
+# (and any other managed-exit strategy) isn't silently blocked. Managed-
+# exit strategies (`uses_managed_exit=True`, `target_price=None`) carry
+# WIDE structural disaster stops by design — noise_area's stop is the
+# opposite noise-cone boundary +2t buffer, which can reach 600-1000t on
+# wide-cone days. Today's 11 noise_area signals were all dropped at
+# 776t > 200t cap. The sanity gate now widens to 1000t for those.
+_SANITY_STOP_MIN_TICKS = 5
+_SANITY_STOP_MAX_TICKS_DEFAULT = 200       # ordinary bracket strategies
+_SANITY_STOP_MAX_TICKS_MANAGED = 1000      # managed-exit (noise_area, footprint_cvd_reversal)
+
+
+def _sanity_check_entry(signal, entry_price, stop_price, target_price,
+                        is_managed_exit: bool = False):
     """Fail-closed geometry + distance check before OCO submission.
 
     Returns (ok: bool, reason: str|None). On failure, caller logs
@@ -498,7 +511,16 @@ def _sanity_check_entry(signal, entry_price, stop_price, target_price):
     Rules:
       - LONG: stop < entry < target (target may be None for managed exits)
       - SHORT: target < entry < stop (target may be None for managed exits)
-      - Stop distance: 5-200 MNQ ticks (0.25 tick size).
+      - Stop distance:
+          - 5-200 MNQ ticks for ordinary bracket strategies
+          - 5-1000 MNQ ticks when `is_managed_exit=True` (the strategy's
+            stop is a structural disaster anchor, not a real risk stop —
+            real exit comes from signal.exit_trigger / managed exit path)
+
+    `is_managed_exit` should be True when both `signal.target_price is None`
+    AND the underlying strategy class has `uses_managed_exit=True`. The
+    caller computes that combination (see `_managed_exit_target` in the
+    entry path).
     """
     tick_size = 0.25  # MNQ
     if entry_price is None or stop_price is None:
@@ -518,8 +540,12 @@ def _sanity_check_entry(signal, entry_price, stop_price, target_price):
             return False, (f"SHORT order geometry wrong: stop={stop_price} "
                            f"entry={entry_price} target={target_price}")
     stop_ticks = abs(entry_price - stop_price) / tick_size
-    if stop_ticks < 5 or stop_ticks > 200:
-        return False, f"stop distance {stop_ticks:.0f}t outside 5-200 range"
+    upper = (_SANITY_STOP_MAX_TICKS_MANAGED if is_managed_exit
+             else _SANITY_STOP_MAX_TICKS_DEFAULT)
+    if stop_ticks < _SANITY_STOP_MIN_TICKS or stop_ticks > upper:
+        mode = "managed" if is_managed_exit else "bracket"
+        return False, (f"stop distance {stop_ticks:.0f}t outside "
+                       f"{_SANITY_STOP_MIN_TICKS}-{upper} range ({mode} mode)")
     return True, None
 
 
@@ -3597,7 +3623,21 @@ class BaseBot:
 
         # B62 Universal sanity gate — fail-closed geometry & distance check.
         # Runs AFTER stop/target resolution, BEFORE any OCO submission.
-        _ok, _reason = _sanity_check_entry(signal, price, stop_price, target_price)
+        # 2026-05-15: pass is_managed_exit so managed-exit strategies (e.g.
+        # noise_area on wide-cone days) get the wider 5-1000t bound. Today
+        # 11 noise_area signals were silently dropped at 776t against the
+        # default 200t cap.
+        _is_managed = bool(_managed_exit_target) or bool(
+            getattr(signal, "exit_trigger", None)
+        ) or any(
+            getattr(s, "name", None) == getattr(signal, "strategy", None)
+            and getattr(s, "uses_managed_exit", False)
+            for s in self.strategies
+        )
+        _ok, _reason = _sanity_check_entry(
+            signal, price, stop_price, target_price,
+            is_managed_exit=_is_managed,
+        )
         if not _ok:
             logger.critical(f"[STOP_SANITY_FAIL:{tid}] {signal.strategy} "
                             f"{signal.direction}: {_reason}")
