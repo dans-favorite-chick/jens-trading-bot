@@ -22,7 +22,20 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-RETIRED = ("high_precision_only", "compression_breakout", "opening_session")
+RETIRED = ("high_precision_only",)
+# compression_breakout was retired 2026-05-13 and UN-RETIRED 2026-05-15 after
+# the deep-dive identified the failure mode as miscalibration (rarely
+# accumulates consecutive compressed bars on MNQ vol profile) rather than
+# fundamental no-edge. Now armed in sim with relaxed params + per-condition
+# instrumentation. See config/strategies.py compression_breakout block.
+#
+# opening_session was retired 2026-05-13 and UN-RETIRED 2026-05-15 in sim
+# only. The 80MB-stdout deep-dive showed the classifier + sub-evaluators
+# are well-designed (open_auction_in/out fire NO_SIGNAL frequently —
+# meaning they ARE called, the sub gates just reject). open_drive is the
+# only sub that's never dispatched (classifier rarely matches MNQ). Un-
+# retiring gives the operator real-time per-sub visibility while data
+# accumulates for the "lift individual subs" project.
 
 
 @pytest.mark.parametrize("name", RETIRED)

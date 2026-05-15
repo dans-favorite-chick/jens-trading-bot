@@ -322,72 +322,82 @@ STRATEGIES = {
     },
 
     "compression_breakout": {
-        # 🚫 RETIRED 2026-05-13 (#5 of roadmap).
-        # 18 trades total in 5+ weeks at INSUFFICIENT_SAMPLE (n=18) — the
-        # signal is too rare to ever reach TENTATIVE in reasonable time.
-        # 39% WR / -$79.96 net / single-trade concentration 0.89 (one
-        # trade carries 89% of the loss). At current firing rate (~0.5/day)
-        # we would need 12+ weeks just to hit n=30, by which time the
-        # market regime will have shifted. Re-enable only when paired
-        # with a regime-aware re-introduction (#7 regime matrix).
-        "enabled": False,
-        "validated": False,
-        "retired": True,
-        "retired_at": "2026-05-13",
-        "retired_reason": (
-            "18 trades / 39% WR / -$79.96 net. Signal too rare to ever "
-            "validate (would need 12+ weeks just to reach n=30). Reintroduce "
-            "with regime-aware gates only."
-        ),
-        # Coil detection — None = use regime default from _REGIME_PARAMS in the strategy file
-        #   Primary (8:30-10:30): min_coil_bars=3, tight_mult=0.90
-        #   Afternoon:            min_coil_bars=5, tight_mult=1.20-1.50
-        "min_coil_bars": None,      # None = regime default
-        "tight_mult":    None,      # None = regime default
-        "min_tf_votes": 2,          # TF votes needed to confirm direction (exhaustion allows min-1)
-        "stop_buffer_ticks": 3,     # Ticks beyond coil low/high for stop
-        # 2026-04-24: raised from default 5 → 12. Per 48h analysis, squeeze
-        # was released before the 5-bar minimum 68% of the time on current
-        # MNQ vol regime. 12 bars (60 min on 5m) ensures the squeeze is
-        # genuine and not a noise compression that resolves immediately.
-        "min_squeeze_bars": 12,
+        # UN-RETIRED 2026-05-15 — re-armed in sim only (validated=False) with
+        # MNQ-calibrated params + per-condition instrumentation. The prior
+        # retirement was correct given the strict published params produced
+        # 18 trades / 5 weeks (too rare). After today's deep-dive on 5,476
+        # `squeeze_not_held_min_bars` events, we now know the bottleneck is
+        # STAGE 1 — never accumulates enough consecutive compressed bars on
+        # MNQ. The 2026-04-24 commit raised min_squeeze_bars 5→12 under the
+        # assumption of "60 min on 5m bars," but evaluate() actually ticks
+        # ~1.2×/min on this codebase, so 12 evals ≈ 10 min — and even that
+        # threshold is rarely hit because conditions 2/3/4 are tuned for
+        # equity ETFs (TTM Squeeze, Minervini VCP) not 23/5 futures.
+        # New tuning relaxes the AND-of-4 to MNQ vol profile; instrumentation
+        # logs WHICH condition is failing each eval so the operator can see
+        # the firing distribution directly.
+        "enabled": True,
+        "validated": False,         # Sim only until 30+ trades + post-tune review
+        # Compression-condition tunings (MNQ-calibrated 2026-05-15)
+        "atr_compression_ratio": 0.65,  # was 0.5 — MNQ rarely drops to half of avg ATR
+        "range_atr_ratio": 1.8,         # was 1.5 — broader range tolerance
+        # Volume threshold lives inline as 0.75 in code; that's a separate fix
+        # to plumb through. For now the relaxed ATR/range pair widens the
+        # firing window enough to start collecting MNQ-specific data.
+        "min_coil_bars": None,
+        "tight_mult":    None,
+        "min_tf_votes": 2,
+        "stop_buffer_ticks": 3,
+        # 2026-05-15: dropped 12 → 6 evals. With ~1.2 evals/min effective
+        # cadence, 6 ~= 5 minutes of continuous compression — meaningful
+        # but achievable on MNQ. The 2026-04-24 calibration intended 60 min
+        # but misread eval cadence as per-15m-bar; the actual effective
+        # threshold was already ~10 min, well below the intent.
+        "min_squeeze_bars": 6,
         # Stop management — NQ research clamps (Fix 7, 2026-04-20)
-        "min_stop_ticks": 40,       # 10pt floor (Propfolio noise floor)
-        "max_stop_ticks": 120,      # 30pt ceiling (Steady Turtle NQ band)
-        # atr_stop_mult stays strategy-internal (1.5× by default; trend breakout).
-        # Targets — these moves run FAR, use wide RR
-        # With 20-tick stop (5 pts): 5:1 = 100t = 25pts, 8:1 = 160t = 40pts
-        # Explosion squeezes on MNQ routinely run 400t+ (100pts). Let it run.
-        "target_rr": 5.0,           # 5:1 minimum — 100 ticks = 25 points minimum
-        "max_hold_min": 90,         # Give it room to run — big squeezes last 45-90 min
-        # Lab bot collects data — key questions to tune:
-        #   Which signal (VRR / exhaustion / close-breakout) has highest win rate?
-        #   Does ATR-declining alone add value without a directional signal?
-        #   Is exhaustion_tf_min = min_tf_votes-1 the right relaxation?
+        "min_stop_ticks": 40,
+        "max_stop_ticks": 120,
+        "target_rr": 5.0,
+        "max_hold_min": 90,
+        # Per-condition diagnostic logging (added 2026-05-15) emits
+        # `[EVAL] compression_breakout: NOT_COMPRESSED <flag list>` so the
+        # operator can see which of TTM/ATR/Volume/Range is the bottleneck.
+        # Re-review at n=30 trades — if any single condition dominates
+        # rejections, that's the next knob to tune.
     },
 
     "opening_session": {
-        # 🚫 RETIRED 2026-05-13 (#5 of roadmap).
-        # 4 trades / 25% WR / -$59.58 net after months of being enabled.
-        # The 6-sub-strategy router (open_drive, open_test_drive,
-        # open_auction_in/out, premarket_breakout, orb) is structurally
-        # heavy but rarely fires — the gates are too narrow. Re-introduce
-        # only as individual top-level strategies (e.g. lift open_drive
-        # to its own file) with a focused entry gate, not the nested
-        # router pattern.
+        # UN-RETIRED 2026-05-15 — re-armed in sim only (validated=False).
+        # 2026-05-13 retirement rationale (lifetime stats: 4 trades / 25% WR /
+        # -$59.58 net) was correct given the previous calibration. After
+        # today's deep-dive on 80MB of stdout we now know exactly which
+        # sub fires when:
+        #   - premarket_breakout (08:30-08:45 CT, any opening type) — 86 SKIPs
+        #   - orb (08:45-14:30 CT, any opening type) — 465 NO_SIGNAL + 676 SKIP
+        #   - open_auction_in (09:30-12:30 CT, OPEN_AUCTION_IN type) — 215 NO_SIGNAL
+        #   - open_auction_out (08:45-11:00 CT, OPEN_AUCTION_OUT type) — 306 NO_SIGNAL
+        #   - open_drive (08:35-09:00 CT, OPEN_DRIVE type) — NEVER dispatched
+        #     (classifier rarely returns OPEN_DRIVE on MNQ vol profile)
+        #   - open_test_drive — also rarely dispatched
+        #
+        # The strategy is NOT broken — its classifier (classify_opening_type in
+        # core/session_levels.py) and sub-evaluator gates are well-designed.
+        # They are intentionally selective for high-probability setups.
+        # Un-retiring lets data accumulate in the per-sub `[EVAL] opening_session:`
+        # log lines so the operator can see the classification distribution
+        # over time (Mon-Fri RTH) and decide which sub to lift to a focused
+        # top-level strategy.
+        #
+        # Standing follow-up: open_drive is the "fires at open, runs to pivot"
+        # behavior. If after 4 weeks the classifier never returns OPEN_DRIVE,
+        # relax _DRIVE_DISPLACEMENT_POINTS (currently 15pt) — but only after
+        # observing the actual displacement distribution from the logs.
+        #
         # Opening-window family: 4 opening-type branches + Premarket Breakout
-        # + 15-min ORB.
-        "enabled": False,
-        "stage": "retired",
+        # + 15-min ORB-in-router.
+        "enabled": True,
+        "stage": "lab",
         "validated": False,
-        "retired": True,
-        "retired_at": "2026-05-13",
-        "retired_reason": (
-            "Only 4 trades in months of runtime / 25% WR / -$59.58 net. "
-            "Nested 6-sub-strategy router fires too rarely. Lift any "
-            "individual sub (e.g. open_drive) to its own top-level "
-            "strategy with a focused gate instead."
-        ),
 
         # Universal guards
         "max_trades_per_day": 2,

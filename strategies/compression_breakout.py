@@ -133,6 +133,32 @@ class CompressionBreakout(BaseStrategy):
 
         # Update squeeze state
         all_compressed = in_ttm_squeeze and atr_compressed and volume_dried and range_compressed
+
+        # 2026-05-15 instrumentation: log which conditions are failing so
+        # the operator can see whether the bottleneck is TTM/ATR/Volume/Range.
+        # Without this, the strategy silently said "squeeze_not_held_min_bars"
+        # 5,476 times in 24h with no visibility into the actual blocker.
+        if not all_compressed:
+            fail_flags = []
+            if not in_ttm_squeeze:
+                fail_flags.append(f"ttm(bb={bb_width:.2f}>=kc={kc_width:.2f})")
+            if not atr_compressed:
+                fail_flags.append(
+                    f"atr({current_atr:.2f}/{avg_atr:.2f}={current_atr/max(avg_atr,1e-9):.2f}"
+                    f">{atr_compression_ratio})"
+                )
+            if not volume_dried:
+                _vol_ratio = recent_avg_vol / max(long_avg_vol, 1e-9)
+                fail_flags.append(f"vol({_vol_ratio:.2f}>=0.75)")
+            if not range_compressed:
+                fail_flags.append(
+                    f"range({range_size:.2f}>={current_atr*range_atr_ratio:.2f})"
+                )
+            # Log at DEBUG so it doesn't spam INFO but is grep-able
+            logger.debug(
+                f"[EVAL] {self.name}: NOT_COMPRESSED {' '.join(fail_flags)}"
+            )
+
         if all_compressed:
             self._state.consecutive_squeeze_bars += 1
             self._state.last_squeeze_high = range_high
@@ -148,9 +174,13 @@ class CompressionBreakout(BaseStrategy):
                 pass
             else:
                 # Reset
+                _prev_count = self._state.consecutive_squeeze_bars
                 self._state.consecutive_squeeze_bars = 0
                 self._state.in_squeeze = False
-                logger.debug(f"[EVAL] {self.name}: NO_SIGNAL squeeze_not_held_min_bars")
+                logger.debug(
+                    f"[EVAL] {self.name}: NO_SIGNAL squeeze_not_held_min_bars "
+                    f"(had {_prev_count}/{min_squeeze_bars} consecutive)"
+                )
                 return None
 
         # ── STAGE 2: BREAKOUT DETECTION (4 conditions, ALL must be true) ──
