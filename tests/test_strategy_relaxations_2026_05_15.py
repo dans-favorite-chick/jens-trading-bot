@@ -205,6 +205,36 @@ def test_ib_breakout_width_cap_relaxed_to_4x_atr():
     )
 
 
+# ── day_classifier VOLATILE suppression removed ──────────────────────
+
+def test_volatile_day_no_longer_suppresses_breakout_strategies():
+    """2026-05-15 fix: removed `ib_breakout` + `compression_breakout`
+    from the VOLATILE day suppression list. The original suppression
+    rationale ("breakout strategies fail in chop") conflated VOLATILE
+    (high ATR) with CHOP (range-bound). Volatile-trending days are
+    exactly when breakouts work. The 50% size multiplier on VOLATILE
+    days already caps risk; gathering trade data tells us if the
+    chop-vs-trend sub-mode shifts the expected value."""
+    from core.day_classifier import DAY_PARAMS, VOLATILE
+    suppressed = DAY_PARAMS[VOLATILE]["suppressed_strategies"]
+    assert "ib_breakout" not in suppressed, (
+        "ib_breakout must NOT be auto-suppressed on VOLATILE days. "
+        "Pre-fix, every VOLATILE day silently blocked it at the "
+        "bot-level gate before strategy.evaluate() even ran."
+    )
+    assert "compression_breakout" not in suppressed, (
+        "compression_breakout must NOT be auto-suppressed on VOLATILE "
+        "days. Same rationale — let the strategy fire with the 50% "
+        "size multiplier already in place."
+    )
+    # Size multiplier still capped — risk management unchanged
+    assert DAY_PARAMS[VOLATILE]["size_multiplier"] == 0.5, (
+        "The 50% size multiplier on VOLATILE days is the risk cap that "
+        "lets us safely remove the breakout-strategy suppression. "
+        "Don't raise this without re-examining the suppression list."
+    )
+
+
 def test_ib_breakout_source_uses_session_anchor():
     src = (ROOT / "strategies" / "ib_breakout.py").read_text(encoding="utf-8")
     assert "session_open_ts" in src, (

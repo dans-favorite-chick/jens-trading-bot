@@ -82,15 +82,28 @@ DAY_PARAMS = {
         "description": "Contested/range — fade extremes, quick exits, no runners",
     },
     VOLATILE: {
-        # High ATR, choppy, dangerous — survivability mode
+        # High ATR — can be trending-volatile OR choppy-volatile. The
+        # day_classifier doesn't distinguish, so survivability mode
+        # applies (smaller size, faster exits, wider spacing).
         "trade_spacing_min":  20,     # Very selective entries only
         "default_target_rr":  1.5,   # Quick exits — don't get caught in whips
         "scale_out_enabled":  False,
         "trend_rider_enabled": False,
         "size_multiplier":    0.5,    # Half size — capital preservation
-        "suppressed_strategies": ["ib_breakout", "compression_breakout"],
-                                      # Breakout strategies fail in chop
-        "description": "Volatile/choppy — 50% size, selective only, survive",
+        # 2026-05-15: REMOVED ["ib_breakout", "compression_breakout"]
+        # from suppression. The original comment was "Breakout strategies
+        # fail in chop" — but VOLATILE ≠ chop. Volatile-trending days
+        # are exactly when breakouts work; volatile-chop days are when
+        # they fail. The classifier can't distinguish those sub-modes,
+        # so we let the strategies fire with the 50% size already in
+        # place and let trade data tell us which sub-mode dominates.
+        # Pre-fix, every VOLATILE day silently suppressed ib_breakout +
+        # compression_breakout at the bot level — even after their
+        # internal gates were correct. This was the user-visible
+        # "they never fire" failure mode (compounded with the strategy-
+        # internal anchor / cap bugs already fixed today).
+        "suppressed_strategies": [],
+        "description": "Volatile — 50% size, selective only; all strategies allowed",
     },
     UNKNOWN: {
         # Default until classified — conservative RANGE-like behavior
