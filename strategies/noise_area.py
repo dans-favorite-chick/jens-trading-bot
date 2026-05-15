@@ -320,6 +320,23 @@ class NoiseAreaMomentum(BaseStrategy):
         """
         Dynamic exit logic — called every bar for active noise_area positions.
         Exits when price returns inside the noise cone OR crosses VWAP.
+
+        2026-05-15 fix — TWO bug-class fixes (same pattern as the BE-stop
+        #18 fix from 2026-05-13):
+
+        1. BAR-CLOSE confirmation, not tick price. The original code
+           compared `market["price"]` (latest tick) against UB/LB/VWAP.
+           Any noise tick across the level fired the exit, even when the
+           bar would have closed back on the right side. Today: 3 of 4
+           noise_area trades exited via signal_flip within ~2 minutes
+           of entry, turning normal price wobble into realized losses.
+
+        2. MINIMUM HOLD WINDOW (default 5 min). Strategy-paper spec
+           (Zarattini 2024) gives the trade room to breathe past entry-
+           tick noise. Configurable via
+           `min_hold_seconds_before_signal_flip`.
+
+        EoD flat is unaffected — fires anytime regardless of min hold.
         """
         if not bars_1m:
             return (False, "")
@@ -329,7 +346,7 @@ class NoiseAreaMomentum(BaseStrategy):
         except (OSError, ValueError, TypeError):
             return (False, "")
 
-        # 1. EoD flat
+        # 1. EoD flat — always fires regardless of min-hold or bar close
         eod_time_et = self.config.get(
             "prod_eod_flat_time_et" if self.is_prod_bot else "eod_flat_time_et",
             "10:55" if self.is_prod_bot else "16:54",   # B84: lab/sim = 15:54 CT
@@ -337,26 +354,46 @@ class NoiseAreaMomentum(BaseStrategy):
         if bar_dt_et.strftime("%H:%M") >= eod_time_et:
             return (True, "eod_flat")
 
-        # 2. Signal flip — price back inside cone or wrong side of VWAP
-        price = market.get("price", 0) or 0
+        # 2. Minimum hold window — protect against entry-tick noise.
+        min_hold_s = float(self.config.get(
+            "min_hold_seconds_before_signal_flip", 300,  # 5 min default
+        ))
+        try:
+            entry_time = float(getattr(position, "entry_time", 0) or 0)
+            now_ts = float(last_bar.end_time)
+            held_s = now_ts - entry_time
+        except (TypeError, ValueError, AttributeError):
+            held_s = min_hold_s + 1  # If we can't compute, don't block
+        if held_s < min_hold_s:
+            # Still in the protective window. The structural stop
+            # (opposite cone boundary) is still active via OCO — this
+            # only suppresses the managed-exit signal_flip triggers.
+            return (False, "")
+
+        # 3. Signal flip — bar-close confirmed, not tick-touch.
+        # Pull the cone captured at entry (base_bot stashes signal.metadata
+        # into position.metadata)
         vwap = market.get("vwap", 0) or 0
         meta = getattr(position, "metadata", None) or {}
-        # Pull the cone captured at entry (base_bot stashes signal.metadata into position.metadata)
         ub_entry = meta.get("UB")
         lb_entry = meta.get("LB")
-        if price <= 0:
+        try:
+            bar_close = float(getattr(last_bar, "close", 0) or 0)
+        except (TypeError, ValueError):
+            bar_close = 0.0
+        if bar_close <= 0:
             return (False, "")
 
         direction = getattr(position, "direction", "")
         if direction == "LONG":
-            if ub_entry is not None and price < ub_entry:
+            if ub_entry is not None and bar_close < ub_entry:
                 return (True, "signal_flip_returned_below_UB")
-            if vwap > 0 and price < vwap:
+            if vwap > 0 and bar_close < vwap:
                 return (True, "signal_flip_below_vwap")
         elif direction == "SHORT":
-            if lb_entry is not None and price > lb_entry:
+            if lb_entry is not None and bar_close > lb_entry:
                 return (True, "signal_flip_returned_above_LB")
-            if vwap > 0 and price > vwap:
+            if vwap > 0 and bar_close > vwap:
                 return (True, "signal_flip_above_vwap")
 
         return (False, "")

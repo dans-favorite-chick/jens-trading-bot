@@ -327,6 +327,15 @@ STRATEGIES = {
         "min_noise_history_days": 10,
         "eod_flat_time_et": "16:54",       # B84: 15:54 CT = 16:54 ET (matches bot-level flatten)
         "prod_eod_flat_time_et": "10:55",  # Prod 90-min window
+        # 2026-05-15 managed-exit fix: signal_flip triggers now require
+        # (a) bar-close confirmation (not tick price) AND (b) min-hold
+        # window from entry. Today's 4 noise_area trades all exited via
+        # signal_flip within ~2 min of entry, turning normal price wobble
+        # into 3 losses (and 1 winner that escaped via ema_dom_exit).
+        # 5 min protective window per Zarattini paper's spirit (their
+        # spec uses "confirmed return to cone" — interpreted as a bar
+        # close, not a single tick).
+        "min_hold_seconds_before_signal_flip": 300,
     },
 
     "compression_breakout": {
