@@ -341,6 +341,13 @@ STRATEGIES = {
         # Compression-condition tunings (MNQ-calibrated 2026-05-15)
         "atr_compression_ratio": 0.65,  # was 0.5 — MNQ rarely drops to half of avg ATR
         "range_atr_ratio": 1.8,         # was 1.5 — broader range tolerance
+        # 2026-05-15 second-pass: require N of the 4 stage-1 conditions
+        # (TTM, ATR, Volume, Range) rather than ALL 4. Carver's
+        # "Systematic Trading" principle: scaled forecasts beat binary
+        # AND gates. Conditions 1/2/4 measure overlapping volatility
+        # signal; the 4-way AND was over-counted. 3-of-4 = "the market
+        # is genuinely coiling on at least 3 axes."
+        "min_compression_conditions": 3,
         # Volume threshold lives inline as 0.75 in code; that's a separate fix
         # to plumb through. For now the relaxed ATR/range pair widens the
         # firing window enough to start collecting MNQ-specific data.

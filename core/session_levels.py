@@ -20,10 +20,21 @@ from typing import Optional, Tuple
 _TICK = 0.25
 
 # Opening-type classifier thresholds (MNQ points).
-_DRIVE_DISPLACEMENT_POINTS = 15.0          # 60 ticks
+# 2026-05-15 deep-dive: relaxed `close_at_extreme` from a fixed 8-tick
+# (2pt) proximity to a FRACTIONAL "top/bottom third of range" check.
+# Steidlmayer's original Market Profile work defines Open Drive as "close
+# in the top/bottom third of the range," not 2% of it. On the typical MNQ
+# 5-min open with ~90pt range, 8 ticks meant ~2% of range — only 1 of 9
+# observed sessions (Apr 30) cleared it. Volume mult also dropped 1.4→1.2
+# to match the entry-trigger threshold used by the open_drive sub-evaluator
+# (which already accepts 1.2x avg volume to fire).
+_DRIVE_DISPLACEMENT_POINTS = 15.0          # 60 ticks. 78% of MNQ sessions clear this.
 _DRIVE_PULLBACK_MAX_FRAC = 0.30            # 30% of displacement
-_DRIVE_VOLUME_MULT = 1.4                   # 1.4x avg 5-min volume
-_DRIVE_CLOSE_PROXIMITY_TICKS = 8
+_DRIVE_VOLUME_MULT = 1.2                   # was 1.4 — match entry trigger threshold
+# Close-at-extreme: relaxed from fixed 8-tick to "top/bottom third of
+# the 5-min range." Falls back to fixed 8-tick if range is degenerate.
+_DRIVE_CLOSE_PROXIMITY_RANGE_FRAC = 0.33   # Steidlmayer original: close in top/bottom third
+_DRIVE_CLOSE_PROXIMITY_TICKS = 8           # Fallback floor only
 _DRIVE_CLOSE_PROXIMITY_POINTS = _DRIVE_CLOSE_PROXIMITY_TICKS * _TICK
 
 # News blackout window on either side of a high-impact release.
@@ -81,12 +92,22 @@ def classify_opening_type(snapshot: dict) -> str:
     # --- 1. OPEN_DRIVE ------------------------------------------------
     if displacement > _DRIVE_DISPLACEMENT_POINTS:
         max_pullback = _DRIVE_PULLBACK_MAX_FRAC * displacement
+        # 2026-05-15: close_at_extreme is now "top/bottom third of the
+        # 5-min range" (Steidlmayer) rather than within 8 ticks of the
+        # extreme. The fixed 8-tick proximity rejected 8 of 9 MNQ
+        # sessions where displacement was clearly directional.
+        rng_5m = h5 - l5
+        # Use fractional bound; fall back to fixed-tick floor on tiny
+        # ranges (degenerate cases) so we never accept a "close at
+        # extreme" when the bar barely moved.
+        frac_bound = rng_5m * _DRIVE_CLOSE_PROXIMITY_RANGE_FRAC
+        proximity_bound = max(frac_bound, _DRIVE_CLOSE_PROXIMITY_POINTS)
         if c5 > rth_open:
             same_direction = l5 >= (rth_open - max_pullback)
-            close_at_extreme = (h5 - c5) <= _DRIVE_CLOSE_PROXIMITY_POINTS
+            close_at_extreme = (h5 - c5) <= proximity_bound
         else:
             same_direction = h5 <= (rth_open + max_pullback)
-            close_at_extreme = (c5 - l5) <= _DRIVE_CLOSE_PROXIMITY_POINTS
+            close_at_extreme = (c5 - l5) <= proximity_bound
 
         volume_ok = avg_v5 > 0 and v5 > _DRIVE_VOLUME_MULT * avg_v5
 

@@ -131,8 +131,20 @@ class CompressionBreakout(BaseStrategy):
         range_size = range_high - range_low
         range_compressed = range_size < (current_atr * range_atr_ratio)
 
-        # Update squeeze state
-        all_compressed = in_ttm_squeeze and atr_compressed and volume_dried and range_compressed
+        # 2026-05-15 second-pass: switched from "all 4 conditions True" to
+        # "N of 4 conditions True" (configurable, default 3). The original
+        # AND-of-4 design assumed equity-ETF behavior; on MNQ futures the
+        # 4 conditions rarely align simultaneously because they capture
+        # OVERLAPPING signal (ATR-low correlates with range-tight by
+        # construction). Requiring 3/4 lets the strategy fire when 3 of
+        # the 4 axes agree the market is coiling — Carver's "Systematic
+        # Trading" principle: scaled forecasts beat binary AND gates.
+        conditions_pass = [
+            in_ttm_squeeze, atr_compressed, volume_dried, range_compressed,
+        ]
+        compressed_count = sum(1 for c in conditions_pass if c)
+        min_conditions = int(self.config.get("min_compression_conditions", 3))
+        all_compressed = compressed_count >= min_conditions
 
         # 2026-05-15 instrumentation: log which conditions are failing so
         # the operator can see whether the bottleneck is TTM/ATR/Volume/Range.
@@ -156,7 +168,9 @@ class CompressionBreakout(BaseStrategy):
                 )
             # Log at DEBUG so it doesn't spam INFO but is grep-able
             logger.debug(
-                f"[EVAL] {self.name}: NOT_COMPRESSED {' '.join(fail_flags)}"
+                f"[EVAL] {self.name}: NOT_COMPRESSED "
+                f"{compressed_count}/4 conditions (need {min_conditions}) "
+                f"{' '.join(fail_flags)}"
             )
 
         if all_compressed:
