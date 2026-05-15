@@ -67,6 +67,10 @@ EXIT_PRIORITY: dict[str, int] = {
     "flow_reversal":          5,   # Generic alias / explain-friendly name
     "cvd_flip":               5,   # Per-bar delta flipped N consec bars
     "cvd_divergence":         5,   # Swing-pivot divergence (bear/bull)
+    # 2026-05-15: Big-Move Detector exhaustion exit. Same rank as the
+    # cvd family — composite signal (CVD divergence + volume exhaustion
+    # + DOM flip + TF vote shift). >=70 score = 3+ signals aligned.
+    "big_move_exhaustion":    5,
     "trend_stall":            6,
     "ema_dom_exit":           7,
     "target_hit":             8,

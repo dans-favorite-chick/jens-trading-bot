@@ -802,11 +802,19 @@ class BaseBot:
         from core.cvd_trend_health import CVDTrendHealth
         from core.cvd_bar_flip import BarDeltaFlipDetector
         from core.cvd_swing_divergence import SwingDivergenceDetector
+        from core.big_move_detector import BigMoveDetector
         self.cvd_health = CVDTrendHealth(lookback_bars=6, veto_threshold=-0.3)
         self.cvd_flip = BarDeltaFlipDetector(lookback=5)
         self.cvd_div = SwingDivergenceDetector(
             swing_strength=3, min_bars_between=10, max_bars_between=40,
         )
+        # 2026-05-15: Big-Move Detector — predict pre-move setups + peak
+        # exhaustion across all strategies. Adds two assessment scores
+        # (0-100) to the eval loop:
+        #   pre_move_score: when >= 60, a big squeeze is likely imminent
+        #   exhaustion_score (per active position): when >= 70, the
+        #     current move appears to be peaking — trigger exit
+        self.big_move = BigMoveDetector()
         self._price_bar_highs: list[float] = []   # Recent bar highs (for stall detector)
         self._price_bar_lows:  list[float] = []   # Recent bar lows
         self._pending_exit_reason = None    # Market close auto-exit
@@ -2065,6 +2073,39 @@ class BaseBot:
                                             trade_id=pos.trade_id,
                                         )
 
+                            # 2026-05-15: Big-Move exhaustion exit. Scores
+                            # peak-reversal probability for THIS position's
+                            # direction using volume exhaustion + CVD
+                            # divergence + DOM flip + TF vote shift. When
+                            # score >= 70 (3 of 4 signals aligned) AND past
+                            # grace, exit. This is the "catch the peak"
+                            # behavior the operator wants — exit BEFORE the
+                            # round-trip back to entry.
+                            if not _in_grace:
+                                try:
+                                    _exh = self.big_move.detect_exhaustion(
+                                        list(self.aggregator.bars_1m.completed),
+                                        market, pos.direction,
+                                    )
+                                    _exh_threshold = int(
+                                        _strat_cfg.get("big_move_exhaustion_threshold", 70)
+                                    )
+                                    if _exh.score >= _exh_threshold:
+                                        logger.info(
+                                            f"[BIG_MOVE_EXIT:{pos.trade_id}] "
+                                            f"exhaustion score={_exh.score} "
+                                            f"({_exh.reason})"
+                                        )
+                                        await self._exit_trade(
+                                            ws, price, "big_move_exhaustion",
+                                            trade_id=pos.trade_id,
+                                        )
+                                except Exception as _exh_err:
+                                    logger.debug(
+                                        f"[BIG_MOVE_EXIT] check err (non-blocking): "
+                                        f"{_exh_err!r}"
+                                    )
+
                         elif SCALE_OUT_ENABLED and not pos.scaled_out and pos.original_contracts >= 2:
                             # Original multi-contract scale-out path.
                             # Per-signal override: ORB et al. can supply
@@ -2774,6 +2815,30 @@ class BaseBot:
             logger.debug(f"[CVD] health assess failed: {_cvd_assess_err!r}")
             market["cvd_health"] = {"veto": False, "agreement": 0.0, "reason": "assess error"}
             market["cvd_health_short"] = {"veto": False, "agreement": 0.0, "reason": "assess error"}
+
+        # 2026-05-15: Big-Move Detector — pre-move score logged once per
+        # eval cycle. Strategies that want to gate entry on it can read
+        # `market["big_move_pre"]` (score 0-100 + likely direction).
+        # Exhaustion is computed per-position in the position loop.
+        try:
+            bars_1m_for_bm = list(self.aggregator.bars_1m.completed)
+            pre_move = self.big_move.detect_pre_move(
+                bars_1m_for_bm, market, atr_5m=market.get("atr_5m", 0),
+            )
+            market["big_move_pre"] = {
+                "score": pre_move.score,
+                "likely_direction": pre_move.likely_direction,
+                "flags": pre_move.flags,
+                "reason": pre_move.reason,
+            }
+            if pre_move.score >= 50:
+                logger.info(
+                    f"[BIG_MOVE_PRE] score={pre_move.score} "
+                    f"dir={pre_move.likely_direction} flags={pre_move.flags}"
+                )
+        except Exception as _bm_err:
+            logger.debug(f"[BIG_MOVE_PRE] err (non-blocking): {_bm_err!r}")
+            market["big_move_pre"] = {"score": 0, "likely_direction": "UNKNOWN", "flags": [], "reason": "detector error"}
 
         # B14 Phase 4: enrich with MenthorQ gamma state (regime, nearest wall,
         # pin-zone flag, raw GammaLevels). Strategies can read these for
