@@ -88,46 +88,99 @@ class IBBreakout(BaseStrategy):
             logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
             return None
 
-        # Use last 1m bar timestamp to determine date (ET-anchored)
+        # 2026-05-15 fix — anchor IB to 9:30 ET cash open (= 8:30 CT)
+        # instead of ET-midnight. SAME bug class as the ORB session-anchor
+        # bug (commit 751172f / f96135b). Pre-fix the bot built an
+        # "Initial Balance" from whatever 10 bars were in the deque at
+        # ET-midnight — arbitrary overnight chop. The IB then almost
+        # always exceeded `max_ib_width_atr_mult` and 3,472 of 6,237
+        # sim evals were blocked at `gate:ib_too_wide`.
         last_bar = bars_1m[-1]
         try:
             bar_dt = datetime.fromtimestamp(last_bar.end_time, tz=_ET)
         except (OSError, ValueError, TypeError):
             bar_dt = datetime.now(tz=_ET)
-        today = bar_dt.strftime("%Y-%m-%d")
+
+        # Session open: configurable. Default 09:30 ET (= 8:30 CT) — the
+        # US cash open. ib_breakout's comment already says "OPEN_MOMENTUM
+        # starts at 8:30 CST" so the intent was always cash open.
+        session_open_str = self.config.get("session_open_et", "09:30")
+        try:
+            _h, _m = session_open_str.split(":")
+            _session_h, _session_m = int(_h), int(_m)
+        except Exception:
+            _session_h, _session_m = 9, 30
+        today_open_candidate = bar_dt.replace(
+            hour=_session_h, minute=_session_m, second=0, microsecond=0,
+        )
+        if bar_dt >= today_open_candidate:
+            session_open_et = today_open_candidate
+        else:
+            from datetime import timedelta
+            session_open_et = today_open_candidate - timedelta(days=1)
+        session_open_ts = session_open_et.timestamp()
+        today = session_open_et.strftime("%Y-%m-%d")
 
         if self._ib_date != today:
             self._reset_daily(today)
 
-        # ── Step 1: Build the Initial Balance (first 30 min) ─────────
-        # IB = high and low of the first N 1-minute bars after session open
-        # OPEN_MOMENTUM starts at 8:30 CST, IB covers 8:30-9:00
+        # Pre-session guard: don't build IB before the configured open.
+        try:
+            last_bar_ts = float(last_bar.end_time)
+        except (AttributeError, TypeError, ValueError):
+            last_bar_ts = 0.0
+        if last_bar_ts < session_open_ts:
+            logger.debug(
+                f"[EVAL] {self.name}: SKIP pre_session_open "
+                f"(last bar {bar_dt.strftime('%H:%M ET')} < open "
+                f"{session_open_et.strftime('%H:%M ET')})"
+            )
+            return None
+
+        # ── Step 1: Build the Initial Balance (first N min of session) ──
+        # IB = high and low of the first N 1-minute bars at-or-after the
+        # configured session_open_et. Pre-2026-05-15 the bot accumulated
+        # any bar appearing post-reset; with the ET-midnight reset that
+        # meant the IB was built from arbitrary overnight chop. Now bars
+        # are filtered to [session_open_ts, session_open_ts + ib_minutes).
         if not self._ib_set:
-            # Count completed 1m bars in this session
-            # We track bars we've seen during IB building
-            ib_bar_count = ib_minutes  # 30 bars for 30 minutes of 1m bars
+            ib_bar_count = ib_minutes  # N bars for N minutes of 1m bars
+            ib_window_end_ts = session_open_ts + ib_minutes * 60
 
-            # Accumulate 1m bars into our IB tracking list
-            # Only add bars we haven't seen yet
-            seen_count = len(self._ib_bars_1m)
-            if len(bars_1m) > seen_count:
-                for bar in bars_1m[seen_count:]:
-                    self._ib_bars_1m.append(bar)
+            in_session_bars = [
+                b for b in bars_1m
+                if session_open_ts
+                   <= float(getattr(b, "end_time", 0) or 0)
+                   < ib_window_end_ts
+            ]
+            # Replace whatever was accumulating — idempotent.
+            self._ib_bars_1m = list(in_session_bars[:ib_bar_count])
 
-            # Update running IB high/low from all collected bars
+            # Recompute IB high/low from the filtered bars only.
+            self._ib_high = None
+            self._ib_low = None
             for bar in self._ib_bars_1m:
                 if self._ib_high is None or bar.high > self._ib_high:
                     self._ib_high = bar.high
                 if self._ib_low is None or bar.low < self._ib_low:
                     self._ib_low = bar.low
 
-            # IB is set once we have enough bars
             if len(self._ib_bars_1m) >= ib_bar_count:
                 self._ib_set = True
-
-            # Not set yet — still building
-            logger.debug(f"[EVAL] {self.name}: SKIP warmup_incomplete")
-            return None
+                logger.info(
+                    f"[EVAL] {self.name}: IB_SET {today} "
+                    f"[{self._ib_low:.2f}, {self._ib_high:.2f}] "
+                    f"size={self._ib_high-self._ib_low:.2f}pt "
+                    f"after {len(self._ib_bars_1m)} bars from "
+                    f"{session_open_et.strftime('%H:%M ET')}"
+                )
+            else:
+                logger.debug(
+                    f"[EVAL] {self.name}: SKIP warmup_incomplete "
+                    f"({len(self._ib_bars_1m)}/{ib_bar_count} bars since "
+                    f"{session_open_et.strftime('%H:%M ET')})"
+                )
+                return None
 
         # ── IB is set — validate width ──────────────────────────────
         ib_width = self._ib_high - self._ib_low

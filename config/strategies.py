@@ -248,6 +248,14 @@ STRATEGIES = {
         "max_hold_min": 20,
     },
     "ib_breakout": {
+        # 2026-05-15 fix: same ET-midnight anchor bug as ORB had been
+        # producing 3,472 `gate:ib_too_wide` rejections in 50MB of
+        # sim_stdout (the dominant failure mode). Fix: session_open_et
+        # config + bar-window filter (mirrors ORB session-anchor fix).
+        # max_ib_width_atr_mult relaxed 1.5 → 4.0 to match ORB's working
+        # cap (MNQ 10-min IB at the open routinely runs 50-80pt, which
+        # is ~2-3× the 5m ATR — the old 1.5× cap was tuned for SPY).
+        "session_open_et": "09:30",
         "enabled": True,
         # 2026-05-13 (#22): DEMOTED from validated=True to False. Wilson
         # CI guardrail caught it: only 8 trades in the live record, which
@@ -262,7 +270,7 @@ STRATEGIES = {
         # the strategy live across mid-day restarts and after market gaps.
         "ib_minutes": 10,
         "target_extension": 1.5,
-        "max_ib_width_atr_mult": 1.5,
+        "max_ib_width_atr_mult": 4.0,  # 2026-05-15: was 1.5 — too tight for MNQ
         "stop_at_ib_midpoint": False,  # False = stop at full IB opposite, True = tighter stop at midpoint
         # NQ research ceiling (Fix 8, 2026-04-20): structural stop must fit.
         # If (price - ib_low) or (ib_high - price) exceeds this in ticks → SKIP signal.

@@ -183,6 +183,43 @@ def test_open_drive_short_direction_with_relaxed_bound():
     )
 
 
+# ── ib_breakout: session-anchor + width cap relaxation ────────────────
+
+def test_ib_breakout_config_has_session_open():
+    from config.strategies import STRATEGIES
+    cfg = STRATEGIES["ib_breakout"]
+    assert cfg.get("session_open_et") == "09:30", (
+        "ib_breakout must anchor to 09:30 ET cash open (mirrors ORB fix). "
+        "Pre-fix the ET-midnight anchor produced 3,472 ib_too_wide "
+        "rejections from overnight-bar IBs."
+    )
+
+
+def test_ib_breakout_width_cap_relaxed_to_4x_atr():
+    from config.strategies import STRATEGIES
+    cfg = STRATEGIES["ib_breakout"]
+    assert cfg.get("max_ib_width_atr_mult") == 4.0, (
+        "max_ib_width_atr_mult was 1.5 (tuned for SPY). MNQ 10-min IB "
+        "typically runs 50-80pt = 2-3x 5m ATR. 4.0x matches ORB's "
+        "working cap."
+    )
+
+
+def test_ib_breakout_source_uses_session_anchor():
+    src = (ROOT / "strategies" / "ib_breakout.py").read_text(encoding="utf-8")
+    assert "session_open_ts" in src, (
+        "ib_breakout must compute session_open_ts and filter bars to "
+        "the session window. See ORB session-anchor fix."
+    )
+    assert "session_open_et" in src
+    # Must NOT use the old `today = bar_dt.strftime` pattern as the
+    # session-day key (that was the ET-midnight anchor bug).
+    assert "today = session_open_et.strftime" in src, (
+        "today must derive from session_open_et, not bar_dt directly — "
+        "regression of the 2026-05-15 ib_breakout anchor fix."
+    )
+
+
 def test_open_drive_displacement_threshold_unchanged():
     """We did NOT relax the 15pt displacement threshold — data shows 78%
     of MNQ sessions clear it. Verify it still rejects sub-threshold."""
