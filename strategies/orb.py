@@ -264,12 +264,19 @@ class OpeningRangeBreakout(BaseStrategy):
 
         # ── Step 1: Build the Opening Range (first 15 1m bars AFTER open) ──
         if not self._or_set:
-            # Only consider bars whose end_time is at-or-after the
-            # session open. The aggregator's deque carries overnight
-            # bars that must NOT contaminate the OR.
+            # The OR is built from bars STRICTLY inside the window
+            # [session_open_ts, session_open_ts + or_duration_min).
+            # Pre-fix: only the lower bound was enforced. With the
+            # aggregator deque carrying 200 bars (~3 hours), filtering
+            # "after session_open" still let the first-15-in-deque
+            # (overnight chop) fill the OR after a restart. Adding an
+            # upper bound restricts the OR to its actual time window.
+            or_window_end_ts = session_open_ts + or_duration * 60
             in_session_bars = [
                 b for b in bars_1m
-                if float(getattr(b, "end_time", 0) or 0) >= session_open_ts
+                if session_open_ts
+                   <= float(getattr(b, "end_time", 0) or 0)
+                   < or_window_end_ts
             ]
             # Replace whatever was accumulating with the filtered set.
             # This is idempotent — re-running won't double-count bars.

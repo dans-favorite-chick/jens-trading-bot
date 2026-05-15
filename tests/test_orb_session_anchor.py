@@ -136,6 +136,64 @@ def test_pre_session_bars_excluded_from_or():
     assert or_size == 20.0, f"OR size {or_size}pt; pre-fix would have been 700pt"
 
 
+def test_or_filter_has_upper_bound_or_duration():
+    """Critical: the OR must come from bars in [open, open+or_duration),
+    NOT just `>= open`. Pre-fix, after the daily reset at session open,
+    the deque held 200 overnight bars all >= session_open_ts; the
+    `[:15]` slice grabbed the OLDEST 15 of those (= 3-hour-old overnight
+    chop) and called it the OR. The upper-bound fix excludes them."""
+    orb = _make_orb()
+    open_dt = datetime(2026, 5, 15, 9, 30, tzinfo=_ET)
+    # Mix: 200 overnight bars covering 06:10-09:29 ET (all >= yesterday
+    # 09:30 ET in epoch terms BUT outside today's OR window), then 15
+    # session bars 09:30-09:44 ET (tight 20pt range).
+    overnight = [
+        _bar(open_dt - timedelta(minutes=200 - i),  # 06:10 ET onward
+             high=29900, low=29200, close=29500)
+        for i in range(200)
+    ]
+    session = [
+        _bar(open_dt + timedelta(minutes=i),
+             high=29550, low=29530, close=29540)
+        for i in range(15)
+    ]
+    market = {"price": 29540.0, "atr_5m": 5.0}
+    orb.evaluate(market, bars_5m=[], bars_1m=overnight + session,
+                 session_info={})
+    assert orb._or_set is True
+    # The OR must be 20pt (from session bars), NOT 700pt (overnight)
+    assert orb._or_high == 29550.0, (
+        f"upper-bound filter failed: or_high={orb._or_high} "
+        f"(should be 29550 from session bars, not 29900 from overnight)"
+    )
+    assert orb._or_low == 29530.0
+    assert (orb._or_high - orb._or_low) == 20.0
+
+
+def test_carryover_with_no_window_bars_skips_cleanly():
+    """When the bot starts up at 03:00 ET (mid-overnight), the deque
+    has bars from this morning — all OUTSIDE yesterday's OR window
+    (09:30-09:45 ET yesterday). The strategy must not fabricate an
+    OR from random overnight bars; it should SKIP cleanly."""
+    orb = _make_orb()
+    # Now is 03:00 ET 2026-05-15. Session-day = yesterday's 09:30 ET.
+    overnight_now = datetime(2026, 5, 15, 3, 0, tzinfo=_ET)
+    # 30 bars of this morning's overnight chop (00:30-03:00 ET)
+    bars_1m = [
+        _bar(overnight_now - timedelta(minutes=30 - i),
+             high=29900, low=29200, close=29500)
+        for i in range(30)
+    ]
+    market = {"price": 29500.0, "atr_5m": 5.0}
+    result = orb.evaluate(market, bars_5m=[], bars_1m=bars_1m,
+                          session_info={})
+    assert result is None, "must not signal during overnight"
+    assert orb._or_set is False, (
+        "must not fabricate an OR — yesterday's window already passed, "
+        "today's window hasn't opened. Wait for the real 09:30 ET bar."
+    )
+
+
 def test_overnight_evaluation_does_not_emit_signal():
     """Pre-fix: bars at 03:00 ET could form an OR and fire signals
     during dead-of-night Asian session. With the session-anchor in
