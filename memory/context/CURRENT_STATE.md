@@ -10,23 +10,43 @@ _Last updated: **2026-05-14 14:50 CT** (after prod_bot restart on new code + das
 
 ---
 
-## AT A GLANCE — 2026-05-14 14:50 CT
+## AT A GLANCE — 2026-05-15 07:55 CT (Friday, pre-open)
 
 | Item | State |
 |---|---|
-| Branch | `weekly-evolution/2026-05-10` (NOT pushed to origin — 26 commits ahead) |
-| HEAD | `71fc5af` (dashboard calendar-day boundary fix) |
-| Test suite | **1,919 pass / 4 skip / 0 fail** |
-| Today's P&L | prod **-$106.38** (9 trades) / sim **+$40.94** (8 trades). Three of prod's 5 losses were $-65.32 clamp-from-above stops that #8 would have skipped — they fired because prod was running stale code. Stack now on fresh code. |
-| **Process freshness** | **prod PID 32024 restarted 14:32:54 on latest code**. sim PID 27244 auto-restarted 02:01 by watchdog. dashboard restarted ~14:50 on latest code. ALL processes now running current commits. |
-| Dashboard panels | TODAY card + Daily Stats + trade table all on calendar-day boundary — agree across all 24h (commits `0c24a8e` + `71fc5af`) |
-| Validated-set | **bias_momentum, spring_setup** only (ib_breakout DEMOTED via #22 Wilson-CI guardrail — n=8 was below TENTATIVE) |
-| Retired strategies | **high_precision_only, opening_session, compression_breakout** (#5/#6 — formal markers + tests pin) |
+| Branch | `weekly-evolution/2026-05-10` (pushed) |
+| HEAD | `f96135b` (ORB OR-window upper bound — second pass on session anchor) |
+| Test suite | **1,936 pass / 4 skip / 0 fail** |
+| Today's P&L | (session not yet open — cash open 8:30 CT / 9:30 ET in ~35min) |
+| **Process freshness** | **prod PID 10080 restarted 07:52:35 / sim PID 42544 restarted 07:52:37** — both on commit `f96135b`. Stale ORB state files were cleared at restart so the new code starts clean. |
+| ORB live status | At 07:53:20 CT (pre-open), ORB correctly skipped: `SKIP warmup_incomplete (0/15 bars since 09:30 ET)`. Will build real OR from 8:30-8:44 CT bars. |
+| Dashboard panels | TODAY card + Daily Stats + trade table all on calendar-day boundary (commits `0c24a8e` + `71fc5af`) |
+| Validated-set | **bias_momentum, spring_setup** only |
+| Retired strategies | **high_precision_only, opening_session, compression_breakout** |
 | Stack health | bridge / dashboard / watchdog / watcher_agent / prod / sim — all alive, all on latest code |
-| NT8 + TickStreamer | Live; `imbalance_ratio` field flowing in volumetric_bar messages |
+| NT8 + TickStreamer | Live |
 | Alerting | Self-healing — PhoenixWatcher 5-min auto-respawn pattern installed |
 | Gemini AI | Working on fresh GCP project (new `GOOGLE_API_KEY`) |
 | Live trading | PAUSED — prod stays Sim101 until real account ≥ $2,000 (currently $300) |
+
+### Today's fixes (2026-05-15) — two silent-firing bugs unblocked
+
+**Bug 1: noise_area dropped 11 signals/day at the universal stop-sanity gate**
+- `_sanity_check_entry` capped stop distance at 5-200 ticks for ALL strategies
+- noise_area is managed-exit; its stop is the opposite cone boundary (150-1000t by design)
+- Yesterday: 11 sim noise_area signals all rejected with `stop distance 776t outside 5-200 range`
+- Fix (commit `751172f`): sanity gate accepts `is_managed_exit: bool`. Managed mode = 5-1000t bound. Caller plumbs from `_managed_exit_target` + `signal.exit_trigger` + `uses_managed_exit` class flag.
+
+**Bug 2: ORB anchored its daily reset to ET-midnight instead of 9:30 ET cash open**
+- Strategy spec is Zarattini 9:30 ET — config comment said so, code anchored to ET calendar
+- Yesterday's prod OR: high=29689, low=29295.75, **size=393.25pt** (5× the 80pt cap)
+- 3,923 of 1,086 sim evals rejected as `gate:or_too_wide` (every single one)
+- Fix (commits `751172f` + `f96135b`):
+  - New `session_open_et` config (default "09:30")
+  - `_session_open_today_et()` computes the current ET session-day
+  - OR built from bars STRICTLY inside `[session_open_ts, session_open_ts + or_duration)` — both lower AND upper bound
+  - Verified live at 07:53 CT: ORB emitted clean `SKIP warmup_incomplete (0/15 bars since 09:30 ET)` instead of building a phantom OR
+- opening_session stays retired (different problem — too few signals at all, not a time-anchor bug)
 
 ---
 

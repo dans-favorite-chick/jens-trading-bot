@@ -5,6 +5,32 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+### 2026-05-15 07:30-07:55 CT — noise_area + ORB silent-firing bugs unblocked (commits `751172f` + `f96135b`)
+
+Operator flagged yesterday: of 9 enabled strategies, only 3 actually fired (bias_momentum / vwap_pullback / dom_pullback). Deep-dive found two unrelated bugs that were silently killing two more strategies.
+
+**Bug 1: noise_area dropped 11 sim signals/day at the universal stop-sanity gate.**
+noise_area is a managed-exit strategy — its stop is the opposite noise-cone boundary, marketed as "150-600t structural disaster anchor, not a real risk stop." Today's cone hit 776t (194pt). The bot's universal `_sanity_check_entry` capped stops at 5-200t for ALL strategies, so every signal was rejected at `STOP_SANITY_FAIL`. Fix: gate accepts `is_managed_exit: bool`; managed mode = 5-1000t bound. Caller plumbs from `_managed_exit_target` + `signal.exit_trigger` + the strategy's `uses_managed_exit` class flag.
+
+**Bug 2: ORB built its "Opening Range" from arbitrary overnight bars.**
+The strategy is Zarattini 9:30 ET cash-open ORB. Config comment said "Cutoff at 10:30 ET / 9:30 CST" but the CODE anchored daily reset to the ET calendar boundary (ET midnight). The bot's first eval of the day would build an OR from whatever 15 bars happened to be in the deque — overnight chop. Today's OR: high=29689, low=29295.75, **size=393.25pt**, vs the 80pt cap → guaranteed `gate:or_too_wide` rejection on every breakout (3,923 of 1,086 sim evals).
+
+Fix in two passes:
+1. `751172f`: new `session_open_et` config (default 09:30), `_session_open_today_et()` helper, daily reset anchored to session-day (not ET calendar), bars filtered to `>= session_open_ts`.
+2. `f96135b`: second pass — the lower-bound-only filter still let the deque's oldest 15 bars (= 3-hour-old overnight) fill the OR after a restart. Fix tightened to `[session_open_ts, session_open_ts + or_duration_min)` — both lower AND upper bound. Verified live: post-restart at 07:53 CT, ORB emits clean `SKIP warmup_incomplete (0/15 bars since 09:30 ET)` instead of fabricating a phantom OR.
+
+Both bots restarted on the fix at 07:52:35 / 07:52:37 CT. Stale ORB state files cleared. ORB armed to build a real OR from 8:30-8:44 CT bars (= 9:30-9:44 ET).
+
+**opening_session stays retired** — different problem entirely. Its time-window code uses CT (clean, no anchor bug), but the nested 6-sub-strategy router produces too few signals at all to ever validate (4 trades in months of runtime). Retirement note from yesterday's #5 still holds: "Lift any individual sub (e.g. open_drive) to its own top-level strategy with a focused gate" — separate strategy-design project.
+
+Tests:
+- 7 new managed-exit sanity tests (`test_stop_target_sanity.py`)
+- 12 new ORB session-anchor tests (`test_orb_session_anchor.py`)
+
+Suite: 1,919 → 1,936 pass / 4 skip / 0 fail.
+
+---
+
 ### 2026-05-14 14:30-14:50 CT — prod_bot restart + dashboard boundary fix (commit `71fc5af`)
 
 **Two related fixes shipped after operator noticed prod was -$106 today:**
