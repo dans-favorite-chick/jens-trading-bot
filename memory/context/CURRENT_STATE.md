@@ -15,10 +15,11 @@ _Last updated: **2026-05-14 14:50 CT** (after prod_bot restart on new code + das
 | Item | State |
 |---|---|
 | Branch | `weekly-evolution/2026-05-10` (pushed through `e07b2b8`) |
-| HEAD | `e07b2b8` (ib_breakout session-anchor + width cap relax) |
-| Test suite | **1,949 pass / 4 skip / 0 fail** |
+| HEAD | `84632c1` (VOLATILE day-classifier suppression removed for breakout strategies) |
+| Test suite | **1,950 pass / 4 skip / 0 fail** |
 | Today's P&L | (cash open just started 8:30 CT) |
-| **Process freshness** | Bots restarted 08:33:58 / 08:34:00 CT on `e07b2b8`. Came up 4 min into cash open — will build OR/IB from in-session bars in deque. |
+| **Process freshness** | Bots restarted 08:44:04 / 08:44:06 CT on `84632c1`. Now 14 min into cash open with the VOLATILE-suppression bypass live. |
+| **Known issue (not blocking)** | `footprint_cvd_reversal` is DATA_STALE — volumetric stream from NT8 frozen at yesterday 15:56 CT. Operator-side TickStreamer.cs reload needed (separate from today's fixes). Affects only this 1 strategy; other 9 are fully active. |
 | ORB / ib_breakout status | Both armed to build correct windows: ORB from 09:30-09:44 ET, ib_breakout from 09:30-09:40 ET (`ib_minutes=10`). |
 | Today's "make them fire" fixes | 6 commits: noise_area stop-sanity (`751172f`), ORB session-anchor (`751172f`+`f96135b`), compression_breakout instrumentation+relax (`ffd206d`), un-retires (`ffd206d`), 3-of-4 compression + OPEN_DRIVE Steidlmayer (`6af6ab3`), ib_breakout session-anchor (`e07b2b8`) |
 | Dashboard panels | TODAY card + Daily Stats + trade table all on calendar-day boundary |
