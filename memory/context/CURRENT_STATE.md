@@ -10,16 +10,17 @@ _Last updated: **2026-05-14 14:50 CT** (after prod_bot restart on new code + das
 
 ---
 
-## AT A GLANCE — 2026-05-15 08:15 CT (Friday, ~15 min to cash open)
+## AT A GLANCE — 2026-05-15 08:34 CT (Friday, 4 min into cash open)
 
 | Item | State |
 |---|---|
-| Branch | `weekly-evolution/2026-05-10` (pushed through `ffd206d`) |
-| HEAD | `ffd206d` (compression_breakout + opening_session un-retired, sim only) |
-| Test suite | **1,938 pass / 4 skip / 0 fail** |
-| Today's P&L | (cash open 8:30 CT / 9:30 ET) |
-| **Process freshness** | Bots restarted ~08:14 CT on `ffd206d`. ORB armed for clean 8:30 CT OR. compression_breakout + opening_session also loaded after un-retire. |
-| ORB live status | Pre-open: emits `SKIP warmup_incomplete` correctly. Will build real OR from 8:30-8:44 CT bars. |
+| Branch | `weekly-evolution/2026-05-10` (pushed through `e07b2b8`) |
+| HEAD | `e07b2b8` (ib_breakout session-anchor + width cap relax) |
+| Test suite | **1,949 pass / 4 skip / 0 fail** |
+| Today's P&L | (cash open just started 8:30 CT) |
+| **Process freshness** | Bots restarted 08:33:58 / 08:34:00 CT on `e07b2b8`. Came up 4 min into cash open — will build OR/IB from in-session bars in deque. |
+| ORB / ib_breakout status | Both armed to build correct windows: ORB from 09:30-09:44 ET, ib_breakout from 09:30-09:40 ET (`ib_minutes=10`). |
+| Today's "make them fire" fixes | 6 commits: noise_area stop-sanity (`751172f`), ORB session-anchor (`751172f`+`f96135b`), compression_breakout instrumentation+relax (`ffd206d`), un-retires (`ffd206d`), 3-of-4 compression + OPEN_DRIVE Steidlmayer (`6af6ab3`), ib_breakout session-anchor (`e07b2b8`) |
 | Dashboard panels | TODAY card + Daily Stats + trade table all on calendar-day boundary |
 | Validated-set | **bias_momentum, spring_setup** only (unchanged) |
 | Retired strategies | **high_precision_only** only — compression_breakout + opening_session UN-retired 2026-05-15 (sim, validated=False) |
@@ -28,6 +29,17 @@ _Last updated: **2026-05-14 14:50 CT** (after prod_bot restart on new code + das
 | Alerting | Self-healing — PhoenixWatcher 5-min auto-respawn pattern installed |
 | Gemini AI | Working on fresh GCP project (new `GOOGLE_API_KEY`) |
 | Live trading | PAUSED — prod stays Sim101 until real account ≥ $2,000 (currently $300) |
+
+## Strategies and what to evaluate when operator returns
+
+| Strategy | Pre-fix state | Today's fix | What to look for |
+|---|---|---|---|
+| `noise_area` | 11 silent rejections/day at 200t cap | Sanity gate now 5-1000t for managed exits | SIGNAL/INTENT events on band touches |
+| `orb` | 1,086 evals/day, 0 SIGNAL — built OR from overnight chop | Anchored to 9:30 ET cash open + window upper bound | `OR_SET` log at ~09:44 ET, then 5m close breakouts → SIGNAL |
+| `ib_breakout` | 3,472 `ib_too_wide` rejections — same anchor bug + 1.5× cap too tight | Anchored to 9:30 ET + cap 1.5→4.0× ATR | `IB_SET` log at ~09:40 ET |
+| `compression_breakout` | 5,476 `squeeze_not_held` events — 4-of-4 AND never satisfied | 3-of-4 voting + relaxed ATR/range/min_bars + instrumentation | Watch `NOT_COMPRESSED` per-condition logs to see firing distribution; SIGNAL when 3 conditions align for 6+ evals |
+| `opening_session.open_drive` | Never dispatched — classifier needed top 2% of range | Steidlmayer top/bottom third + vol 1.4→1.2 | OPEN_DRIVE classifications in log (≥1 per Mon-Fri morning expected) |
+| `opening_session.open_auction_in/out` | 215 + 306 NO_SIGNAL events (DOES dispatch) | No code change — un-retired only | Watch dispatched-sub log frequency |
 
 ### Today's fixes (2026-05-15) — two silent-firing bugs unblocked
 

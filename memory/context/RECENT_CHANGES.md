@@ -5,6 +5,33 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+### 2026-05-15 08:15-08:30 CT — research-backed relaxations: compression 3-of-4 + OPEN_DRIVE Steidlmayer + ib_breakout session-anchor (commits `6af6ab3`, `e07b2b8`)
+
+Operator: "deep research how a successful automated AI trading bot should write the strategy so that it's not soo strict that it never fires." Three structural anti-patterns surfaced + fixed across 4 strategies.
+
+**Anti-pattern 1: Binary AND-of-overlapping-conditions** (compression_breakout)
+- Old: `all 4 conditions True` (TTM, ATR, Volume, Range)
+- Issue: conditions 1/2/4 measure overlapping volatility signal. Requiring all 4 double-counts the same axis.
+- Fix: `min_compression_conditions` config (default 3). Fires when 3 of 4 align. Carver's "Systematic Trading" principle: scaled forecasts beat binary AND gates.
+
+**Anti-pattern 2: Fixed-tick proximity instead of fractional bounds** (open_drive classifier)
+- Old: close must be within 8 ticks (2pt) of 5-min extreme
+- Issue: on MNQ's typical 90pt 5-min range, 2pt = 2% of range. Steidlmayer's ORIGINAL Market Profile work specifies top/bottom **THIRD** of range. We were applying a 2% bound where the spec calls for 33%.
+- Fix: `_DRIVE_CLOSE_PROXIMITY_RANGE_FRAC = 0.33` (top/bottom third) with 8-tick fallback for degenerate ranges. Volume mult also relaxed 1.4→1.2 to match entry trigger.
+- Hard data: 9 sessions sampled, displacement >15pt in 7/9 (78%), median 5-min range 90pt. The 2pt close-bound rejected 8/9 sessions where the open WAS directional.
+
+**Anti-pattern 3: SPY/QQQ-tuned cap applied to MNQ** (ib_breakout — same root cause as ORB pre-fix)
+- Old: `max_ib_width_atr_mult = 1.5` + daily reset at ET-midnight
+- Issue: MNQ 10-min IB at the open routinely runs 50-80pt = 2-3× 5m ATR. The 1.5× cap rejected almost everything. ALSO the ET-midnight anchor built the "Initial Balance" from arbitrary overnight bars (same bug as ORB had).
+- Fix: session_open_et config (default 09:30 ET) + bar-window filter + width cap 1.5 → 4.0× ATR. Mirrors the 2-pass ORB session-anchor fix (`751172f` + `f96135b`).
+- Hard evidence: 3,472 `BLOCKED gate:ib_too_wide` events in 50MB sim_stdout (dominant failure).
+
+**Bots restarted ~08:30 CT** on `e07b2b8` covering all 3 fixes. Cash open in progress — ORB / ib_breakout / opening_session classifier all using the corrected anchors. Live Monitor armed for SIGNAL/INTENT events.
+
+Tests: 1,936 → 1,949 pass / 4 skip / 0 fail (+13 net across the 3 fix bundles).
+
+---
+
 ### 2026-05-15 08:00-08:15 CT — compression_breakout + opening_session un-retired (commit `ffd206d`)
 
 Operator deep-dive: "compression_breakout never fires — same investigation as ORB." Verdict: **not a bug.** It's an MNQ-calibration mismatch.
