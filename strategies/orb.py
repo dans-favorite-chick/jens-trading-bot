@@ -291,7 +291,21 @@ class OpeningRangeBreakout(BaseStrategy):
                 if self._or_low is None or bar.low < self._or_low:
                     self._or_low = bar.low
 
-            if len(self._or_bars_1m) >= or_duration:
+            # 2026-05-15 fix: declare OR_SET once EITHER (a) we have the
+            # full bar count, OR (b) the OR window has elapsed in wall-
+            # clock time AND we have at least min_or_bars_after_window.
+            # The (b) case handles mid-session restarts where the
+            # aggregator's deque is missing a few of the original bars
+            # — without this fallback, OR_SET never fires after such a
+            # restart and the strategy is silent for the rest of the day.
+            window_elapsed = last_bar_ts >= or_window_end_ts
+            min_bars_post_window = max(2, or_duration // 3)
+            have_enough = len(self._or_bars_1m) >= or_duration
+            window_done_with_partial = (
+                window_elapsed
+                and len(self._or_bars_1m) >= min_bars_post_window
+            )
+            if have_enough or window_done_with_partial:
                 self._or_set = True
                 # #13: snapshot the SESSION open (not the first-bar's
                 # exact start_time, which may be a few seconds off) so
@@ -299,12 +313,13 @@ class OpeningRangeBreakout(BaseStrategy):
                 # session boundary.
                 self._or_session_start_ts = session_open_ts
                 self._save_state()  # #13: persist once OR is finalized
+                _set_mode = "full" if have_enough else f"partial({len(self._or_bars_1m)}/{or_duration})"
                 logger.info(
                     f"[EVAL] {self.name}: OR_SET {today} "
                     f"[{self._or_low:.2f}, {self._or_high:.2f}] "
                     f"size={self._or_high-self._or_low:.2f}pt "
                     f"after {len(self._or_bars_1m)} bars from "
-                    f"{session_open_et.strftime('%H:%M ET')}"
+                    f"{session_open_et.strftime('%H:%M ET')} [{_set_mode}]"
                 )
             else:
                 logger.debug(

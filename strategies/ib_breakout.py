@@ -165,14 +165,28 @@ class IBBreakout(BaseStrategy):
                 if self._ib_low is None or bar.low < self._ib_low:
                     self._ib_low = bar.low
 
-            if len(self._ib_bars_1m) >= ib_bar_count:
+            # 2026-05-15 fix: declare IB_SET once EITHER (a) we have
+            # the full bar count, OR (b) the IB window has elapsed in
+            # wall-clock time AND we have at least a third of the bars.
+            # The (b) case handles mid-session restarts where the agg
+            # deque is missing a few of the original IB bars — without
+            # this fallback, IB_SET never fires after such a restart.
+            window_elapsed = last_bar_ts >= ib_window_end_ts
+            min_bars_post_window = max(2, ib_bar_count // 3)
+            have_enough = len(self._ib_bars_1m) >= ib_bar_count
+            window_done_with_partial = (
+                window_elapsed
+                and len(self._ib_bars_1m) >= min_bars_post_window
+            )
+            if have_enough or window_done_with_partial:
                 self._ib_set = True
+                _set_mode = "full" if have_enough else f"partial({len(self._ib_bars_1m)}/{ib_bar_count})"
                 logger.info(
                     f"[EVAL] {self.name}: IB_SET {today} "
                     f"[{self._ib_low:.2f}, {self._ib_high:.2f}] "
                     f"size={self._ib_high-self._ib_low:.2f}pt "
                     f"after {len(self._ib_bars_1m)} bars from "
-                    f"{session_open_et.strftime('%H:%M ET')}"
+                    f"{session_open_et.strftime('%H:%M ET')} [{_set_mode}]"
                 )
             else:
                 logger.debug(
