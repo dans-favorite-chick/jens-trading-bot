@@ -5,6 +5,33 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+### 2026-05-15 08:00-08:15 CT — compression_breakout + opening_session un-retired (commit `ffd206d`)
+
+Operator deep-dive: "compression_breakout never fires — same investigation as ORB." Verdict: **not a bug.** It's an MNQ-calibration mismatch.
+
+**Hard evidence (24h sim_stdout)**: 5,476 `squeeze_not_held_min_bars` events, 0 BLOCKED gates. The strategy never accumulates enough consecutive compressed bars to even reach STAGE 2. The 2026-04-24 commit raised `min_squeeze_bars` 5→12 under the assumption of "60 min on 5m bars" — but `evaluate()` actually ticks ~1.2×/min, so 12 evals ≈ 10 min and even that was never hit.
+
+**Shipped:**
+1. **Per-condition instrumentation** — `[EVAL] compression_breakout: NOT_COMPRESSED ttm(...) atr(...) vol(...) range(...)` now logs which of the 4 stage-1 conditions failed each eval. Pre-fix the strategy was a black box.
+2. **MNQ-calibrated thresholds:**
+   - `atr_compression_ratio: 0.50 → 0.65`
+   - `range_atr_ratio: 1.50 → 1.80`
+   - `min_squeeze_bars: 12 → 6` (matches the actual 1.2 eval/min cadence)
+3. **Un-retired in sim only** (validated=False). Re-review trigger: n=30 trades.
+
+**opening_session un-retired (no code changes).** 80MB stdout deep-dive showed the classifier + sub-evaluators are well-designed; signals are intentionally selective:
+- premarket_breakout (08:30-08:45 CT): 86 SKIPs
+- orb-in-router (08:45-14:30 CT): 465 NO_SIGNAL + 676 SKIP
+- open_auction_in (09:30-12:30 CT, AUCTION_IN type): 215 NO_SIGNAL — DOES dispatch
+- open_auction_out (08:45-11:00 CT, AUCTION_OUT type): 306 NO_SIGNAL — DOES dispatch
+- open_drive (08:35-09:00 CT, DRIVE type): never dispatched on MNQ — classifier rarely matches (needs >15pt displacement + >1.4× volume + close-at-extreme)
+
+Un-retiring lets the per-sub log lines accumulate so the operator can SEE the classification distribution over real RTH days. Standing follow-up: if open_drive never matches after 4 weeks, relax `_DRIVE_DISPLACEMENT_POINTS` (currently 15pt).
+
+Both bots restarted at ~08:14 CT on `ffd206d`. ORB still armed for the 8:30 CT cash open. Suite: 1,936 → 1,938 pass / 4 skip / 0 fail.
+
+---
+
 ### 2026-05-15 07:30-07:55 CT — noise_area + ORB silent-firing bugs unblocked (commits `751172f` + `f96135b`)
 
 Operator flagged yesterday: of 9 enabled strategies, only 3 actually fired (bias_momentum / vwap_pullback / dom_pullback). Deep-dive found two unrelated bugs that were silently killing two more strategies.

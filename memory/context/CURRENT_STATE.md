@@ -10,19 +10,19 @@ _Last updated: **2026-05-14 14:50 CT** (after prod_bot restart on new code + das
 
 ---
 
-## AT A GLANCE — 2026-05-15 07:55 CT (Friday, pre-open)
+## AT A GLANCE — 2026-05-15 08:15 CT (Friday, ~15 min to cash open)
 
 | Item | State |
 |---|---|
-| Branch | `weekly-evolution/2026-05-10` (pushed) |
-| HEAD | `f96135b` (ORB OR-window upper bound — second pass on session anchor) |
-| Test suite | **1,936 pass / 4 skip / 0 fail** |
-| Today's P&L | (session not yet open — cash open 8:30 CT / 9:30 ET in ~35min) |
-| **Process freshness** | **prod PID 10080 restarted 07:52:35 / sim PID 42544 restarted 07:52:37** — both on commit `f96135b`. Stale ORB state files were cleared at restart so the new code starts clean. |
-| ORB live status | At 07:53:20 CT (pre-open), ORB correctly skipped: `SKIP warmup_incomplete (0/15 bars since 09:30 ET)`. Will build real OR from 8:30-8:44 CT bars. |
-| Dashboard panels | TODAY card + Daily Stats + trade table all on calendar-day boundary (commits `0c24a8e` + `71fc5af`) |
-| Validated-set | **bias_momentum, spring_setup** only |
-| Retired strategies | **high_precision_only, opening_session, compression_breakout** |
+| Branch | `weekly-evolution/2026-05-10` (pushed through `ffd206d`) |
+| HEAD | `ffd206d` (compression_breakout + opening_session un-retired, sim only) |
+| Test suite | **1,938 pass / 4 skip / 0 fail** |
+| Today's P&L | (cash open 8:30 CT / 9:30 ET) |
+| **Process freshness** | Bots restarted ~08:14 CT on `ffd206d`. ORB armed for clean 8:30 CT OR. compression_breakout + opening_session also loaded after un-retire. |
+| ORB live status | Pre-open: emits `SKIP warmup_incomplete` correctly. Will build real OR from 8:30-8:44 CT bars. |
+| Dashboard panels | TODAY card + Daily Stats + trade table all on calendar-day boundary |
+| Validated-set | **bias_momentum, spring_setup** only (unchanged) |
+| Retired strategies | **high_precision_only** only — compression_breakout + opening_session UN-retired 2026-05-15 (sim, validated=False) |
 | Stack health | bridge / dashboard / watchdog / watcher_agent / prod / sim — all alive, all on latest code |
 | NT8 + TickStreamer | Live |
 | Alerting | Self-healing — PhoenixWatcher 5-min auto-respawn pattern installed |
