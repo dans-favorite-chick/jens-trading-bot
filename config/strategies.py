@@ -311,6 +311,23 @@ STRATEGIES = {
         # Session window: eod_flat_time_et picked by strategy based on is_prod_bot
     },
 
+    "big_move_signal": {
+        # NEW 2026-05-15 — standalone entry on the Big-Move Detector
+        # score >= 90 signature (all 4 of vol_collapse + cvd_divergence +
+        # failed_break + dom_absorption fire simultaneously). Validation:
+        # 15:11:19 today fired score=100 LONG and price ran +47pt in
+        # 8 minutes (would have been a 2R win on a $50 budget).
+        # Sim only until n>=30 trades + post-tune review.
+        "enabled": True,
+        "validated": False,
+        "min_score": 90,             # 90 = high-conviction only (3+ all-flags)
+        "stop_atr_mult": 1.0,        # Tight stop — strategy enters at exhaustion
+        "max_stop_ticks": 100,       # 100t = $50 (operator budget)
+        "min_stop_ticks": 20,        # Floor to avoid sub-noise stops
+        "target_rr": 2.0,            # Target the move; exhaustion-exit fires before TP usually
+        "ai_filter_mode": "advisory",
+    },
+
     "noise_area": {
         # RETIRED 2026-05-15 — data verdict from tools/mae_mfe_asymmetry.py:
         # 20 trades, 10% WR, -$693.90, avgMAE 165t / avgMFE 73t.

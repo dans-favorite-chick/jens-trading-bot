@@ -31,6 +31,8 @@ _KNOWN_STRATEGIES = (
     "vwap_band_reversion", "dom_pullback", "ib_breakout",
     "compression_breakout", "high_precision_only", "noise_area",
     "orb", "opening_session", "footprint_cvd_reversal",
+    # 2026-05-15: standalone entry on BigMoveDetector score >= 90.
+    "big_move_signal",
 )
 
 

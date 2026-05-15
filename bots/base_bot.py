@@ -1208,6 +1208,7 @@ class BaseBot:
         from strategies.vwap_band_pullback import VwapBandPullback
         from strategies.opening_session import OpeningSessionStrategy
         from strategies.footprint_cvd_reversal import FootprintCVDReversal
+        from strategies.big_move_signal import BigMoveSignal
 
         strategy_classes = {
             "bias_momentum": BiasMomentumFollow,
@@ -1222,6 +1223,10 @@ class BaseBot:
             "noise_area": NoiseAreaMomentum,
             "opening_session": OpeningSessionStrategy,
             "footprint_cvd_reversal": FootprintCVDReversal,
+            # 2026-05-15: standalone entry on BigMoveDetector score >= 90.
+            # Validation evidence: 15:11:19 score=100 LONG predicted +47pt
+            # rally in 8 minutes today (sim). Sim only until n>=30.
+            "big_move_signal": BigMoveSignal,
         }
 
         is_prod = (self.bot_name == "prod")
