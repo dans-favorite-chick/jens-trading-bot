@@ -71,6 +71,19 @@ STRATEGY_ACCOUNT_MAP: Dict[str, Union[str, Dict[str, str]]] = {
     # but get dropped at the NT8 side.
     "footprint_cvd_reversal":    "SimFootprintchart",
 
+    # ── 2026-05-17: V2 overhaul deployment — 6 new strategy accounts ──
+    # Note the naming convention shift: existing accounts use spaces
+    # ("SimBias Momentum"); these new ones use underscores/hyphens
+    # ("Sim_LSR", "Sim_ORB-Fade"). Strings are BYTE-EXACT NT8 display
+    # names — do not normalize. SimORB_v2 deliberately has no
+    # underscore between Sim and ORB (operator named it that way).
+    "nq_lsr":                      "Sim_LSR",
+    "orb_fade":                    "Sim_ORB-Fade",
+    "orb_v2":                      "SimORB_v2",
+    "compression_breakout_v2":     "Sim_Compression_v2",
+    "compression_breakout_micro":  "Sim_Compression_Micro",
+    "vwap_pullback_v2":            "Sim_VWAP_Pullback_v2",
+
     # Fallback — lands here on any unmapped strategy or sub_strategy.
     "_default":                  _DEFAULT_ACCOUNT,
 }
