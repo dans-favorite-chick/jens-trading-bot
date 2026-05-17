@@ -121,7 +121,11 @@ STRATEGIES = {
         # 2026-05-03: skip signals when natural ATR stop would exceed
         # max_stop_ticks (forced clamping). Forensic evidence: clamped stops
         # were 0W/5L. Vol regime mismatch — better to skip than clamp.
-        "skip_on_stop_clamp": True,
+        # 2026-05-17: SIM TESTING — flipped True->False. The V2 deployment
+        # raises max_stop_ticks to 200 (was 120) so clamps are far less
+        # frequent. Phase 7 will replace the rejection with a confirmation-
+        # bar fallback (stop_fallback_mode: "confirmation"). RESTORE before live.
+        "skip_on_stop_clamp": False,
         # 2026-05-03: convert RSI bearish-divergence "warning" into a hard
         # gate. Evidence: opposing-RSI-div appears in 6 losers / 0 winners.
         "rsi_div_hard_gate": True,
@@ -184,7 +188,9 @@ STRATEGIES = {
         "stop_fallback_ticks": 64,
         # 2026-05-13 (#8): skip when natural ATR stop > max_stop_ticks.
         # Same forensic logic as bias_momentum (0W/5L on clamped stops).
-        "skip_on_stop_clamp": True,
+        # 2026-05-17: SIM TESTING — flipped True->False for V2 overhaul.
+        # RESTORE before live.
+        "skip_on_stop_clamp": False,
         # Max distance from VWAP to qualify as "near VWAP" (replaces hardcoded 6).
         # 60t = 15pts — a true VWAP pullback can be further out than 6 ticks on NQ.
         "max_vwap_dist_ticks": 60,
@@ -234,7 +240,9 @@ STRATEGIES = {
         "stop_fallback_ticks": 64,
         # 2026-05-13 (#8): skip when natural ATR stop > max_stop_ticks.
         # Same forensic logic as bias_momentum (0W/5L on clamped stops).
-        "skip_on_stop_clamp": True,
+        # 2026-05-17: SIM TESTING — flipped True->False for V2 overhaul.
+        # RESTORE before live.
+        "skip_on_stop_clamp": False,
         "target_rr": 2.5,     # 2.5:1 = 25t = 6.25pts minimum capture
         # DOM absorption threshold — 0=any signal, 100=very strong only
         # 35 is moderate: absorption is visible but not overwhelming

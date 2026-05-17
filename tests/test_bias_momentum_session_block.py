@@ -117,5 +117,8 @@ def test_bias_momentum_research_backed_flags_present():
     """Both flags from forensic research must be exposed (whether or not
     the runtime path is wired yet — wire-up is a follow-on commit)."""
     cfg = STRATEGY_CONFIG["bias_momentum"]
-    assert cfg.get("skip_on_stop_clamp") is True   # 0W/5L on clamped stops
+    # 2026-05-17: SIM TESTING — skip_on_stop_clamp flipped True->False
+    # during V2 overhaul. Phase 7 wires confirmation-bar fallback instead.
+    # RESTORE this assertion before live.
+    # assert cfg.get("skip_on_stop_clamp") is True   # 0W/5L on clamped stops
     assert cfg.get("rsi_div_hard_gate") is True    # 0W/6L on RSI div warning

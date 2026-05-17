@@ -36,7 +36,9 @@ TICK_VALUE_PER_CONTRACT = 0.50    # MNQ: $0.50 per tick per 1 contract
 # Bandy / Tomasini-Jaekle principle: stops at signal invalidation,
 # position sizing controls $; when sizing is fixed at 1, skip-or-take
 # is the actual control.
-MAX_ACTUAL_STOP_DOLLARS_PER_TRADE = 50.0
+# 2026-05-17: SIM TESTING — raised from $50 to $100 to pair with new
+# max_stop_ticks: 200 — restore to $50 before live
+MAX_ACTUAL_STOP_DOLLARS_PER_TRADE = 100.0
 
 # ─── Network Ports ──────────────────────────────────────────────────
 NT8_WS_PORT = 8765       # Bridge listens, NT8 indicator connects as client
@@ -64,7 +66,10 @@ TICK_BUFFER_SIZE = 500          # Ring buffer — ~1.5 min of bars on reconnect 
 
 # ─── Risk Limits ────────────────────────────────────────────────────
 MAX_LOSS_PER_TRADE = 20.0       # Hard limit per trade ($)
-DAILY_LOSS_LIMIT = 45.0         # Stop trading for the day ($)
+# 2026-05-17: SIM TESTING — raised from $45 to $1_000_000 to disable
+# daily-loss circuit-breaker during the V2 strategy overhaul rollout.
+# RESTORE to 45.0 before live.
+DAILY_LOSS_LIMIT = 1_000_000.0  # was 45.0 — SIM TESTING, restore before live
 WEEKLY_LOSS_LIMIT = 150.0       # Stop trading for the week ($)
 RECOVERY_MODE_TRIGGER = 30.0    # At -$30 daily: cut size 50%, raise thresholds
 MAX_TRADES_PER_SESSION = 999  # Uncapped — don't limit winning days
@@ -219,7 +224,10 @@ MENTHORQ_NET_GEX_NORMAL_THRESHOLD = 500_000
 # apply PER STRATEGY, not per bot. Purpose: gather 50+ trades/strategy
 # at WR≥50% PF≥1.3 before any prod graduation.
 PER_STRATEGY_ACCOUNT_SIZE = 2000.00     # starting balance
-PER_STRATEGY_DAILY_LOSS_CAP = 200.00    # daily stop; resets at daily rollover
+# 2026-05-17: SIM TESTING — raised from $200 to $1_000_000 to disable
+# per-strategy daily halt during the V2 strategy overhaul rollout.
+# RESTORE to 200.00 before live.
+PER_STRATEGY_DAILY_LOSS_CAP = 1_000_000.0  # was 200.00 — SIM TESTING, restore before live
 PER_STRATEGY_FLOOR = 1500.00            # halt + alert, MANUAL re-enable only
 
 # ─── B40 — NT8 ATI multi-account routing flag ─────────────────────
