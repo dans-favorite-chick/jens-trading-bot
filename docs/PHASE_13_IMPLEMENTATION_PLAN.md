@@ -874,6 +874,122 @@ Maps cleanly to the role-based confluence framework (Section K): ES/NQ alignment
 
 ---
 
+## Q. Build-ready specifications (NEW — 2026-05-18)
+
+Operator request: "hammer in the details — entry signal, multi-TF, stop placement, stop management, chart visualization with color-coded markers + live SL/TP lines."
+
+**Deliverables (all built this session, ready to wire into prod):**
+
+### Q.1 Strategy spec document
+`docs/STRATEGY_SPECIFICATIONS.md` — comprehensive per-strategy mechanical reference covering all 12 winners:
+- Universal entry flow (10-step pipeline from bar close to OIF write)
+- Multi-timeframe roles (15m = bias, 5m = trigger, 1m = execution)
+- Per-strategy mechanical specs: exact trigger conditions, confirmations, stop placement, target logic
+- Stop management rules (`scale_out_1r` mechanism, when to move to BE, trailing rules)
+- Color codes (12 strategies → 12 distinct hex colors)
+- Honest caveats (perfect entry doesn't exist, multi-TF won't rescue weak signals, etc.)
+
+### Q.2 Chart visualization (NT8 indicator)
+`ninjatrader/PhoenixTradeOverlay.cs` (370 LOC) — NT8 indicator that polls a JSONL stream and renders:
+- **Entry marker:** colored triangle (UP for LONG, DOWN for SHORT) at signal bar + strategy name label
+- **Live stop loss:** red dashed horizontal line at current stop price (auto-updates on stop_moved events)
+- **Live take-profit:** green dashed horizontal line at target price
+- **Exit marker:** colored diamond + P&L annotation (green for win, red for loss) + exit reason
+
+**Color assignments** (per `STRATEGY_SPECIFICATIONS.md` §5.1):
+- 🟡 opening_session.orb → Yellow #FFD700
+- 🔵 raschke_baseline → Cyan #00FFFF
+- 🟣 inside_bar_breakout → Magenta #FF00FF
+- 🟢 multi_day_breakout → Lime #00FF00
+- 🟪 asian_continuation → Purple #9370DB
+- 🟧 vwap_pullback_v2 → Orange #FF8C00
+- 🟢 spring_setup → DarkGreen #006400
+- ⚪ es_nq_confluence → White #FFFFFF
+- 🔴 bias_momentum → Red #FF0000
+- 🔷 vwap_band_pullback → SkyBlue #87CEEB
+- 🌸 vwap_band_reversion → Pink #FF69B4
+- 🟡 ib_breakout → Gold #DAA520
+
+### Q.3 JSONL event protocol
+
+Phoenix writes to `C:\Users\Trading PC\Documents\NinjaTrader 8\phoenix_signals.jsonl` (append-only). NT8 indicator tracks read offset, processes only new lines.
+
+Four event types:
+
+```json
+{"ts":"2026-05-18T09:35:00+00:00","event":"signal","id":"abc123","strategy":"raschke_baseline","direction":"LONG","entry":17500.25,"stop":17495.0,"target":17510.75}
+{"ts":"2026-05-18T09:35:30+00:00","event":"fill","id":"abc123","fill_price":17500.5}
+{"ts":"2026-05-18T09:42:15+00:00","event":"stop_moved","id":"abc123","new_stop":17500.5,"reason":"scale_out_1r_BE"}
+{"ts":"2026-05-18T09:50:00+00:00","event":"exit","id":"abc123","exit_price":17510.75,"exit_reason":"target_hit","pnl":52.5}
+```
+
+### Q.4 Python writer module
+
+`core/signal_visualizer.py` (130 LOC) — thread-safe append-only JSONL writer with public API:
+- `emit_signal(strategy, direction, entry, stop, target) → trade_id`
+- `emit_fill(trade_id, fill_price)`
+- `emit_stop_moved(trade_id, new_stop, reason)`
+- `emit_exit(trade_id, exit_price, exit_reason, pnl)`
+- `truncate_if_oversized()` — housekeeping for weekly cron
+
+Smoke-tested end-to-end this session (4-event lifecycle wrote correctly).
+
+### Q.5 Integration plan (next session)
+
+To wire the visualizer into prod, modify `bots/base_bot.py` at 4 hook points:
+
+| Hook | When | Call |
+|---|---|---|
+| Signal emitted | After strategy returns Signal, before OIF write | `tid = signal_visualizer.emit_signal(...)`; store `tid` in position state |
+| OIF fill | When NT8 confirms fill (in outgoing/ watcher) | `signal_visualizer.emit_fill(tid, fill_price)` |
+| Stop moved | When scale_out_1r/trail policy adjusts stop | `signal_visualizer.emit_stop_moved(tid, new_stop, reason)` |
+| Position closed | In position_manager exit handler | `signal_visualizer.emit_exit(tid, exit_price, reason, pnl)` |
+
+Total integration is ~15 LOC in base_bot. Failure-tolerant: visualizer errors logged at WARNING but never break the bot (catch-all exception swallowing in `_write_event`).
+
+### Q.6 Install instructions (operator action)
+
+```
+1. Copy PhoenixTradeOverlay.cs to:
+     C:\Users\Trading PC\Documents\NinjaTrader 8\bin\Custom\Indicators\
+2. In NT8: NinjaScript Editor → F5 (Compile)
+3. On chart: Indicators → Add → PhoenixTradeOverlay
+4. (Optional) Set chart timeframe to 5m or 15m — markers will be visible
+   at their signal-bar timestamps
+```
+
+### Q.7 What the operator SEES on the chart
+
+**Quiet market (no active trades):** chart looks normal, no overlay artifacts.
+
+**When bot fires `raschke_baseline` LONG:**
+- 🔵 Cyan triangle appears at the entry bar (pointing UP)
+- "raschke_baseline" text label below the triangle
+- Red dashed line stretches across chart at stop price
+- Green dashed line stretches across chart at target price
+
+**When scale_out_1r moves stop to BE:**
+- The red dashed line jumps to the new (BE) stop price
+- Same line tag, different price level
+
+**When trade closes at target:**
+- 🔵 Cyan diamond appears at exit bar
+- "+$52.50 target_hit" text in lime green next to diamond
+- Red + green dashed lines disappear
+
+**Multiple simultaneous trades** (e.g., raschke + multi_day fire at same time):
+- Two distinct sets of markers/lines, color-coded so the operator can see which bot did what
+- No visual collision — each strategy's lines have unique tag names
+
+### Q.8 What the operator does NOT do
+
+- ❌ Do not manually override the bot based on chart visualization
+- ❌ Do not interpret the chart as a "trading decision aid" — it's a MONITORING tool
+- ❌ Do not delete the JSONL file while bot is running (NT8 offset goes invalid)
+- ❌ Do not run multiple bots writing to the same JSONL — namespace per-bot if needed
+
+---
+
 ## H. Files created/touched this sprint (audit trail)
 
 **Created:**
