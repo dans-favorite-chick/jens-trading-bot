@@ -300,6 +300,329 @@ scale-down after 3 losers.
 
 ---
 
+## J. Lean-in plan (NEW — 2026-05-18)
+
+### J.1 Per-strategy contribution to compounded $1.09M (from tier_3000 equity curve)
+
+| Rank | Strategy | $ Contributed | % of Total |
+|---|---|---:|---:|
+| 1 | `opening_session.orb` | $524,744 | **48.2%** |
+| 2 | `g_inside_bar_breakout` | $169,186 | 15.5% |
+| 3 | `e_multi_day_breakout` | $140,545 | 12.9% |
+| 4 | `vwap_pullback_v2` | $120,886 | 11.1% |
+| 5 | `a_asian_continuation` | $89,389 | 8.2% |
+| 6 | `es_nq_confluence` (dormant) | $19,684 | 1.8% |
+| 7 | `ib_breakout` | $18,731 | 1.7% |
+| 8 | `vwap_band_pullback` | $4,795 | 0.4% |
+| 9 | `spring_setup` (baseline exits) | $969 | 0.1% |
+| 10 | `bias_momentum` | $859 | 0.1% |
+
+**Top 5 = 96% of all P&L. Bottom 5 = 4%.**
+
+### J.2 Hidden insight: `vwap_pullback_v2` time-of-day split
+
+Empirical per-hour analysis revealed `vwap_pullback_v2` is essentially TWO strategies:
+- **Overnight Euro (0-4 CT):** profitable WR 38-40%, +$10k/5y baseline
+- **After-hours Asia (17-23 CT):** profitable WR 37-54%, +$2k/5y baseline
+- **RTH (5-14 CT):** flat/losing, contributes most of the strategy's drag
+
+**Action:** Add session filter — `vwap_pullback_v2` only fires 17:00-04:59 CT.
+
+### J.3 Lean-in experiment results
+
+| Policy | Final $ | Max DD % | Risk-adj |
+|---|---:|---:|---:|
+| `tier_3000` (equal weight) | $1,095,250 | 33.5% | $3.27M |
+| `winner_weighted_light` (1.2× / 0.7×) | $1,127,757 | 40.7% | $2.77M |
+| `winner_weighted` (1.5× / 0.5×) | $1,200,892 | 42.0% | $2.86M |
+
+**Counterintuitive finding:** Both winner-weighted variants give more $ but WORSE risk-adjusted than equal-weight. **Reason:** Tier 3 losses are already small in absolute $; cutting them in half doesn't help much. Tier 1 wins are big; multiplying by 1.5 amplifies BOTH wins AND drawdowns proportionally.
+
+**Recommendation:** Start with EQUAL-WEIGHT for 3 months of out-of-sample, then lean in to `winner_weighted_light` only after Tier 1 strategies prove out-of-sample stability. Tier 3 demotion to 0.7× is fine immediately — costs little, hedges against poor performers.
+
+### J.4 Tier assignments (for `config/strategies.py`)
+
+```python
+# TIER 1 — Max conviction (top 5 contributors = 96% of P&L)
+"opening_session":      {"tier": 1, "size_multiplier": 1.0, ...}  # Lean to 1.2 after 3mo OOS
+"inside_bar_breakout":  {"tier": 1, "size_multiplier": 1.0, ...}
+"multi_day_breakout":   {"tier": 1, "size_multiplier": 1.0, ...}
+"vwap_pullback_v2":     {"tier": 1, "size_multiplier": 1.0, "session_filter": "17:00-04:59 CT"}
+"asian_continuation":   {"tier": 1, "size_multiplier": 1.0, ...}
+
+# TIER 2 — Standard (proven, no scaling needed)
+"es_nq_confluence":     {"tier": 2, "size_multiplier": 1.0, ...}   # DORMANT until MES feed
+"ib_breakout":          {"tier": 2, "size_multiplier": 1.0, ...}
+
+# TIER 3 — Half size (small contributors, prove value first)
+"vwap_band_pullback":   {"tier": 3, "size_multiplier": 0.7, "filter": "ema_counter"}
+"spring_setup":         {"tier": 3, "size_multiplier": 0.7, "exit_policy": "fixed_2x_target"}
+"vwap_band_reversion":  {"tier": 3, "size_multiplier": 0.7, "filter": "combo_ema_vol",
+                         "exit_policy": "scale_out_1r"}
+"bias_momentum":        {"tier": 3, "size_multiplier": 0.5, "exit_policy": "time_15min"}
+```
+
+### J.5 Five lean-in mechanisms (priority ordered)
+
+| # | Mechanism | Impact | Risk | Where |
+|---|---|---|---|---|
+| 1 | Per-strategy `size_multiplier` field | HIGH | LOW | `config/strategies.py` |
+| 2 | Lock exits on Tier 1, iterate on Tier 3 | MED | LOW | Discipline (no code) |
+| 3 | Fire-order priority (Tier 1 first) | MED | LOW | `bots/base_bot.py` strategy registration order |
+| 4 | Per-tier risk-budget allocation | HIGH | MED | `core/risk_manager.py` |
+| 5 | Per-tier concurrent-trade caps | MED | MED | `core/position_manager.py` |
+
+**Phase 13 ships #1 + #2. Phase 14 ships #3-5.**
+
+---
+
+## K. Confluence architecture (NEW — 2026-05-18)
+
+Based on research into production trading systems (Carver, QuantConnect, NautilusTrader, Crabel) + empirical Phoenix data. **The single most important architectural change** is moving from heuristic confluence to a **role-based tiered framework**.
+
+### K.1 The 4 factor roles (each factor gets exactly ONE role per strategy)
+
+| Role | Behavior | Examples |
+|---|---|---|
+| **VETO** | Binary hard-gate. Kills the trade. Cheap to evaluate, high-confidence. | Regime (gamma/VIX), time-of-day, news blackout, daily-loss cap |
+| **TRIGGER** | The single "now" condition. One per strategy. | 5m OR break, VWAP touch, inside-bar break |
+| **CONFIRMATION** | Continuous, contributes to score (NOT gate). | CVD alignment, vol ratio, MTF EMA agreement |
+| **SIZING** | Continuous, scales position size by score. | Confluence strength, range tightness, ATR-relative vol |
+
+**Rule:** Same factor can be VETO for Strategy A, TRIGGER for B, CONFIRMATION for C. That's the orthogonal-signal pattern RenTech-style commentary emphasizes. But within ONE strategy: one factor = one role.
+
+### K.2 Architecture decomposition (QuantConnect-style)
+
+Move from current `BaseStrategy.evaluate() → Signal` to:
+
+```
+each Strategy emits:  Signal(direction, raw_score, confidence, factor_snapshot)
+                      ↓
+PortfolioConstructor: reconcile simultaneous signals, resolve direction conflicts,
+                      apply per-tier concurrent caps, dedup correlated fires
+                      ↓
+RiskManager:          apply regime/VIX overlay, time-of-day VETO, daily-loss caps,
+                      per-strategy size_multiplier, DD scale-down
+                      ↓
+Execution:            convert to OIF, apply tick snap, send to NT8
+```
+
+**Today's Phoenix is essentially Strategy → Execution with risk inline.** The middle two layers are implicit/scattered. Phase 14 should formalize them.
+
+### K.3 Factor caps (research-backed)
+
+- **Max 5 active factors per strategy** (3-5 sweet spot; Journal of Finance 2019)
+- **Max 2 AND-gates** (VETO + TRIGGER count as gates)
+- **The rest = CONFIRMATION or SIZING** (continuous score contributors)
+
+**Phoenix audit:** `bias_momentum` has 20+ factors. Strong simplification candidate. Most others are within bounds.
+
+### K.4 Per-strategy factor role assignment
+
+Synthesizing the factor inventory (Section H pending) with empirical lift + research roles. **This is the bulletproof per-strategy plan.**
+
+#### `opening_session.orb` 🏆 (#1 contributor)
+| Role | Factor | Notes |
+|---|---|---|
+| VETO | time-of-day (lunch skip 10-15 CT) | Empirical: WR collapses after hour 10 |
+| VETO | regime (skip if gamma_regime=UNKNOWN) | Already in place |
+| TRIGGER | 5m close beyond 15-min OR | Existing |
+| CONFIRMATION | CVD alignment | Already in place |
+| SIZING | OR-width relative to ATR | Tighter OR = bigger size |
+**Total: 5 factors. ✓ Within cap.**
+
+#### `inside_bar_breakout` (NEW Tier 1)
+| Role | Factor | Notes |
+|---|---|---|
+| VETO | time-of-day (avoid open/close volatility) | Use 09:00-13:00 CT |
+| TRIGGER | 5m close beyond inside-bar high/low | Existing |
+| CONFIRMATION | volume on breakout bar > 1.2× avg | NEW |
+| CONFIRMATION | inside-bar range < parent range (tightness) | Existing |
+| SIZING | tightness ratio (smaller inside = bigger size) | NEW |
+**Total: 5 factors. ✓**
+
+#### `multi_day_breakout` (NEW Tier 1)
+| Role | Factor | Notes |
+|---|---|---|
+| VETO | time-of-day (lunch skip) | Universal filter |
+| TRIGGER | 5m close beyond 3-day H/L | Existing |
+| CONFIRMATION | CVD aligned with break direction | NEW |
+| CONFIRMATION | 5m volume > 1.3× avg | NEW |
+| SIZING | range-distance from break level | NEW |
+**Total: 5 factors. ✓**
+
+#### `asian_continuation` (NEW Tier 1)
+| Role | Factor | Notes |
+|---|---|---|
+| VETO | RTH hours (only fire 03:00-08:00 CT) | Existing in strategy time window |
+| TRIGGER | 5m close beyond overnight range + 0.5×ATR | Existing |
+| CONFIRMATION | overnight range > 8 ticks (filters chop) | Existing |
+| SIZING | range-width as conviction modifier | NEW |
+**Total: 4 factors. ✓ Minimal & clean.**
+
+#### `vwap_pullback_v2` (#4 contributor, NEEDS SIMPLIFICATION)
+**Current: 7+ factors. Cut to 5 + add session VETO.**
+| Role | Factor | Notes |
+|---|---|---|
+| VETO | session (17:00-04:59 CT only — empirical) | **CRITICAL NEW** |
+| VETO | regime (skip TREND days for mean-rev) | Existing |
+| TRIGGER | bounce candle at VWAP | Existing |
+| CONFIRMATION | EMA9 > EMA21 (LONG) — REPLACES TF votes (multicollinear) | Consolidated |
+| SIZING | distance-from-VWAP confluence score | NEW |
+**Total: 5 factors. Removed: tf_votes (multicollinear with EMA), bar_delta, MQ bias.**
+
+#### `vwap_band_pullback` (Tier 3)
+| Role | Factor | Notes |
+|---|---|---|
+| VETO | regime (skip TREND days) | Existing |
+| TRIGGER | bar touches VWAP±1σ band | Existing |
+| CONFIRMATION | `ema_counter` filter (counter-trend EMA) | **Backtested +$1.5k/5y** |
+| CONFIRMATION | RSI(2) extreme | Existing |
+| SIZING | band-distance (further = bigger) | NEW |
+**Total: 5 factors. ✓**
+
+#### `vwap_band_reversion` (Tier 3, needs filter to be positive)
+| Role | Factor | Notes |
+|---|---|---|
+| VETO | TREND day skip | Existing |
+| VETO | open window 08:30-09:30 skip | Existing |
+| TRIGGER | bar touches VWAP±2.1σ + reversal candle | Existing |
+| CONFIRMATION | `combo_ema_vol` filter (ema_counter + vol>1.5×) | **+$6.5k/16.5mo** |
+| SIZING | band-distance | NEW |
+**Total: 5 factors. ✓**
+
+#### `bias_momentum` (Tier 3 — RADICAL SIMPLIFICATION)
+**Current: 20+ factors. Cut to 5.** The data shows only 40 trades / 5y on this strategy with marginal edge. Bloated confluence is hurting fire rate.
+| Role | Factor | Notes |
+|---|---|---|
+| VETO | regime (only fire OPEN_MOMENTUM, MID_MORNING) | Already golden-window logic |
+| VETO | session block windows | Existing forensic fix |
+| TRIGGER | EMA stack 5m (EMA9 cross EMA21) | Consolidate from EMA + VWAP-side + TF votes |
+| CONFIRMATION | CVD aligned | Keep highest-IC factor only |
+| SIZING | momentum_score (already exists) | Existing |
+**REMOVE: tf_votes (use EMA only — multicollinear), VWAP-side (multicollinear), MACD, DOM (too noisy), VSA, bar_delta, MQ bias, cr_verdict, candlestick patterns, vol_climax. KEEP only: regime, EMA, CVD, momentum_score.**
+
+#### `spring_setup` (Tier 3)
+| Role | Factor | Notes |
+|---|---|---|
+| VETO | regime (TREND-day counter-trend block) | Existing |
+| TRIGGER | spring pattern (wick + close-near-extreme) | Existing |
+| CONFIRMATION | VWAP reclaim | Existing |
+| CONFIRMATION | CVD flip | Existing |
+| SIZING | vol_climax_ratio | Existing |
+**Total: 5 factors. ✓ Add `fixed_2x_target` exit (Phase 13 lift +$5,489).**
+
+#### `es_nq_confluence` (DORMANT pending MES feed)
+| Role | Factor | Notes |
+|---|---|---|
+| TRIGGER | MNQ-MES boost > 25bp + correlation > 0.85 | Existing |
+| CONFIRMATION | rolling-50 correlation strength | Existing |
+| SIZING | boost magnitude | Existing |
+**Total: 3 factors. Minimal & clean — this is the design goal.**
+
+#### `ib_breakout` (Tier 2)
+| Role | Factor | Notes |
+|---|---|---|
+| VETO | regime (only OPEN_MOMENTUM, MID_MORNING) | Existing |
+| TRIGGER | 1m close outside IB | Existing |
+| CONFIRMATION | CVD aligned | Existing |
+| CONFIRMATION | IB width < 1.5× ATR | Existing |
+| SIZING | IB-tightness | NEW |
+**Total: 5 factors. ✓ Add `fixed_2x_target` exit (Phase 13 lift 5×).**
+
+### K.5 Cross-strategy factor portfolio
+
+Once roles are assigned, the bot has these **orthogonal signal axes**:
+
+| Axis | Used as VETO by | Used as TRIGGER by | Used as CONFIRMATION by |
+|---|---|---|---|
+| Time-of-day | 7 strategies | 0 | 0 |
+| Regime (gamma/VIX) | 8 | 0 | 0 |
+| VWAP touch | 1 (mean-rev TREND skip) | 4 | 1 |
+| OR break | 0 | 2 (orb, ib) | 0 |
+| CVD | 0 | 0 | **9** ← over-relied; check IC |
+| MTF EMA | 0 | 1 (bias_mom post-simplify) | 4 |
+| ATR / range | 1 | 0 | 3 (sizing) |
+| Cross-asset (MES) | 0 | 1 | 0 |
+| Volume ratio | 0 | 0 | 5 |
+| Footprint POC | 0 | 0 | 0 ← **opportunity** |
+
+**Two recommendations from this matrix:**
+1. **CVD is over-used as confirmation** in 9/10 strategies. Compute its IC per-strategy; if it's <0.05 for some, demote/remove. The mistake is using it because it's available, not because it adds edge.
+2. **Footprint POC is unused** despite Phoenix having live volumetric data. POC-distance is a high-IC factor for mean-reversion (per Bookmap research). Worth piloting on `vwap_band_reversion` first.
+
+---
+
+## L. Validation gauntlet for new factors (NEW)
+
+Any factor added to ANY strategy MUST pass this gauntlet before shipping. From Aronson (Evidence-Based TA), Carver (Systematic Trading), and Quantinsti walk-forward best practices.
+
+### L.1 The 5-step gauntlet
+
+1. **IC threshold** — compute Spearman rank correlation between factor value at t and forward return at t+5min, t+15min, t+60min. **Must show |IC| > 0.05** at at least one horizon. (Tool: Alphalens or equivalent.)
+2. **Per-factor P&L attribution** — run strategy 3 times: (a) all factors, (b) factor removed, (c) factor randomized. Real lift = (a)-(b) > 0 AND (a)-(c) > 0. If only (a)-(b) > 0, the "edge" is artifact of fire-rate throttling, not signal.
+3. **Walk-forward validation** — 60-day train / 20-day test, anchored windows. Out-of-sample Sharpe must be ≥ 0.5× in-sample Sharpe (degradation ratio).
+4. **Multicollinearity check** — compute VIF against existing factors in the same strategy. **VIF > 5 = redundant; drop one.**
+5. **Multiple-testing correction** — if screening N factors, apply Bonferroni (α/N) or Benjamini-Hochberg FDR. Critical when factor was selected from a "library."
+
+### L.2 The 4-role classification test
+
+For any factor that passes IC but doesn't lift P&L as a TRIGGER, test it as:
+- (i) VETO — does removing trades where factor is bearish improve P&L?
+- (ii) CONFIRMATION — does scoring entries by factor strength improve avg-per-trade?
+- (iii) SIZING modulator — does scaling position by factor improve risk-adjusted return?
+
+A factor with zero TRIGGER edge often has substantial VETO edge (classic: high-VIX killing breakouts).
+
+### L.3 Continuous monitoring (post-ship)
+
+For each shipped factor, log to `logs/factor_attribution.jsonl`:
+- Factor value at signal time
+- Whether signal fired (factor passed/failed gate)
+- Trade outcome (if fired)
+- Rolling 30-day IC
+
+If 30-day IC drops below 0.03 for 2 consecutive weeks → strategy `validated=False` until manual review.
+
+---
+
+## M. Pitfalls + safeguards (NEW)
+
+### M.1 The 8 high-likelihood failure modes
+
+| # | Failure | Likelihood | Safeguard |
+|---|---|---|---|
+| 1 | **Multicollinearity bloat** (EMA + TF + VWAP-side all proxy trend) | VERY HIGH (Phoenix has this NOW) | Section K.4 simplification + VIF check |
+| 2 | **Look-ahead bias** (decision-time data > decision-time wallclock) | HIGH | Code-level assertion `bar.end_time <= eval_ts` in every strategy |
+| 3 | **Silent factor failure** (CVD goes NaN, defaults to "neutral") | HIGH (Phoenix history) | Loud heartbeat per factor; VETO strategies dependent on stale factor |
+| 4 | **Kitchen-sink overfit** (4-factor AND-gate at 60% each = 13% fire rate) | HIGH | 5-factor cap; AND-gates ≤ 2 |
+| 5 | **Regime fragility** (trend factors destroy mean-rev edge) | MED | Regime overlay applied at RiskManager layer, not in strategy |
+| 6 | **Survivorship bias in selection** (kept best 8 of 30 tried) | MED | Bonferroni correction on N screened |
+| 7 | **Latency drift** (5m filter on 1m signal = 5min stale at decision) | MED | Document each factor's effective latency in `factor_metadata.yaml` |
+| 8 | **Walk-forward overfitting** (tuning WFO windows to look pretty OOS) | MED | Pick windows once (60/20 days) and never re-tune |
+
+### M.2 Phoenix-specific (from operator memory)
+
+**Silent failures are Phoenix's #1 failure mode.** Every factor must:
+- Log when it goes stale (NaN, missing, last-update timestamp)
+- Have a heartbeat — if no value in N seconds, strategies depending on it must VETO trades
+- Surface in dashboard as a per-factor freshness indicator
+
+This is the lesson from `feedback_silent_failures.md` applied to confluence factors specifically.
+
+### M.3 Concrete safeguards to add to code
+
+| Safeguard | Location | Effort |
+|---|---|---|
+| `assert bar.end_time <= eval_ts` per strategy | All `strategies/*.py` evaluate() | LOW |
+| Per-factor heartbeat + staleness log | `core/factor_health.py` (NEW) | MED |
+| VIF check tool | `tools/factor_vif_check.py` (NEW) | MED |
+| Walk-forward harness | `tools/walk_forward.py` (NEW) | HIGH |
+| Per-factor P&L attribution | `tools/factor_attribution.py` (NEW) | MED |
+| Dashboard factor-freshness panel | `dashboard/templates/dashboard.html` | LOW |
+
+---
+
 ## H. Files created/touched this sprint (audit trail)
 
 **Created:**

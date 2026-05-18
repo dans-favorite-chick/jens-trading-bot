@@ -134,12 +134,64 @@ def sizing_jones(equity, ath, start, delta=None):
     return min(n, MAX_CONTRACTS_CAP)
 
 
+# Winner-weighted multipliers — Tier 1 strategies get 1.5x, Tier 3 get 0.5x.
+# Based on per-strategy contribution to compounded P&L (see Phase 13 doc Section J).
+STRATEGY_SIZE_MULT = {
+    # TIER 1 (top 5 contributors = 96% of compounded P&L)
+    "opening_session":       1.5,
+    "g_inside_bar_breakout": 1.3,
+    "e_multi_day_breakout":  1.3,
+    "vwap_pullback_v2":      1.2,
+    "a_asian_continuation":  1.2,
+    # TIER 2 (proven, normal weight)
+    "es_nq_confluence":      1.0,
+    "ib_breakout":           1.0,
+    # TIER 3 (small contributors — half size pending validation)
+    "vwap_band_pullback":    0.5,
+    "spring_setup":          0.5,   # 0.5 until fixed_2x_target ships
+    "bias_momentum":         0.5,   # too few trades
+}
+
+
+STRATEGY_SIZE_MULT_LIGHT = {
+    # Lighter weighting — Tier 1 × 1.2, Tier 3 × 0.7 (less concentration risk)
+    "opening_session":       1.2,
+    "g_inside_bar_breakout": 1.2,
+    "e_multi_day_breakout":  1.2,
+    "vwap_pullback_v2":      1.1,
+    "a_asian_continuation":  1.1,
+    "es_nq_confluence":      1.0,
+    "ib_breakout":           1.0,
+    "vwap_band_pullback":    0.7,
+    "spring_setup":          0.7,
+    "bias_momentum":         0.7,
+}
+
+
+def sizing_winner_weighted_tier3000(equity, ath, start, strategy=None):
+    """Like tier_3000 but applies STRATEGY_SIZE_MULT (aggressive: 1.5/0.5)."""
+    base = _tier_sizing(equity, ath, 3000.0)
+    mult = STRATEGY_SIZE_MULT.get(strategy, 1.0) if strategy else 1.0
+    n = max(1, int(round(base * mult)))
+    return min(n, MAX_CONTRACTS_CAP)
+
+
+def sizing_winner_weighted_light(equity, ath, start, strategy=None):
+    """Like tier_3000 but applies STRATEGY_SIZE_MULT_LIGHT (1.2/0.7)."""
+    base = _tier_sizing(equity, ath, 3000.0)
+    mult = STRATEGY_SIZE_MULT_LIGHT.get(strategy, 1.0) if strategy else 1.0
+    n = max(1, int(round(base * mult)))
+    return min(n, MAX_CONTRACTS_CAP)
+
+
 POLICIES: dict[str, Callable] = {
     "flat_1":            sizing_flat_1,
     "tier_1500":         sizing_tier_1500,
     "tier_3000":         sizing_tier_3000,
     "tier_5000":         sizing_tier_5000,
     "fixed_ratio_jones": sizing_jones,
+    "winner_weighted_3000": sizing_winner_weighted_tier3000,
+    "winner_weighted_light": sizing_winner_weighted_light,
 }
 
 
@@ -214,6 +266,11 @@ def run_compounding(trades: pd.DataFrame, policy_name: str,
     # Group trades by exact entry_ts to handle simultaneous fires
     trades = trades.sort_values("entry_ts").reset_index(drop=True)
 
+    # Some sizing fns want per-strategy info — inspect signature
+    import inspect
+    fn_params = inspect.signature(sizing_fn).parameters
+    sizing_takes_strategy = "strategy" in fn_params
+
     for ts, batch in trades.groupby("entry_ts", sort=False):
         date_str = ts.date().isoformat()
 
@@ -226,20 +283,19 @@ def run_compounding(trades: pd.DataFrame, policy_name: str,
             daily_halt_dates.add(date_str)
             continue
 
-        # Compute contracts ONCE for this batch using pre-batch equity
-        contracts = sizing_fn(equity, ath, starting_equity)
-        # Consecutive-loss scale-down: 3+ losses in a row → halve size
-        if consec_losses >= CONSECUTIVE_LOSS_LIMIT:
-            contracts = max(1, contracts // 2)
-
-        # Record tier-first-date
-        if contracts not in tier_first:
-            tier_first[contracts] = ts.isoformat()
-
         # Apply each trade in the batch
         for _, trade in batch.iterrows():
+            # Per-strategy sizing for winner_weighted; uniform for others
+            if sizing_takes_strategy:
+                contracts = sizing_fn(equity, ath, starting_equity, strategy=trade.strategy)
+            else:
+                contracts = sizing_fn(equity, ath, starting_equity)
+            if consec_losses >= CONSECUTIVE_LOSS_LIMIT:
+                contracts = max(1, contracts // 2)
+            if contracts not in tier_first:
+                tier_first[contracts] = ts.isoformat()
+
             pnl_per_contract = float(trade.pnl_dollars)
-            # Size-scaled slippage: cost per contract grows with contracts
             slip_ticks = size_scaled_slippage_ticks(contracts)
             slippage_per_contract = slip_ticks * TICK_VALUE
             net_pnl_per_contract = pnl_per_contract - slippage_per_contract
