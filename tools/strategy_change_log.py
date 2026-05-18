@@ -33,6 +33,12 @@ _KNOWN_STRATEGIES = (
     "orb", "opening_session", "footprint_cvd_reversal",
     # 2026-05-15: standalone entry on BigMoveDetector score >= 90.
     "big_move_signal",
+    # 2026-05-17: V2 strategy overhaul deployment (Phase 4).
+    # Parity required by tests/test_strategy_change_log.py — any key in
+    # config.strategies.STRATEGIES must appear here or the parity test fails.
+    "nq_lsr", "orb_fade", "orb_v2",
+    "compression_breakout_v2", "compression_breakout_micro",
+    "vwap_pullback_v2",
 )
 
 

@@ -615,6 +615,126 @@ STRATEGIES = {
         "data_freshness_sec": 90,
         "min_history_bars": 25,
     },
+
+    # ── 2026-05-17: V2 strategy overhaul deployment (Phase 4) ─────────
+    # All 6 entries ship with validated=True per operator override.
+    # Standard Wilson-CI guardrail bypassed — phase 10 (Restore) gates
+    # final live promotion behind the n>=30 trades / WR>=50% / PF>=1.3 rule.
+    # See docs/CLAUDE_CODE_DEPLOYMENT_PROMPT.md (Phase 4) for full context.
+
+    "nq_lsr": {
+        "enabled": True,
+        "validated": True,   # FIRING (operator override — was lab-only)
+        "session_windows_ct": [("08:30", "11:00"), ("13:30", "15:00")],
+        "max_trades_per_day": 4,
+        "max_stop_ticks": 30,
+        "min_stop_ticks": 8,
+        "min_wick_pct": 0.50,
+        "min_volume_ratio": 1.5,
+        "level_cooloff_minutes": 60,
+        "time_exit_minutes": 30,
+        "t2_target_rr": 2.5,
+        "bar_freshness_sec": 90,
+        "volume_lookback": 20,
+        "cvd_divergence_lookback": 5,
+        "near_hvn_lvn_ticks": 5,
+        "bigmove_bonus_threshold": 50,
+        "es_divergence_bonus": 15,
+        "tpo_trend_skip": True,
+        "exhaustion_exit_threshold": 70,
+    },
+
+    "orb_fade": {
+        "enabled": True,
+        "validated": True,
+        "session_windows_ct": [("08:45", "12:00")],
+        "max_trades_per_day": 2,
+        "max_stop_ticks": 30,
+        "min_stop_ticks": 8,
+        "min_wick_pct": 0.50,
+        "min_volume_ratio": 1.3,
+        "lookback_for_breakout": 20,
+        "cvd_lookback": 5,
+        "volume_lookback": 20,
+        "time_exit_minutes": 30,
+        "bar_freshness_sec": 90,
+    },
+
+    "orb_v2": {
+        "enabled": True,
+        "validated": True,
+        "or_duration_minutes": 15,
+        "min_or_size_points": 11,
+        "max_or_size_points": 80,
+        "max_or_size_atr_mult": 4.0,
+        "max_or_size_hard_cap_points": 150,
+        "max_entry_delay_minutes": 60,
+        "target_rr": 2.0,
+        "max_stop_ticks": 60,
+        "min_stop_ticks": 12,
+        "cvd_lookback": 5,
+        "require_cvd_aligned": True,
+        "session_open_et": "09:30",
+        "stop_buffer_ticks": 2,
+    },
+
+    "compression_breakout_v2": {
+        "enabled": True,
+        "validated": True,
+        "max_trades_per_day": 3,
+        "bb_period": 20,
+        "bb_std": 1.5,            # NQ-tuned (was 2.0 Carter default)
+        "kc_period": 20,
+        "kc_atr_mult": 1.5,
+        "atr_period": 14,
+        "atr_smoothing": 50,
+        "atr_compression_ratio": 0.60,
+        "window_bars": 8,
+        "min_compressed_in_window": 5,
+        "min_compression_conditions": 3,
+        "breakout_volume_mult": 1.5,
+        "range_atr_ratio": 1.5,
+        "min_breakout_dist_atr": 0.25,
+        "stop_atr_mult": 1.5,
+        "max_stop_ticks": 60,
+        "min_stop_ticks": 12,
+        "target_rr": 2.0,
+    },
+
+    "compression_breakout_micro": {
+        "enabled": True,
+        "validated": True,    # FIRING — catches fast 5-15pt breakouts on 1m TF
+        "max_trades_per_day": 5,
+        "bb_period": 20,
+        "bb_std": 1.4,            # tighter still — 1m bars naturally tighter
+        "kc_period": 20,
+        "kc_atr_mult": 1.5,
+        "atr_period": 14,
+        "atr_smoothing": 30,      # 30 min context (vs V2's 50)
+        "atr_compression_ratio": 0.65,
+        "window_bars": 10,        # 10 min look-back
+        "min_compressed_in_window": 6,    # 6 of 10 — tolerates 40% noise
+        "min_compression_conditions": 3,
+        "breakout_volume_mult": 1.4,
+        "range_atr_ratio": 1.5,
+        "min_breakout_dist_atr": 0.30,    # clearer break on 1m
+        "stop_atr_mult": 1.5,
+        "max_stop_ticks": 30,     # scalp range
+        "min_stop_ticks": 8,
+        "target_rr": 1.5,         # scalp R:R
+    },
+
+    "vwap_pullback_v2": {
+        "enabled": True,
+        "validated": True,
+        "max_trades_per_day": 4,
+        "max_vwap_dist_ticks": 60,
+        "min_tf_votes": 2,
+        "stop_atr_mult": 2.0,
+        "max_stop_ticks": 200,    # was 120 in V1 — V2 widens for NQ 2026
+        "min_stop_ticks": 16,
+        "target_rr": 1.8,
+    },
 }
 
 # Backfill default ai_filter_mode="advisory" on every strategy that
