@@ -173,7 +173,10 @@ STRATEGIES = {
         "max_stop_ticks": 120,
     },
     "vwap_pullback": {
-        "enabled": True,
+        # 2026-05-17: Phase 5 — DISABLED, superseded by vwap_pullback_v2.
+        # V2 widens max_stop_ticks 120→200 for NQ 2026 vol regime + uses
+        # confirmation-stop fallback. Keep block for git-history reference.
+        "enabled": False,
         "validated": False,   # Lab only
         # NQ-calibrated ATR-anchored stop (B14 2026-04-20). Replaces fixed 14t.
         "stop_method": "atr_anchored",
@@ -294,7 +297,10 @@ STRATEGIES = {
     "orb": {
         # Opening Range Breakout — Zarattini, Barbon, Aziz (2024) SSRN 4729284
         # Published: QQQ 46% annual, Sharpe 2.4; NQ backtest 74% WR, PF 2.51.
-        "enabled": True,
+        # 2026-05-17: Phase 5 — DISABLED, superseded by orb_v2.
+        # V2 has CVD-alignment gate + OR-range floor + confirmation-stop
+        # fallback. Keep block for git-history + Zarattini citation reference.
+        "enabled": False,
         "validated": False,         # Lab only until 20+ live trades collected
         # 2026-05-15 fix: session_open_et anchors the daily reset to the
         # US cash open. Pre-fix the daily reset fired at ET-midnight,
@@ -398,7 +404,10 @@ STRATEGIES = {
         # New tuning relaxes the AND-of-4 to MNQ vol profile; instrumentation
         # logs WHICH condition is failing each eval so the operator can see
         # the firing distribution directly.
-        "enabled": True,
+        # 2026-05-17: Phase 5 — DISABLED, superseded by compression_breakout_v2.
+        # V2 uses Carter BB/KC squeeze + 3-of-4 voting + NQ-tuned 1.5 std (was
+        # 2.0). Keep block for git-history + tuning-journey context.
+        "enabled": False,
         "validated": False,         # Sim only until 30+ trades + post-tune review
         # Compression-condition tunings (MNQ-calibrated 2026-05-15)
         "atr_compression_ratio": 0.65,  # was 0.5 — MNQ rarely drops to half of avg ATR
