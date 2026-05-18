@@ -71,8 +71,11 @@ STRATEGIES = {
         # taken out by noise on NQ — use 1.5×ATR anchored to last 5m wick.
         "stop_method": "atr_anchored",
         "stop_atr_mult": 2.0,
-        "min_stop_ticks": 40,        # 10 points floor (NQ noise)
-        "max_stop_ticks": 120,       # 30 points cap (high-vol days)
+        # 2026-05-17: Phase 6 — V2 overhaul tightens NQ floor (40→24t = 6pt)
+        # and widens cap (120→200t = 50pt) to absorb NQ 2026 vol regime.
+        # Pairs with Phase 7 CODE PATCH 3 confirmation-stop fallback.
+        "min_stop_ticks": 24,        # was 40 — NQ 6pt floor (V2 deployment)
+        "max_stop_ticks": 200,       # was 120 — NQ vol regime fix (V2 deployment)
         "stop_fallback_ticks": 64,   # 16 points if ATR unavailable
         # 2026-05-03 RECALIBRATION: was 5.0 (5:1 RR). Of 71 audit trades only
         # 9 hit target_hit. Most bias_momentum exits are managed (ema_dom_exit)
@@ -142,6 +145,24 @@ STRATEGIES = {
         # extended moves in LATE_AFTERNOON. 60t = 15pts — still allows re-entry close
         # to EMA9, blocks buying 130-200t above EMA9 in afternoon chop.
         "max_ema_dist_ticks": 60,
+        # ── 2026-05-17: Phase 6 V2-deployment additions ───────────────
+        # Confirmation-stop fallback (wired in Phase 7 CODE PATCH 3).
+        # Falls back to next bar's close-side stop when raw ATR stop
+        # exceeds max_stop_ticks, instead of rejecting the signal.
+        "stop_fallback_mode": "confirmation",
+        # Less-strict multi-TF alignment (3-of-N → 2-of-N).
+        "min_tf_votes": 2,
+        # New gate that controls the existing short_extra_gates (above)
+        # behavior; Phase 7 CODE PATCH 1 routes through this flag.
+        # False = honor existing short_extra_gates (redundant SHORT gate
+        # is gated OFF by default in V2 deployment).
+        "short_extra_gate_enabled": False,
+        # Only veto on STRONG opposing CVD (was -0.3 — too aggressive).
+        "cvd_health_veto_threshold": -0.4,
+        # Early-session EMA fallback: use 1m EMAs before 09:00 CT when
+        # 5m EMAs are still warming up. Wired in Phase 7 CODE PATCH 2.
+        "ema_stack_early_session_fallback": True,
+        "ema_stack_early_session_end_ct": "09:00",
     },
     "spring_setup": {
         # 2026-04-24 RETIRED: 48h log analysis showed 1,250 NO_SIGNAL events
@@ -151,17 +172,22 @@ STRATEGIES = {
         # market profile. Re-enable only after retooling the wick-criteria
         # spec (consider widening min_wick_ticks or combining with VWAP mean
         # reversion for confluence).
-        "enabled": False,
+        # 2026-05-17: Phase 6 — UN-RETIRED per operator override "all
+        # strategies firing." Wick pattern rare on MNQ but V2 patches
+        # (min_tf_votes 3->2, require_vwap_reclaim True->False) loosen
+        # the gates that pre-2026-05-17 were rejecting almost every
+        # candidate. Re-evaluate after 30+ sim trades.
+        "enabled": True,
         "validated": True,    # Was running in prod bot before retire
         "stop_multiplier": 1.5,  # fallback wick multiplier (used only if stop_at_structure=False)
         "target_rr": 1.5,
         "min_wick_ticks": 6,
-        "require_vwap_reclaim": True,
+        "require_vwap_reclaim": False,  # 2026-05-17: was True — too gating (V2)
         "require_delta_flip": True,
         "max_hold_min": 15,
         # v2 fixes (2026-04-14): TF gate + ATR-anchored stop
         "require_tf_alignment": True,   # Only fire WITH dominant trend (3/4 TF votes)
-        "min_tf_votes": 3,              # Min TF votes in direction to allow entry
+        "min_tf_votes": 2,              # 2026-05-17: was 3 — less strict (V2)
         # ATR stop (research-validated for reversal patterns):
         # Stop = wick_extreme ± (atr_stop_multiplier × ATR_5m)
         # 1.0-1.2× is validated range; 1.1 balanced (not too tight, not too wide)
@@ -170,7 +196,9 @@ STRATEGIES = {
         "structure_buffer_ticks": 2,    # Fallback buffer if ATR unavailable
         # NQ research clamps (Fix 7, 2026-04-20): raised from 8/40 → 40/120
         "min_stop_ticks": 40,
-        "max_stop_ticks": 120,
+        "max_stop_ticks": 200,  # 2026-05-17: was 120 — NQ vol regime fix (V2)
+        # 2026-05-17: Phase 6 V2-deployment addition.
+        "stop_fallback_mode": "confirmation",
     },
     "vwap_pullback": {
         # 2026-05-17: Phase 5 — DISABLED, superseded by vwap_pullback_v2.
@@ -233,13 +261,13 @@ STRATEGIES = {
     },
     "dom_pullback": {
         "enabled": True,
-        "validated": False,   # Lab only — replicates user's manual DOM absorption entry
+        "validated": True,    # 2026-05-17: was False — operator override (V2 deployment)
         # Entry: pullback to EMA9 or VWAP + sell orders being pulled/absorbed by buyers
         # NQ-calibrated ATR-anchored stop (B14 2026-04-20). Replaces fixed 10t — too tight.
         "stop_method": "atr_anchored",
         "stop_atr_mult": 2.0,
         "min_stop_ticks": 40,
-        "max_stop_ticks": 120,
+        "max_stop_ticks": 200,  # 2026-05-17: was 120 — NQ vol regime fix (V2)
         "stop_fallback_ticks": 64,
         # 2026-05-13 (#8): skip when natural ATR stop > max_stop_ticks.
         # Same forensic logic as bias_momentum (0W/5L on clamped stops).
@@ -257,6 +285,8 @@ STRATEGIES = {
         "max_ema_dist_ticks": 28,   # Widened from 12t → 28t (data-validated P25 zone)
         "max_vwap_dist_ticks": 20,  # Widened from 10t → 20t (more realistic touch zone)
         "max_hold_min": 20,
+        # 2026-05-17: Phase 6 V2-deployment addition.
+        "stop_fallback_mode": "confirmation",
     },
     "ib_breakout": {
         # 2026-05-15 fix: same ET-midnight anchor bug as ORB had been
@@ -273,7 +303,9 @@ STRATEGIES = {
         # is below TENTATIVE (n>=100). The 75% WR with 8 trades has a
         # 95% CI of 41-93% — that's noise, not evidence. Stay in lab
         # until n>=100. Re-promote with `--check-promotion`.
-        "validated": False,
+        # 2026-05-17: Phase 6 — operator override "all strategies firing"
+        # bypasses Wilson-CI guardrail. Phase 10 restores the n>=100 rule.
+        "validated": True,
         # 2026-04-24: dropped from 30 → 10 per Jennifer's request after the 48h
         # log analysis showed IB Breakout was 100% blocked on warmup_incomplete
         # — bot mid-session restarts couldn't ever build a 30-min IB before the
@@ -286,11 +318,13 @@ STRATEGIES = {
         # NQ research ceiling (Fix 8, 2026-04-20): structural stop must fit.
         # If (price - ib_low) or (ib_high - price) exceeds this in ticks → SKIP signal.
         # Complementary to max_ib_width_atr_mult (pre-filter on IB width).
-        "max_stop_ticks": 120,
+        "max_stop_ticks": 200,  # 2026-05-17: was 120 — NQ vol regime fix (V2)
         "max_hold_min": 60,
         # v2 fix (2026-04-14): CVD must confirm breakout direction
         # Without this: SHORT at IB low with CVD=+6.05M → -164t loss (buyers absorbing)
         "require_cvd_confirm": True,   # CVD > 0 for LONG, CVD < 0 for SHORT — hard gate
+        # 2026-05-17: Phase 6 V2-deployment addition.
+        "stop_fallback_mode": "confirmation",
     },
     # ─── New strategies per roadmap v4 (Apr 23 2026) ───────────────────
 
@@ -333,13 +367,19 @@ STRATEGIES = {
         # 8 minutes (would have been a 2R win on a $50 budget).
         # Sim only until n>=30 trades + post-tune review.
         "enabled": True,
-        "validated": False,
-        "min_score": 90,             # 90 = high-conviction only (3+ all-flags)
+        "validated": True,           # 2026-05-17: was False — operator override (V2)
+        # 2026-05-17: was 90 — at score=90 the all-flags-must-fire gate
+        # produced < 1 signal/week. 70 catches strong 3-of-4 setups too.
+        # The strategy reads "min_score" from config (see big_move_signal.py
+        # constructor and tests/test_big_move_signal_strategy.py).
+        "min_score": 70,
         "stop_atr_mult": 1.0,        # Tight stop — strategy enters at exhaustion
-        "max_stop_ticks": 100,       # 100t = $50 (operator budget)
+        "max_stop_ticks": 200,       # 2026-05-17: was 100 — V2 widens (V2 deployment)
         "min_stop_ticks": 20,        # Floor to avoid sub-noise stops
         "target_rr": 2.0,            # Target the move; exhaustion-exit fires before TP usually
         "ai_filter_mode": "advisory",
+        # 2026-05-17: Phase 6 V2-deployment addition.
+        "stop_fallback_mode": "confirmation",
     },
 
     "noise_area": {
@@ -475,54 +515,71 @@ STRATEGIES = {
         # + 15-min ORB-in-router.
         "enabled": True,
         "stage": "lab",
-        "validated": False,
+        "validated": True,  # 2026-05-17: was False — operator override (V2 deployment)
 
         # Universal guards
-        "max_trades_per_day": 2,
+        "max_trades_per_day": 4,  # 2026-05-17: was 2 (V2 deployment PATCH 2)
         "day_flat_time_ct": "14:30",
         "news_blackout_min": 5,
 
         # Universal stops (Fix 6 standard, locked 2026-04-20)
-        "min_stop_ticks": 40,
-        "max_stop_ticks": 100,
+        # 2026-05-17: V2 deployment PATCH 2 — tighter floor (40→32t = 8pt),
+        # wider cap (100→200t), confirmation fallback above 80t.
+        "min_stop_ticks": 32,
+        "max_stop_ticks": 200,
+        "use_confirmation_stop_above_ticks": 80,
 
-        # Open Drive
-        "open_drive_min_displacement_pts": 15,
-        "open_drive_max_pullback_pct": 0.30,
-        "open_drive_min_volume_ratio": 1.4,
-        "open_drive_entry_volume_ratio": 1.2,
+        # Open Drive — 2026-05-17 V2 PATCH 2: loosen displacement gate
+        # (was 15pt — classifier never returned OPEN_DRIVE on MNQ).
+        "open_drive_min_displacement_pts": 8,    # was 15
+        "open_drive_max_pullback_pct": 0.40,     # was 0.30
+        "open_drive_min_volume_ratio": 1.3,      # was 1.4
+        "open_drive_entry_volume_ratio": 1.1,    # was 1.2
         "open_drive_trail_ticks": 20,
 
-        # Open Test Drive
-        "open_test_drive_test_buffer_ticks": 8,
+        # Open Test Drive — 2026-05-17 V2 PATCH 2
+        "open_test_drive_test_buffer_ticks": 4,  # was 8
         "open_test_drive_reversal_volume_ratio": 1.3,
         "open_test_drive_stop_buffer_ticks": 4,
         "open_test_drive_time_exit_min": 75,
 
-        # Open Auction In
-        "open_auction_in_wick_pct_min": 0.60,
+        # Open Auction In — 2026-05-17 V2 PATCH 2
+        "open_auction_in_wick_pct_min": 0.50,    # was 0.60
         "open_auction_in_volume_ratio": 1.2,
         "open_auction_in_stop_buffer_ticks": 8,
         "open_auction_in_time_exit_ct": "12:30",
 
-        # Open Auction Out
+        # Open Auction Out — 2026-05-17 V2 PATCH 2: require CVD div
         "open_auction_out_wait_min": 15,
         "open_auction_out_stop_buffer_ticks": 8,
         "open_auction_out_time_exit_ct": "11:00",
+        "open_auction_out_require_cvd_div": True,
 
-        # Premarket Breakout
-        "premarket_breakout_min_range_pts": 10,
+        # Premarket Breakout — 2026-05-17 V2 PATCH 2: stricter range
+        "premarket_breakout_min_range_pts": 15,  # was 10
         "premarket_breakout_volume_ratio": 1.4,
         "premarket_breakout_buffer_ticks": 2,
         "premarket_breakout_stop_buffer_ticks": 8,
         "premarket_breakout_time_exit_ct": "10:30",
 
-        # ORB
+        # ORB — 2026-05-17 V2 PATCH 2: range floor/cap in points + CVD-aligned
         "orb_window_min": 15,
         "orb_max_range_pct": 0.008,
+        "orb_min_range_pts": 11,
+        "orb_max_range_pts": 80,
+        "orb_require_cvd_aligned": True,
+        "orb_cvd_lookback_bars": 5,
         "orb_target_pct_of_or": 0.50,
         "orb_be_pct_of_or": 0.25,
         "orb_time_exit_ct": "14:30",
+
+        # ORB-Fade sub-evaluator — 2026-05-17 V2 PATCH 2
+        "orb_fade_enabled": True,
+        "orb_fade_min_wick_pct": 0.50,
+        "orb_fade_min_cvd_divergence": True,
+
+        # 2026-05-17 V2 PATCH 2: confirmation-stop fallback.
+        "stop_fallback_mode": "confirmation",
     },
 
     "vwap_band_pullback": {
@@ -530,7 +587,7 @@ STRATEGIES = {
         # Runs alongside vwap_pullback (proximity) for head-to-head lab data.
         # Author prediction (b12 header): PF 1.5-1.8 at WR 45-55%, RR 1.5-2:1.
         "enabled": True,
-        "validated": False,   # Lab only — needs 50+ trades before prod promotion
+        "validated": True,    # 2026-05-17: was False — operator override (V2 deployment)
         "min_bars": 50,
         "rsi_period": 2,
         "rsi_long_threshold": 30,
@@ -548,8 +605,10 @@ STRATEGIES = {
         # NQ-research clamps (matches Fix 7 values). If natural 2σ-band
         # stop > max_stop_ticks, signal is skipped (Fix 8-style guard).
         "min_stop_ticks": 40,
-        "max_stop_ticks": 120,
+        "max_stop_ticks": 200,  # 2026-05-17: was 120 — NQ vol regime fix (V2)
         "max_hold_min": 60,
+        # 2026-05-17: Phase 6 V2-deployment addition.
+        "stop_fallback_mode": "confirmation",
     },
     "vwap_band_reversion": {
         # 2026-05-03: NEW pure mean-reversion strategy at 2.1σ. Distinct from
@@ -560,7 +619,7 @@ STRATEGIES = {
         # Per operator request; lab-only until 50+ trades validate.
         # See strategies/vwap_band_reversion.py docstring for research basis.
         "enabled": True,
-        "validated": False,   # Lab only
+        "validated": True,    # 2026-05-17: was False — operator override (V2 deployment)
         "sigma": 2.1,                    # entry-band sigma
         "outer_sigma": 2.5,              # stop is just beyond this
         "atr_stop_buffer": 0.5,          # multiplier on ATR added to outer band
@@ -568,13 +627,15 @@ STRATEGIES = {
         "min_bars": 30,
         "min_volume_ratio": 0.7,         # looser than band_pullback's 0.8
         "min_stop_ticks": 30,            # NQ noise floor (looser; reversion entries are tight)
-        "max_stop_ticks": 100,           # ceiling — skip if natural stop wider
+        "max_stop_ticks": 200,           # 2026-05-17: was 100 — NQ vol regime fix (V2)
         "target_rr": 1.5,                # fallback when target_at_vwap=False
         "target_at_vwap": True,          # default: target VWAP itself, not opposite band
         # Time-of-day block (CT). 08:30-09:30 = open volatility (per
         # bias_momentum forensic finding §4 in trade_analysis_2026-05-03.md).
         "block_windows": [("08:30", "09:30")],
         "max_hold_min": 30,
+        # 2026-05-17: Phase 6 V2-deployment addition.
+        "stop_fallback_mode": "confirmation",
     },
     # ─── Sprint H v3 (2026-05-04): Footprint + CVD Reversal ────
     # Institutional 4-confluence reversal at MenthorQ HTF levels.
@@ -587,7 +648,7 @@ STRATEGIES = {
     # 50+ trades + PF > 1.3.
     "footprint_cvd_reversal": {
         "enabled": True,
-        "validated": False,           # LAB ONLY
+        "validated": True,            # 2026-05-17: was False — operator override (FCD-6 V2)
         # HTF level confluence
         "level_buffer_ticks": 8,
         "require_menthorq_level": True,
@@ -608,6 +669,9 @@ STRATEGIES = {
         # Stops / targets
         "stop_buffer_ticks": 4,
         "max_stop_ticks": 60,
+        # 2026-05-17: FCD-6 (Phase 6) — add 8t floor to pair with FCD-4
+        # which enforces min_stop_ticks via max(_min, ...) in Phase 7 patch.
+        "min_stop_ticks": 8,
         "target_t1_rr": 1.0,                  # 50% scale-out
         "target_t2_rr": 2.0,                  # final target
         "scale_out_pct": 0.5,
