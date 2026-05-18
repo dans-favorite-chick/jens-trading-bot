@@ -116,6 +116,8 @@ The strategy file itself was perfectly fine; only the bot-side wiring was missin
 
 **Resolution:** Phase 9.1 hotfix (commit `853482e`) registered the class. No further action required.
 
+**Process-fix update:** A startup self-check that diffs `STRATEGIES.keys()` against `strategy_classes.keys()` and logs `[WARN] strategy '{x}' has config but no class registration` for orphans would have caught this in 1 startup instead of 14 days. Tracked as Phase 9.5+ backlog (not implemented tonight).
+
 ### Item B — `dupe_test` halt-state cleanup
 
 **Status: cleaned in-place. Effective at next sim_bot restart.**
@@ -133,3 +135,37 @@ Post-clean state:
 **Note on git tracking:** `logs/strategy_halts.json` is intentionally gitignored (`.gitignore:10` excludes `logs/`) because it's runtime-mutated state. The bot writes to it whenever a strategy halts or re-enables. Force-tracking it with `git add -f` would create constant dirty-tree noise. Cleanup is therefore filesystem-only; this doc-commit serves as the audit trail.
 
 **Bot still running with stale in-memory copy:** sim_bot (PIDs 76700/66988) loaded `["dupe_test"]` into its halt set at startup and will keep that in memory until the next restart. Since `dupe_test` is not a real strategy (not in `strategy_classes`), the in-memory halt has zero behavioral effect — the loader skips unknown names per the `if name not in strategy_classes: continue` guard. Sweep-up happens naturally on next planned restart.
+
+### Item D — Provider error diagnostics
+
+**All three diagnosed via live probes; one code-fix landed, two need operator key actions.**
+
+| Provider | Root cause | Fix |
+|---|---|---|
+| Gemini 429 | Free-tier daily quota burnt (20 req/day on `gemini-2.5-flash`). `/v1beta/models` returns 200 / 50 models → key + project alive; only quota burnt. Matches `memory/gemini_api_diagnostic.md` decision matrix. | **Operator action:** "Create API key in new project" at https://aistudio.google.com/app/apikey → fresh free quota under same Google account. Swap `GOOGLE_API_KEY` in `.env`. Restart `watcher_agent.py`. |
+| Grok 400 | `Incorrect API key provided: xa***hg` — API key invalid/revoked (not a model name issue, not a payload issue). | **Operator action:** new key from https://console.x.ai/. Swap `GROK_API_KEY` in `.env`. |
+| CNN F&G 418 | Literal response: `"I'm a teapot. You're a bot."` — CNN's anti-scraping uses Varnish-based bot detection; the Mozilla/5.0 UA spoof isn't enough. | **Code-fix landed (commit `48ad489`):** detect 418 → cache `unavailable` sentinel under a separate key with 24h TTL. Cuts polling from ~6/hr to ~1/day. Consumers continue to get the graceful `{score: 0, rating: 'unavailable', source: 'unavailable'}` sentinel; no behavior change. |
+
+### Item E — Silent-strategy `[EVAL]` logging
+
+Added `[EVAL] {name}: entered evaluate()` + `[EVAL] {name}: SKIP {reason}` to 3 previously-silent strategies (`big_move_signal`, `compression_breakout_v2`, `footprint_cvd_reversal`). 8 distinct SKIP reasons across the 3. Effective at next sim_bot restart. Commit `d32a028`. Per-strategy eval-count grep will now show all strategies after restart; no more "did this strategy even get called?" ambiguity.
+
+---
+
+## OPEN INCIDENTS — UPDATE
+
+### Incident #1 — CLOSEPOSITION-vs-OCO state desync race
+
+**Status: FIX LANDED (commit `f4cc375`). Effective at next sim_bot restart.**
+
+Root cause confirmed: when an OCO bracket stop fires, NT8 closes the position; ~simultaneously Phoenix's `_exit_trade()` sees the price cross and sends `action: "EXIT"` WS msg → bridge writes `CLOSEPOSITION;...` to NT8 incoming. On a now-FLAT account, the CLOSEPOSITION request does NOT no-op as expected — NT8 interprets it as a fresh market order in the cover direction, creating a phantom reverse position. The reconciler catches it ~25s later and market-flattens, but slippage on the round-trip is what 4×'d the loss on the 2026-05-17 21:25 SimBias Momentum trade.
+
+**Fix:** in `bots/base_bot.py` `_exit_trade()`, differentiate exit reasons:
+- `stop_loss` / `target_hit` → **SKIP** the EXIT WS send. OCO does the close; reconciler finalizes the Python position once NT8 reports FLAT.
+- All other reasons (managed exits) → keep current behavior (no OCO is firing for those).
+
+Safety net: existing retry-loop at position-management lines 1067-1108 still fires directional MARKET after `EXIT_PENDING_TIMEOUT_S=60s` if OCO somehow fails. That path is race-safe (reads NT8's actual direction first).
+
+Test results: 2092 passed / 19 skipped / 0 failed (same as pre-fix). Existing `test_auto_retry_flatten.py` + `test_close_position_verification.py` + `test_oif_pipeline_health.py` (34 cases) all pass.
+
+**Future hardening (out of scope tonight):** convert managed-exit CLOSEPOSITION to directional MARKET too, eliminating CLOSEPOSITION entirely from the bot's outbound surface.
