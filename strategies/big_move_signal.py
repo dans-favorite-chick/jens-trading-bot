@@ -60,6 +60,12 @@ class BigMoveSignal(BaseStrategy):
         self, market: dict, bars_5m: list, bars_1m: list,
         session_info: dict,
     ) -> Optional[Signal]:
+        # 2026-05-17 Phase 9.5 Item E: per-evaluate observability.
+        # Single entry log so eval-count grep works reliably, plus SKIP
+        # reason logs on every early-return path. Replaces the prior
+        # silent-return behavior that made this strategy invisible in
+        # Phase 9 per-strategy eval-count breakdown.
+        logger.debug(f"[EVAL] {self.name}: entered evaluate()")
 
         # Read the pre-move assessment enriched by base_bot earlier in
         # the eval cycle.
@@ -73,6 +79,10 @@ class BigMoveSignal(BaseStrategy):
         # tradable but adds noise; 90 keeps signal quality high.
         min_score = int(self.config.get("min_score", 90))
         if score < min_score:
+            logger.debug(
+                f"[EVAL] {self.name}: SKIP score_below_threshold "
+                f"({score} < {min_score})"
+            )
             return None
 
         if direction not in ("LONG", "SHORT"):
@@ -87,9 +97,11 @@ class BigMoveSignal(BaseStrategy):
         try:
             bar_ts = float(last_bar.end_time)
         except (AttributeError, TypeError, ValueError):
+            logger.debug(f"[EVAL] {self.name}: SKIP bar_end_time_unreadable")
             return None
         if bar_ts == self._last_signal_bar_ts:
             # Already fired on this bar
+            logger.debug(f"[EVAL] {self.name}: SKIP same_bar_dedup")
             return None
         self._last_signal_bar_ts = bar_ts
 
@@ -99,6 +111,7 @@ class BigMoveSignal(BaseStrategy):
         # a wider noise band. Clamped to keep within $50 budget.
         price = float(market.get("price", 0) or 0)
         if price <= 0:
+            logger.debug(f"[EVAL] {self.name}: SKIP no_price")
             return None
         atr_5m = float(market.get("atr_5m", 0) or 0)
         # Stop distance = 1.0 × ATR_5m, clamped to budget

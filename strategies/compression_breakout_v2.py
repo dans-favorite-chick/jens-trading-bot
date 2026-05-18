@@ -198,6 +198,10 @@ class CompressionBreakoutV2(BaseStrategy):
     # ── Main evaluate ──────────────────────────────────────────────
     def evaluate(self, market: dict, bars_5m: list, bars_1m: list,
                  session_info: dict) -> Optional[Signal]:
+        # 2026-05-17 Phase 9.5 Item E: per-evaluate observability.
+        # Single entry log so eval-count grep works reliably, plus SKIP
+        # reason logs on every early-return path.
+        logger.debug(f"[EVAL] {self.name}: entered evaluate()")
 
         now_ct = market.get("now_ct")
         if not isinstance(now_ct, datetime):
@@ -206,20 +210,30 @@ class CompressionBreakoutV2(BaseStrategy):
 
         max_trades = int(self.config.get("max_trades_per_day", 3))
         if self._trades_today >= max_trades:
+            logger.debug(
+                f"[EVAL] {self.name}: SKIP daily_cap "
+                f"({self._trades_today}/{max_trades} trades today)"
+            )
             return None
 
         # Use 5m bars as primary execution TF (matches original)
         if not bars_5m or len(bars_5m) < 50:
+            logger.debug(
+                f"[EVAL] {self.name}: SKIP warmup_5m "
+                f"({len(bars_5m) if bars_5m else 0}/50 bars)"
+            )
             return None
 
         ref_bar = bars_5m[-1]
         try:
             bar_ts = float(ref_bar.end_time)
         except (AttributeError, TypeError, ValueError):
+            logger.debug(f"[EVAL] {self.name}: SKIP bar_end_time_unreadable")
             return None
 
         # Per-bar dedup
         if bar_ts == self._last_signal_bar_ts:
+            logger.debug(f"[EVAL] {self.name}: SKIP same_bar_dedup")
             return None
 
         # ── Compute compression conditions on the current closed bar ──
@@ -235,6 +249,7 @@ class CompressionBreakoutV2(BaseStrategy):
         bb_sma, bb_upper, bb_lower = self._calculate_bb(bars_5m, bb_period, bb_std)
         kc_sma, kc_upper, kc_lower = self._calculate_kc(bars_5m, kc_period, kc_atr_mult)
         if bb_upper is None or kc_upper is None:
+            logger.debug(f"[EVAL] {self.name}: SKIP bb_or_kc_unavailable")
             return None
 
         bb_width = bb_upper - bb_lower
@@ -243,6 +258,7 @@ class CompressionBreakoutV2(BaseStrategy):
 
         current_atr = self._calculate_atr(bars_5m, atr_period)
         if current_atr is None or current_atr <= 0:
+            logger.debug(f"[EVAL] {self.name}: SKIP atr_unavailable_or_zero")
             return None
 
         # ATR rolling average (skip if not enough history)
@@ -253,6 +269,10 @@ class CompressionBreakoutV2(BaseStrategy):
             if atr_i is not None:
                 atr_history.append(atr_i)
         if len(atr_history) < atr_smoothing // 2:
+            logger.debug(
+                f"[EVAL] {self.name}: SKIP atr_history_insufficient "
+                f"({len(atr_history)}/{atr_smoothing // 2})"
+            )
             return None
         avg_atr = sum(atr_history) / len(atr_history)
         atr_compressed = current_atr <= avg_atr * atr_compression_ratio

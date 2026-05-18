@@ -1198,17 +1198,28 @@ class FootprintCVDReversal(BaseStrategy):
     ) -> Optional[Signal]:
         global _data_unavailable_logged
         cfg = self.cfg
+        # 2026-05-17 Phase 9.5 Item E: per-evaluate observability.
+        # Single entry log so eval-count grep works reliably, plus SKIP
+        # reason logs on every early-return path. The existing
+        # DATA_NOT_AVAILABLE log throttles to once-per-process via the
+        # _data_unavailable_logged flag, which made this strategy invisible
+        # in Phase 9 per-strategy eval-count breakdown after the first hit.
+        logger.debug(f"[EVAL] {self.name}: entered evaluate()")
         if not cfg.enabled:
+            logger.debug(f"[EVAL] {self.name}: SKIP disabled")
             return None
 
         now_ct = self._resolve_now_ct(market, session_info)
         if not isinstance(now_ct, datetime):
+            logger.debug(f"[EVAL] {self.name}: SKIP no_now_ct")
             return None
 
         # Hard gates
         if _is_lunch_block(now_ct, cfg):
+            logger.debug(f"[EVAL] {self.name}: SKIP lunch_block")
             return None
         if _is_session_boundary(now_ct, cfg):
+            logger.debug(f"[EVAL] {self.name}: SKIP session_boundary")
             return None
 
         latest = _load_volumetric_latest()
@@ -1220,18 +1231,27 @@ class FootprintCVDReversal(BaseStrategy):
                     "until TickStreamer.cs volumetric emitter ships."
                 )
                 _data_unavailable_logged = True
+            # 2026-05-17 Phase 9.5 Item E: per-evaluate visibility (this fires
+            # every cycle the data is missing; complements the throttled
+            # INFO log above which only fires once-per-process).
+            logger.debug(f"[EVAL] {self.name}: SKIP data_not_available")
             return None
 
         # Freshness check — stale data means TickStreamer disconnected
         try:
             bar_ts = datetime.fromisoformat(latest["ts"]).astimezone(_CT)
         except Exception:
+            logger.debug(f"[EVAL] {self.name}: SKIP bar_ts_parse_fail")
             return None
         age_s = (now_ct - bar_ts).total_seconds()
         if age_s > cfg.data_freshness_sec:
             logger.info(
                 f"[FOOTPRINT_CVD] DATA_STALE — last bar {bar_ts} "
                 f"({age_s:.0f}s old, max {cfg.data_freshness_sec}s)"
+            )
+            # 2026-05-17 Phase 9.5 Item E: per-evaluate visibility.
+            logger.debug(
+                f"[EVAL] {self.name}: SKIP data_stale ({age_s:.0f}s)"
             )
             return None
 
