@@ -17,6 +17,12 @@ Returns (stop_ticks, stop_price, atr_stop_override_flag, note).
 
 from __future__ import annotations
 
+# 2026-05-17: Phase 7 CODE PATCH 3 — re-export compute_confirmation_stop
+# and snap_to_tick from core.confirmation_stop for backwards-compatible
+# imports from strategy files. The canonical implementation lives in
+# core.confirmation_stop (added in Phase 1, commit 9a5de35).
+from core.confirmation_stop import compute_confirmation_stop, snap_to_tick  # noqa: F401
+
 
 def compute_atr_stop(
     direction: str,

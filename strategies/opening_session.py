@@ -763,9 +763,28 @@ class OpeningSessionStrategy(BaseStrategy):
             self._log_eval(f"NO_SIGNAL {sub} non_positive_or")
             return None
 
+        # 2026-05-17: Phase 7 CODE PATCH 4 — OR-range floor/cap in POINTS.
+        # Complements orb_max_range_pct (which is %-of-RTH-open) with absolute
+        # MNQ point bounds: skip OR < 11pt (low-vol day, edge dies) and
+        # OR > 80pt (news-gap, stops too wide to fit budget). Configurable.
+        _min_or_pts = float(self.config.get("orb_min_range_pts", 0))
+        _max_or_pts = float(self.config.get("orb_max_range_pts", 1e9))
+        if or_size < _min_or_pts:
+            self._log_eval(
+                f"NO_SIGNAL {sub} or_too_narrow "
+                f"({or_size:.1f}pt < {_min_or_pts:.1f}pt)"
+            )
+            return None
+        if or_size > _max_or_pts:
+            self._log_eval(
+                f"NO_SIGNAL {sub} or_too_wide "
+                f"({or_size:.1f}pt > {_max_or_pts:.1f}pt)"
+            )
+            return None
+
         max_pct = float(self.config.get("orb_max_range_pct", 0.008))
         if rth_open > 0 and (or_size / rth_open) > max_pct:
-            self._log_eval(f"NO_SIGNAL {sub} or_too_wide")
+            self._log_eval(f"NO_SIGNAL {sub} or_too_wide_pct")
             return None
 
         direction: Optional[str] = None
@@ -782,12 +801,63 @@ class OpeningSessionStrategy(BaseStrategy):
             self._log_eval(f"NO_SIGNAL {sub} opposite_of_first_break")
             return None
 
+        # 2026-05-17: Phase 7 CODE PATCH 4 — CVD alignment gate.
+        # Eliminate false breakouts: require last 5 bars of CVD delta to
+        # agree with breakout direction. Without this the ORB sub catches
+        # the unconfirmed sweeps that orb_fade is designed to fade.
+        if self.config.get("orb_require_cvd_aligned", False):
+            _cvd_lookback = int(self.config.get("orb_cvd_lookback_bars", 5))
+            _bars_1m_in = market.get("_bars_1m") or []
+            if len(_bars_1m_in) >= _cvd_lookback:
+                _recent = _bars_1m_in[-_cvd_lookback:]
+                _delta_sum = sum(
+                    float(getattr(b, "delta", getattr(b, "bar_delta", 0)) or 0)
+                    for b in _recent
+                )
+                if direction == "LONG" and _delta_sum <= 0:
+                    self._log_eval(
+                        f"NO_SIGNAL {sub} cvd_misaligned_long "
+                        f"delta_sum={_delta_sum:.0f}"
+                    )
+                    return None
+                if direction == "SHORT" and _delta_sum >= 0:
+                    self._log_eval(
+                        f"NO_SIGNAL {sub} cvd_misaligned_short "
+                        f"delta_sum={_delta_sum:.0f}"
+                    )
+                    return None
+
         # Structural stop = opposite side of OR.
+        # 2026-05-17: Phase 7 CODE PATCH 4 — when structural stop wider than
+        # use_confirmation_stop_above_ticks, switch to confirmation-bar stop
+        # (just beyond recent swing) instead of clamping/rejecting.
         structural_stop = or_low if direction == "LONG" else or_high
-        stop_price = self._apply_universal_stop_clamp(price, structural_stop, direction, sub)
-        if stop_price is None:
-            return None
-        stop_ticks = self._stop_ticks(price, stop_price)
+        _structural_dist_ticks = abs(price - structural_stop) / TICK_SIZE
+        _conf_threshold = int(
+            self.config.get("use_confirmation_stop_above_ticks", 1_000_000)
+        )
+        if _structural_dist_ticks > _conf_threshold:
+            from strategies._nq_stop import compute_confirmation_stop
+            _bars_1m_in = market.get("_bars_1m") or []
+            stop_ticks, stop_price, _conf_note = compute_confirmation_stop(
+                direction=direction,
+                entry_price=price,
+                bars_1m=_bars_1m_in,
+                lookback_bars=5,
+                buffer_ticks=2,
+                tick_size=TICK_SIZE,
+            )
+            self._log_eval(
+                f"{sub}: structural {_structural_dist_ticks:.0f}t too wide "
+                f"(> {_conf_threshold}t); using {_conf_note}"
+            )
+        else:
+            stop_price = self._apply_universal_stop_clamp(
+                price, structural_stop, direction, sub
+            )
+            if stop_price is None:
+                return None
+            stop_ticks = self._stop_ticks(price, stop_price)
 
         target_pct = float(self.config.get("orb_target_pct_of_or", 0.50))
         be_pct = float(self.config.get("orb_be_pct_of_or", 0.25))

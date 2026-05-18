@@ -2823,6 +2823,18 @@ class BaseBot:
         # Get market state FIRST (needed by risk gate and everything below)
         market = self.aggregator.snapshot()
 
+        # 2026-05-17: Phase 7 CODE PATCH 6 — pass bar lists through the
+        # market dict so sub-evaluators that only receive `market` (like
+        # opening_session's _evaluate_orb / _evaluate_orb_fade) can access
+        # bars without changing the public evaluate(market, ...) signature.
+        # No copy; just a reference. Zero perf impact.
+        market["_bars_1m"] = bars_1m
+        market["_bars_5m"] = bars_5m
+        try:
+            market["_bars_15m"] = list(self.aggregator.bars_15m.completed)
+        except AttributeError:
+            market["_bars_15m"] = []
+
         # Enrich market snapshot with RSI + HTF pattern data for strategies
         market["rsi"] = self.rsi_divergence.get_current_rsi()
         market["rsi_divergence"] = self._last_rsi_divergence

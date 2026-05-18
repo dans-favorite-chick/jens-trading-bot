@@ -1161,6 +1161,33 @@ class FootprintCVDReversal(BaseStrategy):
         clean_cfg = {k: v for k, v in (config or {}).items()
                      if k in valid_fields}
         self.cfg = FootprintCVDConfig(**clean_cfg)
+        # 2026-05-17: Phase 7 FCD-3 — validate target_rr config.
+        # Negative or non-finite target_rr produces wrong-side targets
+        # (LONG with rr=-2 puts target BELOW entry). Sanitize once at
+        # init so the rest of evaluate() can trust cfg.target_t1_rr/t2_rr.
+        import math as _math
+        if (self.cfg.target_t1_rr <= 0
+                or not _math.isfinite(self.cfg.target_t1_rr)):
+            logger.warning(
+                f"[FOOTPRINT_CVD] bad target_t1_rr={self.cfg.target_t1_rr}, "
+                f"using 1.0"
+            )
+            self.cfg.target_t1_rr = 1.0
+        if (self.cfg.target_t2_rr <= 0
+                or not _math.isfinite(self.cfg.target_t2_rr)):
+            logger.warning(
+                f"[FOOTPRINT_CVD] bad target_t2_rr={self.cfg.target_t2_rr}, "
+                f"using 2.0"
+            )
+            self.cfg.target_t2_rr = 2.0
+        if self.cfg.target_t2_rr <= self.cfg.target_t1_rr:
+            logger.warning(
+                f"[FOOTPRINT_CVD] target_t2_rr ({self.cfg.target_t2_rr}) "
+                f"<= target_t1_rr ({self.cfg.target_t1_rr}); swapping"
+            )
+            self.cfg.target_t1_rr, self.cfg.target_t2_rr = (
+                self.cfg.target_t2_rr, self.cfg.target_t1_rr,
+            )
 
     def evaluate(
         self,
@@ -1208,6 +1235,29 @@ class FootprintCVDReversal(BaseStrategy):
             )
             return None
 
+        # 2026-05-17: Phase 7 FCD-2 — NaN guard on volumetric bar fields.
+        # delta_total / OHLC NaN values silently pass downstream comparisons.
+        # Reject corrupt bars (partial / tick-stream glitch) explicitly.
+        import math as _math
+        _critical_fields = ("delta_total", "high", "low", "open", "close")
+        for _field in _critical_fields:
+            _val = latest.get(_field)
+            if _val is None:
+                continue
+            try:
+                if not _math.isfinite(float(_val)):
+                    logger.warning(
+                        f"[FOOTPRINT_CVD] SKIP corrupt_volumetric_bar "
+                        f"{_field}={_val} not finite"
+                    )
+                    return None
+            except (TypeError, ValueError):
+                logger.warning(
+                    f"[FOOTPRINT_CVD] SKIP corrupt_volumetric_bar "
+                    f"{_field}={_val} not numeric"
+                )
+                return None
+
         # Load history for divergence + compression baselines. Must load
         # at least min_history_bars so the warmup gate below isn't tripped
         # purely by under-loading (rather than genuinely insufficient data).
@@ -1223,7 +1273,20 @@ class FootprintCVDReversal(BaseStrategy):
         price = market.get("price")
         if price is None:
             return None
+        # 2026-05-17: Phase 7 FCD-1 — finite-value guards.
+        # NaN/Inf comparisons silently evaluate False, letting garbage
+        # values pass downstream gates. Reject explicitly here.
+        import math as _math
+        try:
+            price = float(price)
+        except (TypeError, ValueError):
+            return None
+        if not _math.isfinite(price) or price <= 0:
+            logger.warning(f"[FOOTPRINT_CVD] SKIP non_finite_price={price}")
+            return None
         tick_size = market.get("tick_size", 0.25)
+        if not _math.isfinite(tick_size) or tick_size <= 0:
+            tick_size = 0.25
         # Sprint J (2026-05-05): structure_bias replaces gamma_regime.
         # Falls back to legacy fields for compatibility with old market
         # dicts; default UNKNOWN never trips a regime gate.
@@ -1435,20 +1498,31 @@ class FootprintCVDReversal(BaseStrategy):
             )
             buffer_price = atr_buffer_ticks * tick_size
 
+            # 2026-05-17: Phase 7 FCD-4 — min_stop_ticks floor (was 1, allows
+            # micro-stops eaten by NQ noise; 8t = 2pt is structurally sound)
+            # + tick-grid snap on stop_price (off-grid prices rejected by
+            # PhoenixOIFGuard / NT8 router).
+            _min_stop_ticks = int(self.config.get("min_stop_ticks", 8))
             if direction == "long":
                 stop_price = trigger_low - buffer_price
                 stop_ticks = max(
-                    1,
+                    _min_stop_ticks,
                     min(cfg.max_stop_ticks,
                         int(round((price - stop_price) / tick_size))),
                 )
+                # Recompute stop_price from CLAMPED stop_ticks so it stays
+                # consistent if min/max floor was hit
+                stop_price = price - stop_ticks * tick_size
             else:
                 stop_price = trigger_high + buffer_price
                 stop_ticks = max(
-                    1,
+                    _min_stop_ticks,
                     min(cfg.max_stop_ticks,
                         int(round((stop_price - price) / tick_size))),
                 )
+                stop_price = price + stop_ticks * tick_size
+            # Snap stop_price to tick grid (PhoenixOIFGuard rejects off-grid).
+            stop_price = round(stop_price / tick_size) * tick_size
 
             # 2026-05-13 (#14): explicit CVD div-type instrumentation so
             # post-hoc analysis can answer "do multi-bar divs outperform
@@ -1504,6 +1578,15 @@ class FootprintCVDReversal(BaseStrategy):
             if ctx_debug["poc_migration_aligned"]:
                 confluences.append("poc_migration_aligned")
 
+            # 2026-05-17: Phase 7 FCD-5 — pre-compute and snap target_price
+            # to the tick grid. Off-grid target prices are rejected by
+            # PhoenixOIFGuard / NT8 router.
+            if direction == "long":
+                _target_price = price + (price - stop_price) * cfg.target_t2_rr
+            else:
+                _target_price = price - (stop_price - price) * cfg.target_t2_rr
+            _target_price = round(_target_price / tick_size) * tick_size
+
             return Signal(
                 direction="LONG" if direction == "long" else "SHORT",
                 stop_ticks=stop_ticks,
@@ -1521,9 +1604,8 @@ class FootprintCVDReversal(BaseStrategy):
                 entry_price=price,
                 stop_price=stop_price,
                 # T2 in price terms (T1 50% scale-out at +1R is base_bot's job)
-                target_price=(price + (price - stop_price) * cfg.target_t2_rr
-                              if direction == "long"
-                              else price - (stop_price - price) * cfg.target_t2_rr),
+                # Snapped to tick grid via FCD-5 (above) — pass the variable.
+                target_price=_target_price,
                 scale_out_rr=cfg.target_t1_rr,
                 metadata={
                     "sub_strategy": "footprint_cvd_reversal",

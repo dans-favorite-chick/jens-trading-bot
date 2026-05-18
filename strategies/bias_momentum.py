@@ -178,6 +178,38 @@ class BiasMomentumFollow(BaseStrategy):
         cr_verdict = market.get("cr_verdict", "UNKNOWN")
 
         # 5m EMA stack — the primary structural signal
+        # 2026-05-17: Phase 7 CODE PATCH 2 — early-session EMA fallback.
+        # First 5-7 5m bars don't produce stable EMAs. Eval log evidence:
+        # 6/24 rejections in 08:30-09:30 CT are EMA_STACK failures. 1m
+        # EMAs ARE stable by 08:33 CT — use as proxy when 5m unstable.
+        try:
+            _ts = market.get("tick_size", 0.25) or 0.25
+            if (ema9 == 0.0 or ema21 == 0.0 or abs(ema9 - ema21) < _ts):
+                if self.config.get("ema_stack_early_session_fallback", False):
+                    from datetime import datetime as _dt
+                    from zoneinfo import ZoneInfo as _ZI
+                    _CT = _ZI("America/Chicago")
+                    _now_ct = market.get("now_ct") or _dt.now(_CT)
+                    _cutoff_str = self.config.get(
+                        "ema_stack_early_session_end_ct", "09:00"
+                    )
+                    _cutoff_t = _dt.strptime(_cutoff_str, "%H:%M").time()
+                    if _now_ct.time() < _cutoff_t:
+                        _ema9_1m = float(market.get("ema9_1m", 0) or 0)
+                        _ema21_1m = float(market.get("ema21_1m", 0) or 0)
+                        if (_ema9_1m > 0 and _ema21_1m > 0
+                                and abs(_ema9_1m - _ema21_1m) >= _ts):
+                            # Use 1m EMAs as proxy for 5m (logged below)
+                            ema9 = _ema9_1m
+                            ema21 = _ema21_1m
+                            logger.debug(
+                                f"[EVAL] {self.name}: early_session_ema_fallback "
+                                f"(now={_now_ct.time().isoformat(timespec='minutes')}, "
+                                f"cutoff={_cutoff_str}, using 1m EMAs)"
+                            )
+        except Exception as _ema_fb_err:
+            logger.debug(f"[EVAL] {self.name}: ema fallback skipped: {_ema_fb_err!r}")
+
         ema_stack_long  = (ema9 > 0 and ema21 > 0 and ema9 > ema21)
         ema_stack_short = (ema9 > 0 and ema21 > 0 and ema9 < ema21)
 
@@ -259,7 +291,15 @@ class BiasMomentumFollow(BaseStrategy):
         # `short_extra_gates=True` (default), SHORT entries require BOTH 1m
         # AND 5m tf_bias = BEARISH on top of the standard EMA-stack gate.
         # See out/bias_momentum_research_2026-05-03.md §2.
-        if direction == "SHORT" and self.config.get("short_extra_gates", True):
+        #
+        # 2026-05-17: Phase 7 CODE PATCH 1 — gated behind a SECOND flag
+        # `short_extra_gate_enabled` (default False in V2 deployment). The
+        # min_tf_votes>=2 gate already encodes multi-TF agreement; stacking
+        # both excluded every SHORT signal where 1m flipped first (typical
+        # NQ reversal pattern). Both flags must be True to trigger reject.
+        if (direction == "SHORT"
+                and self.config.get("short_extra_gates", True)
+                and self.config.get("short_extra_gate_enabled", False)):
             if bias_1m != "BEARISH" or bias_5m != "BEARISH":
                 self._last_reject = (
                     f"BIAS_MOM: SHORT extra-gate — both 1m AND 5m bias must be "
@@ -730,6 +770,18 @@ class BiasMomentumFollow(BaseStrategy):
         # ATR distance were 0W/5L. The vol regime asked for a wider stop than
         # the strategy's risk tier allows; clamping created an undersized stop
         # that got hit. Better to skip the trade entirely.
+        #
+        # 2026-05-17: Phase 7 CODE PATCH 3 — confirmation-bar stop fallback.
+        # When stop_fallback_mode=="confirmation" (V2 deployment default),
+        # instead of skipping signals where natural ATR exceeds max_stop_ticks,
+        # switch to a confirmation-bar stop (just beyond recent swing extreme).
+        # This is structurally meaningful (8-40t typically) AND tight enough
+        # for the $50/100 budget gate. Eval-log evidence: stop_clamp skips
+        # rejected ~5% of bias_momentum signals on 5/15; this path keeps them.
+        _conf_stop_used = False
+        _conf_stop_ticks = None
+        _conf_stop_price = None
+        _conf_stop_note = None
         if self.config.get("skip_on_stop_clamp", True):
             _raw_ticks = compute_natural_stop_ticks(
                 direction=direction,
@@ -740,27 +792,57 @@ class BiasMomentumFollow(BaseStrategy):
                 stop_atr_mult=self.config.get("stop_atr_mult", 2.0),
             )
             if _raw_ticks > _max_st:
-                self._last_reject = (
-                    f"BIAS_MOM: stop_clamp skip — natural ATR stop "
-                    f"{_raw_ticks}t > max {_max_st}t. Vol regime mismatch."
-                )
-                logger.info(
-                    f"[SKIP:{self.name}] stop_clamp: natural={_raw_ticks}t "
-                    f"max={_max_st}t — vol regime mismatch"
-                )
-                return None
+                if self.config.get("stop_fallback_mode", "skip") == "confirmation":
+                    # V2 deployment fallback path — use confirmation-bar stop.
+                    from strategies._nq_stop import compute_confirmation_stop
+                    _conf_stop_ticks, _conf_stop_price, _conf_stop_note = (
+                        compute_confirmation_stop(
+                            direction=direction,
+                            entry_price=_entry_for_stop,
+                            bars_1m=bars_1m,
+                            lookback_bars=5,
+                            buffer_ticks=2,
+                            tick_size=_ts_stop,
+                        )
+                    )
+                    _conf_stop_used = True
+                    confluences.append(
+                        f"NQ vol-regime stop: {_conf_stop_note} "
+                        f"(natural ATR {_raw_ticks}t > max {_max_st}t — fallback)"
+                    )
+                    logger.info(
+                        f"[STOP_FALLBACK:{self.name}] natural={_raw_ticks}t "
+                        f"max={_max_st}t — using {_conf_stop_note}"
+                    )
+                else:
+                    # Legacy skip behavior.
+                    self._last_reject = (
+                        f"BIAS_MOM: stop_clamp skip — natural ATR stop "
+                        f"{_raw_ticks}t > max {_max_st}t. Vol regime mismatch."
+                    )
+                    logger.info(
+                        f"[SKIP:{self.name}] stop_clamp: natural={_raw_ticks}t "
+                        f"max={_max_st}t — vol regime mismatch"
+                    )
+                    return None
 
-        stop_ticks, stop_price, atr_override, stop_note = compute_atr_stop(
-            direction=direction,
-            entry_price=_entry_for_stop,
-            last_5m_bar=last_5m,
-            atr_5m_points=atr_5m,
-            tick_size=_ts_stop,
-            stop_atr_mult=self.config.get("stop_atr_mult", 2.0),
-            min_stop_ticks=self.config.get("min_stop_ticks", 40),
-            max_stop_ticks=_max_st,
-            stop_fallback_ticks=self.config.get("stop_fallback_ticks", 64),
-        )
+        if _conf_stop_used:
+            stop_ticks = _conf_stop_ticks
+            stop_price = _conf_stop_price
+            atr_override = True
+            stop_note = _conf_stop_note
+        else:
+            stop_ticks, stop_price, atr_override, stop_note = compute_atr_stop(
+                direction=direction,
+                entry_price=_entry_for_stop,
+                last_5m_bar=last_5m,
+                atr_5m_points=atr_5m,
+                tick_size=_ts_stop,
+                stop_atr_mult=self.config.get("stop_atr_mult", 2.0),
+                min_stop_ticks=self.config.get("min_stop_ticks", 40),
+                max_stop_ticks=_max_st,
+                stop_fallback_ticks=self.config.get("stop_fallback_ticks", 64),
+            )
         confluences.append(stop_note)
 
         # ── 2026-05-13: CVD trend-health veto (entry filter) ──────────────
