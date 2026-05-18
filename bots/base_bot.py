@@ -4589,24 +4589,59 @@ class BaseBot:
         self.status = "EXIT_PENDING"
         logger.info(f"[EXIT_PENDING:{tid}] Sending exit for {pos.direction} @ {price:.2f}, reason={reason}")
 
-        # STEP 1: B75 — SKIP pre-exit CANCELALLORDERS. Rely on NT8 OCO
-        # auto-cancel: when the EXIT MARKET order fills, position goes
-        # flat, and NT8 automatically cancels the orphaned OCO stop +
-        # target because their OCO group detects position closure.
-        # Pre-B75 behavior (CANCELALLORDERS before EXIT) wiped OCOs on
-        # every connected account because NT8 ATI ignores the account
-        # field on CANCELALLORDERS. Send EXIT directly — OCO cleans up.
+        # 2026-05-17 Phase 9.5 Incident #1 fix: CLOSEPOSITION-vs-OCO race.
+        #
+        # When the exit reason is "stop_loss" or "target_hit", NT8's OCO
+        # bracket is ALREADY firing (that's what triggered our detection).
+        # Sending an additional EXIT (which becomes CLOSEPOSITION) creates
+        # a race: both arrive at NT8 simultaneously, the OCO closes the
+        # position first, the CLOSEPOSITION then hits a FLAT account and
+        # NT8 interprets it as a fresh BUY/SELL — phantom reverse position.
+        # Reconciler catches it ~25s later and market-flattens, but slippage
+        # on the round-trip 4x'd the loss on 2026-05-17 21:25 SimBias
+        # Momentum trade (-$54.82 realized vs -$12.50 intent).
+        #
+        # Fix: for stop/target exits, SKIP the EXIT WS send. Just transition
+        # to EXIT_PENDING and wait for NT8's FLAT confirmation. The runtime
+        # reconciler (every 30s) detects the FLAT state and finalizes the
+        # Python position. If the OCO somehow doesn't fire (silently
+        # cancelled by some other race), the existing retry-loop at
+        # position-management lines 1067-1108 kicks in after
+        # EXIT_PENDING_TIMEOUT_S (60s) and sends a directional MARKET as
+        # backup — that path already exists and is race-safe.
+        #
+        # For all OTHER exit reasons (managed exits like cvd_flip,
+        # ema_dom_exit, time_exit, BIG_MOVE_EXIT, etc.), the OCO is NOT
+        # firing; the bot must actively close. Keep existing EXIT WS send
+        # for those. (Future hardening: convert THOSE to directional MARKET
+        # too, eliminating CLOSEPOSITION entirely. Out of scope here.)
+        _OCO_HANDLED_REASONS = ("stop_loss", "target_hit")
         exit_sent = False
-        try:
-            await ws.send(json.dumps({
-                "type": "trade", "trade_id": tid,
-                "action": "EXIT", "qty": pos.contracts,
-                "account": pos.account,
-                "reason": reason,
-            }))
-            exit_sent = True
-        except Exception as e:
-            logger.error(f"[EXIT:{tid}] WS send failed: {e} — writing OIF fallback")
+        if reason in _OCO_HANDLED_REASONS:
+            logger.info(
+                f"[EXIT_PENDING:{tid}] reason={reason} — OCO handles this. "
+                f"Skipping EXIT WS send to avoid CLOSEPOSITION-vs-OCO race. "
+                f"Reconciler will finalize once NT8 reports FLAT."
+            )
+            exit_sent = True  # not actually sent — just gate the fallback path
+        else:
+            # STEP 1: B75 — SKIP pre-exit CANCELALLORDERS. Rely on NT8 OCO
+            # auto-cancel: when the EXIT MARKET order fills, position goes
+            # flat, and NT8 automatically cancels the orphaned OCO stop +
+            # target because their OCO group detects position closure.
+            # Pre-B75 behavior (CANCELALLORDERS before EXIT) wiped OCOs on
+            # every connected account because NT8 ATI ignores the account
+            # field on CANCELALLORDERS. Send EXIT directly — OCO cleans up.
+            try:
+                await ws.send(json.dumps({
+                    "type": "trade", "trade_id": tid,
+                    "action": "EXIT", "qty": pos.contracts,
+                    "account": pos.account,
+                    "reason": reason,
+                }))
+                exit_sent = True
+            except Exception as e:
+                logger.error(f"[EXIT:{tid}] WS send failed: {e} — writing OIF fallback")
             try:
                 # Sink-mediated EXIT fallback. Identical to the legacy
                 # write_oif('EXIT', ...) call when PHOENIX_RISK_GATE=0.
