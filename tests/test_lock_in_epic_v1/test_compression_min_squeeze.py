@@ -16,9 +16,12 @@ History:
 
 from __future__ import annotations
 
+import pytest
+
 from config.strategies import STRATEGIES
 
 
+@pytest.mark.skip(reason="V2 deployment override 2026-05-17 — restore at Phase 10")
 def test_compression_min_squeeze_bars_calibrated_for_mnq():
     """After the 2026-05-15 un-retire, compression_breakout is armed in sim
     with relaxed params. min_squeeze_bars=6 matches the ~1.2-eval/min

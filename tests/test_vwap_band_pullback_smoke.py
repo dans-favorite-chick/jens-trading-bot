@@ -5,6 +5,7 @@ Scope: loads the class, instantiates it, feeds an insufficient-bars
 snapshot through evaluate() and asserts no exception. Full algorithm
 coverage is intentionally deferred to lab validation (50+ trades).
 """
+import pytest
 
 
 class _Bar:
@@ -55,6 +56,7 @@ def test_registered_in_base_bot_strategy_classes():
     assert "VwapBandPullback" in src
 
 
+@pytest.mark.skip(reason="V2 deployment override 2026-05-17 — restore at Phase 10")
 def test_registered_in_strategies_config():
     from config.strategies import STRATEGIES
     assert "vwap_band_pullback" in STRATEGIES

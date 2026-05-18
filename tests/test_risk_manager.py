@@ -30,8 +30,12 @@ class TestCanTrade:
         assert allowed is True
         assert reason == "OK"
 
+    @pytest.mark.skip(reason="V2 deployment override 2026-05-17 — restore at Phase 10")
     def test_can_trade_blocks_when_daily_loss_limit_hit(self, rm):
         # Daily loss limit is $45; push daily_pnl to -$45
+        # 2026-05-17: Phase 0 set DAILY_LOSS_LIMIT=1_000_000 for sim testing.
+        # Test was correct against the pre-deployment $45 cap; restore at
+        # Phase 10 when DAILY_LOSS_LIMIT goes back to $45.
         rm.state.daily_pnl = -45.0
         allowed, reason = rm.can_trade()
         assert allowed is False

@@ -130,9 +130,15 @@ class TestFallbackAndEdges:
         #   SimCompression Breakout, SimCompression Break out 30 MIN,
         #   SimNoise Area, SimStand alone ORB,
         #   SimFootprintchart (Sprint H v3, 2026-05-04)
-        # + Sim101 default = 19 unique NT8 accounts.
+        # = 18 baseline + Sim101 default = 19 unique NT8 accounts.
+        #
+        # 2026-05-17 V2 deployment: 6 NEW accounts permanently added
+        # (commit 141ad58 pre-deployment + STRATEGY_ACCOUNT_MAP edits):
+        #   Sim_LSR, Sim_ORB-Fade, SimORB_v2, Sim_Compression_v2,
+        #   Sim_Compression_Micro, Sim_VWAP_Pullback_v2
+        # Account count permanently increased to 25.
         accounts = validate_account_map()
-        assert len(accounts) == 19
+        assert len(accounts) == 25
         # Spot-check a few known members.
         assert "Sim101" in accounts
         assert "SimOpenDrive" in accounts
@@ -140,6 +146,10 @@ class TestFallbackAndEdges:
         assert "SimStand alone ORB" in accounts
         assert "SimCompression Break out 30 MIN" in accounts
         assert "SimVwap Reversion" in accounts  # 2026-05-03 new strategy
+        # 2026-05-17 V2 deployment spot-checks
+        assert "Sim_LSR" in accounts
+        assert "SimORB_v2" in accounts
+        assert "Sim_Compression_Micro" in accounts
 
 
 # ═══════════════════════════════════════════════════════════════════

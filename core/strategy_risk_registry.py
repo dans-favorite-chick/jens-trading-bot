@@ -58,9 +58,21 @@ STRATEGY_KEYS: list[str] = [
     "compression_breakout_30m",
     "noise_area",
     "orb",
-    # Sprint H v3 (2026-05-04) — institutional 4-confluence reversal.
-    # Lab-only (validated=False); routes to SimFootprintchart.
     "footprint_cvd_reversal",
+    # 2026-05-17 V2 deployment: 6 new strategy keys (Phase 4 added their
+    # config blocks; routing map adds matching Sim_* accounts). Required
+    # here so StrategyRiskRegistry tracks PER_STRATEGY_DAILY_LOSS_CAP +
+    # halt state per-strategy. Tests enforce parity with the routing map
+    # (tests/test_strategy_risk_registry.py::test_strategy_keys_count_matches_account_routing).
+    "nq_lsr",
+    "orb_fade",
+    "orb_v2",
+    "compression_breakout_v2",
+    "compression_breakout_micro",
+    "vwap_pullback_v2",
+    # Sprint H v3 footprint plus V2 deployment block above kept together
+    # so the per-strategy halt-state file shows them adjacent in load order.
+    #
     # Parent key for sub-strategy dispatch (opening_session evaluates all 6 subs)
     "opening_session",
 ]
