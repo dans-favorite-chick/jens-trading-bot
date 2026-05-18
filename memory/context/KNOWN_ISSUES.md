@@ -2,7 +2,41 @@
 
 _Open issues that haven't been resolved yet. Resolved issues moved to semantic/lessons_learned.md._
 
-_Last refreshed: 2026-05-13 PM (today-pnl per-bot-files fix; tooling audit pending)._
+_Last refreshed: 2026-05-18 01:25 CT (Phase 12C MES feed dependency added)._
+
+## 🚧 OPEN (2026-05-18, blocks Phase 12C live firing) — no live MES feed
+
+Phoenix V2 deployed Phase 12C (`es_nq_confluence` strategy) on 2026-05-18 at
+commit `dbba094` based on a 5-year Databento backtest that produced
+$1,548 / 131 trades / PF 2.63 / max DD $72 / 6/6 years positive (including
+2022 bear: +$1,032).
+
+**Blocker for live firing:** the strategy requires `market["mes_bars_5m"]`
+(parallel MES 5-min bars). Phoenix's TickStreamer streams only MNQ; the
+backtest worked because Databento delivered MES bars. Live Phoenix gets
+zero MES context, so the strategy logs `DATA_NOT_AVAILABLE` once-per-process
+and then `SKIP data_not_available` on every eval cycle. Same dormant
+state pattern as `footprint_cvd_reversal` was in before its volumetric
+stream landed. ZERO behavioral risk to live trading — the strategy is
+correctly fail-safe.
+
+**Resolution sequence** (separate sprint; ~1-2 days of work):
+
+1. Operator: load `TickStreamer` indicator on a MES chart in NT8 (same C# code, different instrument).
+2. Code: `bridge_server.py` fan out MES ticks under `mes_*` JSON keys.
+3. Code: `tick_aggregator.py` builds parallel `mes_bars_5m` (plus 1m for fill-precision parity).
+4. Code: `bots/base_bot.py` enriches `market["mes_bars_5m"]` from the aggregator.
+5. `strategies/es_nq_confluence.py` — no change required (already reads `market["mes_bars_5m"]`).
+
+Once step 4 ships + sim_bot is restarted, the `[EVAL] es_nq_confluence:
+data_not_available` lines will be replaced by `[EVAL] es_nq_confluence:
+NO_SIGNAL boost_below (...)` lines on quiet bars and eventually a
+`SIGNAL LONG` when boost ≥ 25 + corr ≥ 0.85 align.
+
+Until then, V2 deployment runs with the 14 firing strategies + 1 dormant
+big_move_signal + 1 dormant es_nq_confluence. Roster intact, routing correct.
+
+---
 
 ## ✅ RESOLVED (2026-05-13 PM, commit `c9099d7`) — trade_memory.json reader audit
 

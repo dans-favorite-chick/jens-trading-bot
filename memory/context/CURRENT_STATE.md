@@ -1,6 +1,6 @@
 # Phoenix Bot — Current State
 
-_Last updated: **2026-05-14 14:50 CT** (after prod_bot restart on new code + dashboard calendar-day boundary fix)_
+_Last updated: **2026-05-18 01:25 CT** (overnight V2 deployment + Phase 9.5 hotfixes + Phase 11 Databento ingest + Phase 12C ES/NQ confluence strategy)_
 
 **Quick refs:**
 - **[RECENT_CHANGES.md](RECENT_CHANGES.md)** — running dated log of every change, newest first
@@ -10,7 +10,35 @@ _Last updated: **2026-05-14 14:50 CT** (after prod_bot restart on new code + das
 
 ---
 
-## AT A GLANCE — 2026-05-15 08:34 CT (Friday, 4 min into cash open)
+## AT A GLANCE — 2026-05-18 01:25 CT (Monday pre-cash-open, ~7h to 08:30 CT)
+
+| Item | State |
+|---|---|
+| Branch | `weekly-evolution/2026-05-17` (**16 commits unpushed**) |
+| HEAD | `dbba094` (Phase 12C: ES/NQ Confluence LONG strategy) |
+| Test suite | **2,110 pass / 19 skip / 0 fail** in 80s |
+| Sim_bot freshness | Running ~62h on commit `853482e` (Phase 9.1). **Needs restart before 08:30 CT cash open** to pick up Phase 9.5 fixes + Incident #1 fix + Phase 12C. |
+| Prod_bot | Untouched — runs known-good pre-V2 code by operator scope. Will re-evaluate prod after sim validates 1-2 sessions. |
+| **Strategy roster** | **16 strategies** (15 from V2 deployment + 1 new Phase 12C). 14 enabled/validated, 1 enabled/sim-only (big_move_signal), 1 enabled/dormant pending MES feed (es_nq_confluence). |
+| **NEW today: Phase 12C ES/NQ confluence** | 5-year Databento backtest: 131 trades, 50.4% WR, $1,548 / $11.82/trade, **PF 2.63, max DD $72, 6/6 years positive incl. 2022 bear +$1,032**. Currently DORMANT — needs MES feed wiring before it'll fire (see KNOWN_ISSUES). |
+| **Phase 0 sim-testing overrides STILL ACTIVE** | DAILY_LOSS_LIMIT=$1M, PER_STRATEGY_DAILY_LOSS_CAP=$1M, MAX_ACTUAL_STOP_DOLLARS_PER_TRADE=$100, skip_on_stop_clamp=False on 3 strategies, validated=True on 7 strategies (operator override). **MUST RESTORE before live** — Phase 10 todo. |
+| **Phase 9.5 + Incident #1 fixes committed but NOT loaded** | dupe_test halt cleanup, [EVAL] SKIP logging on 3 silent strategies, CNN F&G 24h cache, CLOSEPOSITION-vs-OCO race fix. All effective at next sim_bot restart. |
+| Databento dataset | 5y MNQ + MES 1-min OHLCV (599MB raw + 385MB derived), gitignored. Regen via `tools/decompress_databento.py` + `databento_to_phoenix_v2.py`. |
+| NT8 + TickStreamer | Live (MNQ only — **MES feed NOT yet wired**, blocks Phase 12C live firing). |
+| Alerting | Self-healing — PhoenixWatcher 5-min auto-respawn pattern in place. |
+
+### Resumption protocol for Monday 2026-05-18 08:30 CT cash open
+
+1. **~08:00 CT** — verify sim_bot still alive. Confirm bridge healthy. Confirm COOLOFF cleared.
+2. **~08:15 CT** — restart sim_bot (kill PIDs 76700/66988, relaunch). New process loads `dbba094` — picks up all Phase 9.5 fixes + Incident #1 fix + Phase 12C in one go.
+3. **08:30-09:30 CT** — tail logs for V2 session-windowed strategies firing (`nq_lsr`, `orb_fade`, `orb_v2`) hitting their windows. Confirm 15+ strategies show [EVAL] activity within the first hour. Confirm `es_nq_confluence` logs DATA_NOT_AVAILABLE (expected — no MES feed).
+4. **After 30 min of clean V2 fires + correct account routing** — push branch + declare Phase 9 production-validated. Phase 12C remains dormant pending MES feed (separate sprint).
+
+---
+
+## (Historical sections below — defer to AT A GLANCE above for current state)
+
+## Pre-overnight: AT A GLANCE — 2026-05-15 08:34 CT (Friday, 4 min into cash open)
 
 | Item | State |
 |---|---|
