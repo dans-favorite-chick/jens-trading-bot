@@ -1,12 +1,48 @@
 # Phoenix Bot — Current State
 
-_Last updated: **2026-05-18 01:25 CT** (overnight V2 deployment + Phase 9.5 hotfixes + Phase 11 Databento ingest + Phase 12C ES/NQ confluence strategy)_
+_Last updated: **2026-05-18 09:55 CT** (Phase 13 strategy research + 7-strategy lab + compounding backtest)_
 
 **Quick refs:**
 - **[RECENT_CHANGES.md](RECENT_CHANGES.md)** — running dated log of every change, newest first
 - **[KNOWN_ISSUES.md](KNOWN_ISSUES.md)** — open technical issues with status
 - **[OPEN_QUESTIONS.md](OPEN_QUESTIONS.md)** — decisions waiting on operator input
 - **This file's lower section** — historical sprint context (May 4 onwards). Always defer to the top section + the bot itself for current operational truth.
+
+---
+
+## AT A GLANCE — 2026-05-18 09:55 CT (Monday morning, Phase 13 research complete)
+
+| Item | State |
+|---|---|
+| Branch | `weekly-evolution/2026-05-17` (Phase 13 deliverables pending commit) |
+| **Phase 13 Status** | **Research COMPLETE — production code untouched per operator instruction.** Ready for Step 3 (apply verdicts) in next session. |
+| **Phase 13 deliverable: `docs/PHASE_13_IMPLEMENTATION_PLAN.md`** | Full 9-section plan: kill list, promotions, filter additions, exit policies, 7 new strategies tested, bug B2+B3 root causes, infrastructure D1-D4, reallocation, compounding plan (Section I). |
+| **NEW 3 winning strategies (Phase 13C)** | `inside_bar_breakout` (+$11.3k/5y, PF 4.88), `multi_day_breakout` (+$9.1k, PF 6.79), `asian_continuation` (+$5.9k, PF 8.29, DD $21). All standalone in `tools/phoenix_new_strategy_lab.py`. Promote to production classes in next session. |
+| **Bug B2: open_drive pivot_pp** | Root cause confirmed at `strategies/opening_session.py:372` — uses `t1=pivot_pp` which lands wrong side of entry. Fix: use R1/S1 or VWAP+ATR. Pending operator design decision. |
+| **Bug B3: orb_fade 0 signals** | Root cause confirmed at `strategies/orb_fade.py:162` — wallclock freshness check (`time.time() - last_bar_ts > 90`) always rejects in backtest. **May affect live too** — needs one-line log check. Fix: compare against `market["now_ct"]`. |
+| **Compounding backtest** | $1,500 → **$1.09M over 5y** using `tier_3000` policy (1 contract per $3k equity, 30-contract cap, size-scaled slippage). Max DD 34%. Engine: `tools/phoenix_compounding_backtest.py`. Stress-tested at 55% WR → still $856k. |
+| **Strategy roster (post-Phase-13 target)** | 11 enabled winners, 4 killed (compression_v2, compression_micro, open_test_drive, noise_area). 3 NEW winners to add. Currently 16 strategies enabled in code; needs reconciliation. |
+| Test suite | **2,110 pass / 19 skip / 0 fail** (last verified 01:25 CT — should re-run before Phase 13 ship). |
+| Sim_bot | Still running on `dbba094` from 01:25 CT — NO Phase 13 changes loaded (research-only sprint). |
+
+### Phase 13 next-session checklist
+
+1. Implement D1 (per-strategy `exit_policy` config field) in `bots/base_bot.py`
+2. Implement D2 (universal `skip_hours_ct: [10,11,12,13,14]` filter) in global risk config
+3. Apply verdicts to `config/strategies.py` — kill list, exit policies, entry filters
+4. Promote 3 new winners to production strategy classes (`strategies/inside_bar_breakout.py`, etc.)
+5. Fix B2 (open_drive pivot) — pending operator design intent
+6. Fix B3 (orb_fade freshness) — one-line fix
+7. Re-run 5-year backtest with all Phase 13 changes applied
+8. Run full test suite — must stay at 2,110+ pass / 0 fail
+9. Restart sim_bot + monitor
+
+### Operator decisions still needed (Section G of plan)
+1. Demote `bias_momentum` out of PROD? (data says yes)
+2. Close 5 dead NT8 sub-accounts? (frees $9,914 capital)
+3. open_drive (B2) — continuation (R1/S1) or reversion (PP) design?
+4. Footprint historical data — Databento MBO ($100-500/mo) or free snapshot recording?
+5. Phase 13 ship target date?
 
 ---
 

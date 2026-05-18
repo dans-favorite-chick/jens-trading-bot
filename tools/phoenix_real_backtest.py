@@ -223,6 +223,86 @@ class ATRState:
         return self.value
 
 
+# ════════════════════════════════════════════════════════════════════
+# Section 2b: Session Value Area (VAH/VAL) computer for opening_type classifier
+# ════════════════════════════════════════════════════════════════════
+
+@dataclass
+class SessionVPState:
+    """Per-session volume profile builder.
+
+    Distributes each completed 1m bar's volume across its [low, high]
+    range into 1-tick buckets, then extracts POC + Value Area (70%
+    volume envelope) at session end.
+
+    Used by the opening_type classifier (open_drive / open_auction_in /
+    out / open_test_drive) which needs prior_day_vah and prior_day_val.
+    """
+    bucket_size: float = 0.25  # MNQ tick
+    vp: dict = field(default_factory=dict)  # price_level -> cumulative volume
+    session_date: Optional[str] = None
+
+    def update(self, bar: Bar):
+        """Distribute one bar's volume across its price range buckets."""
+        if bar.high < bar.low or bar.volume <= 0:
+            return
+        # Number of price buckets in this bar's range
+        n_buckets = max(1, int(round((bar.high - bar.low) / self.bucket_size)) + 1)
+        vol_per_bucket = bar.volume / n_buckets
+        # Round low to nearest bucket
+        low_bucket = round(bar.low / self.bucket_size) * self.bucket_size
+        for i in range(n_buckets):
+            level = round(low_bucket + i * self.bucket_size, 4)
+            self.vp[level] = self.vp.get(level, 0.0) + vol_per_bucket
+
+    def compute_value_area(self, va_pct: float = 0.70):
+        """Return (poc, vah, val) for the accumulated VP.
+
+        VAH/VAL = price bounds containing `va_pct` of total volume,
+        expanded outward from POC.
+        Returns (None, None, None) if no volume tracked.
+        """
+        if not self.vp:
+            return None, None, None
+        total = sum(self.vp.values())
+        if total <= 0:
+            return None, None, None
+        sorted_levels = sorted(self.vp.items(), key=lambda x: x[0])
+        # POC = level with max volume
+        poc = max(self.vp.items(), key=lambda x: x[1])[0]
+        # Value area = expand from POC until va_pct of volume captured
+        target = total * va_pct
+        cum_vol = self.vp[poc]
+        levels_in_va = {poc}
+        all_levels = [p for p, _ in sorted_levels]
+        poc_idx = all_levels.index(poc)
+        lo_idx = hi_idx = poc_idx
+        while cum_vol < target:
+            next_lo = all_levels[lo_idx - 1] if lo_idx > 0 else None
+            next_hi = all_levels[hi_idx + 1] if hi_idx < len(all_levels) - 1 else None
+            if next_lo is None and next_hi is None:
+                break
+            vol_lo = self.vp.get(next_lo, 0) if next_lo is not None else -1
+            vol_hi = self.vp.get(next_hi, 0) if next_hi is not None else -1
+            if vol_hi >= vol_lo and next_hi is not None:
+                cum_vol += vol_hi
+                levels_in_va.add(next_hi)
+                hi_idx += 1
+            elif next_lo is not None:
+                cum_vol += vol_lo
+                levels_in_va.add(next_lo)
+                lo_idx -= 1
+            else:
+                break
+        val = min(levels_in_va)
+        vah = max(levels_in_va)
+        return poc, vah, val
+
+    def reset(self):
+        self.vp = {}
+        self.session_date = None
+
+
 @dataclass
 class VWAPState:
     """Session VWAP + std bands. Reset at session boundaries."""
@@ -290,13 +370,28 @@ class EnrichmentState:
     rth_5min_close_last: Optional[float] = None
     rth_ib_high: Optional[float] = None
     rth_ib_low: Optional[float] = None
+    # First 5min bar of RTH (08:30-08:35 CT) — needed by classify_opening_type
+    rth_5min_open: Optional[float] = None    # = rth_open_price; carried separately for clarity
+    rth_5min_high: Optional[float] = None
+    rth_5min_low: Optional[float] = None
+    rth_5min_close: Optional[float] = None
+    rth_5min_volume: Optional[float] = None
     # Prior day
     prior_day_high: Optional[float] = None
     prior_day_low: Optional[float] = None
     prior_day_close: Optional[float] = None
+    prior_day_poc: Optional[float] = None
+    prior_day_vah: Optional[float] = None
+    prior_day_val: Optional[float] = None
     _current_day_high: float = float("-inf")
     _current_day_low: float = float("inf")
+    _current_day_last_close: Optional[float] = None
     _last_session_date: Optional[str] = None
+    # Session VP builder (computes VAH/VAL at session boundary)
+    _session_vp: SessionVPState = field(default_factory=SessionVPState)
+    # Opening_type — classified at 08:35 CT on each session
+    opening_type: Optional[str] = None
+    _opening_type_classified_for_date: Optional[str] = None
 
 
 def _approx_bar_delta(bar: Bar) -> float:
@@ -429,14 +524,20 @@ class CSVEnrichmentPipeline:
         if state._last_session_date is None:
             state._last_session_date = date_str
         if date_str != state._last_session_date:
-            # Day rolled
+            # Day rolled — compute prior-day VAH/VAL from accumulated session VP
+            poc, vah, val = state._session_vp.compute_value_area()
+            state.prior_day_poc = poc
+            state.prior_day_vah = vah
+            state.prior_day_val = val
             state.prior_day_high = (state._current_day_high
                                      if state._current_day_high > float("-inf") else None)
             state.prior_day_low = (state._current_day_low
                                     if state._current_day_low < float("inf") else None)
+            state.prior_day_close = state._current_day_last_close
             # Reset day trackers
             state._current_day_high = float("-inf")
             state._current_day_low = float("inf")
+            state._current_day_last_close = None
             state.cvd_session = 0.0
             state.rth_open_price = None
             state.rth_15min_high = None
@@ -444,10 +545,21 @@ class CSVEnrichmentPipeline:
             state.rth_5min_close_last = None
             state.rth_ib_high = None
             state.rth_ib_low = None
+            state.rth_5min_open = None
+            state.rth_5min_high = None
+            state.rth_5min_low = None
+            state.rth_5min_close = None
+            state.rth_5min_volume = None
+            state.opening_type = None
+            state._opening_type_classified_for_date = None
+            state._session_vp.reset()
             state._last_session_date = date_str
+        # Accumulate to session VP (for VAH/VAL of THIS session, used tomorrow)
+        state._session_vp.update(bar)
         state.cvd_session += delta
         state._current_day_high = max(state._current_day_high, bar.high)
         state._current_day_low = min(state._current_day_low, bar.low)
+        state._current_day_last_close = bar.close  # for pivot_pp computation
         # VWAP (uses 1m bars; close to tick-VWAP in practice)
         state.vwap.update(bar, bar_dt_ct)
         # RTH session level tracking (08:30 CT = 09:30 ET cash open)
@@ -458,6 +570,42 @@ class CSVEnrichmentPipeline:
             minutes_into_rth = minute_of_day - rth_open_min
             if state.rth_open_price is None:
                 state.rth_open_price = bar.open
+            # First 5-min RTH bar accumulator (08:30-08:35) — needed by
+            # classify_opening_type. Accumulates the FIRST 5 1m bars then
+            # locks the values + runs the classifier.
+            if minutes_into_rth < 5:
+                if state.rth_5min_open is None:
+                    state.rth_5min_open = bar.open
+                    state.rth_5min_high = bar.high
+                    state.rth_5min_low = bar.low
+                    state.rth_5min_volume = float(bar.volume)
+                else:
+                    state.rth_5min_high = max(state.rth_5min_high, bar.high)
+                    state.rth_5min_low = min(state.rth_5min_low, bar.low)
+                    state.rth_5min_volume += float(bar.volume)
+                state.rth_5min_close = bar.close  # last bar's close inside the 5-min window
+            elif minutes_into_rth == 5 and state._opening_type_classified_for_date != date_str:
+                # First bar AFTER the 5-min window — run the classifier once
+                from core.session_levels import classify_opening_type
+                snapshot = {
+                    "rth_open_price": state.rth_open_price,
+                    "rth_5min_high": state.rth_5min_high,
+                    "rth_5min_low": state.rth_5min_low,
+                    "rth_5min_close": state.rth_5min_close,
+                    "rth_5min_volume": state.rth_5min_volume,
+                    "avg_5min_volume": (sum(state.vol_history_5m) /
+                                          max(1, len(state.vol_history_5m))
+                                          if state.vol_history_5m else 0),
+                    "prior_day_vah": state.prior_day_vah,
+                    "prior_day_val": state.prior_day_val,
+                    "prior_day_high": state.prior_day_high,
+                    "prior_day_low": state.prior_day_low,
+                }
+                try:
+                    state.opening_type = classify_opening_type(snapshot)
+                except Exception:
+                    state.opening_type = "INDETERMINATE"
+                state._opening_type_classified_for_date = date_str
             # 15-min OR window (first 15 min of RTH)
             if minutes_into_rth < 15:
                 state.rth_15min_high = (
@@ -602,12 +750,30 @@ class CSVEnrichmentPipeline:
             "rth_ib_high": s.rth_ib_high,
             "rth_ib_low": s.rth_ib_low,
             "orb_first_break_direction": None,
+            # First 5-min RTH bar (consumed by opening_session sub-evaluators)
+            "rth_5min_open": s.rth_5min_open,
+            "rth_5min_high": s.rth_5min_high,
+            "rth_5min_low": s.rth_5min_low,
+            "rth_5min_close": s.rth_5min_close,
+            "rth_5min_volume": s.rth_5min_volume,
+            # Opening type classification (08:35 CT onward)
+            "opening_type": s.opening_type,
             # Prior day
             "prior_day_high": s.prior_day_high,
             "prior_day_low": s.prior_day_low,
             "prior_day_close": s.prior_day_close,
-            "prior_day_vah": 0.0, "prior_day_val": 0.0,
-            "pivot_pp": 0.0,
+            "prior_day_vah": s.prior_day_vah,
+            "prior_day_val": s.prior_day_val,
+            "prior_day_poc": s.prior_day_poc,
+            # Classic pivot point (PP) = (H + L + C) / 3 of prior session.
+            # Used by opening_session.open_drive as primary target (t1=pivot_pp).
+            "pivot_pp": (
+                (s.prior_day_high + s.prior_day_low + s.prior_day_close) / 3.0
+                if (s.prior_day_high is not None
+                    and s.prior_day_low is not None
+                    and s.prior_day_close is not None)
+                else 0.0
+            ),
             # MenthorQ (retired)
             "mq_direction_bias": "NEUTRAL",
             "gamma_regime": "UNKNOWN",

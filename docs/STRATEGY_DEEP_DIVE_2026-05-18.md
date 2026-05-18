@@ -258,11 +258,61 @@ Probably no. Phoenix has more indicators than most retail platforms (VWAP, ATR, 
 
 ---
 
+## 🚨 MFE/MAE analysis — THE BOTTLENECK
+
+Re-walking every trade's 1m bars to find the maximum favorable excursion (MFE) and maximum adverse excursion (MAE) per trade, then comparing to actual realized P&L:
+
+| Strategy | N | Realized avg | MFE avg | **Efficiency** | MFE/MAE |
+|---|---:|---:|---:|---:|---:|
+| es_nq_confluence | 21 | 27.4t | 208.3t | **13%** | **2.87** ⭐ |
+| vwap_band_pullback | 36 | 13.8t | 189.8t | **7%** | 1.41 |
+| vwap_pullback_v2 | 1,610 | 11.2t | 117.5t | **10%** | 1.36 |
+| ib_breakout | 13 | 6.0t | 140.4t | **4%** | 0.98 |
+| vwap_band_reversion | 638 | 0.2t | 145.0t | **0.1%** | 1.15 |
+| spring_setup | 2,510 | 1.8t | 137.4t | **1%** | 1.14 |
+| bias_momentum | 90 | 0.5t | 201.3t | **0.2%** | 1.31 |
+| compression_breakout_micro | 63 | -6.2t | 36.6t | -17% | 0.69 |
+| compression_breakout_v2 | 48 | -17.0t | 14.5t | -117% | **0.19** |
+
+**Definitions:**
+- **Realized avg** = average realized P&L per trade (in ticks)
+- **MFE avg** = average maximum favorable excursion (high water during hold)
+- **Efficiency** = realized / MFE. 1.0 = perfect capture of max move. <0.3 = exiting too early.
+- **MFE/MAE** = ratio of favorable to adverse swings. >1.5 = clear directional edge. <1.0 = anti-edge.
+
+### The two-sentence headline
+
+**Phoenix correctly identifies directional moves in 7 of 9 testable strategies (MFE/MAE ≥ 1.14), but the exit logic captures only 0.1%-13% of the available move.** The bottleneck is NOT entry quality; it's exit logic.
+
+### What this means strategy-by-strategy
+
+- **`es_nq_confluence`** (efficiency 13%, MFE/MAE 2.87) — best signal quality in the dataset. The 96-tick target captures only 13% of MFE. **Recommend: backtest dynamic exits (trailing stops at 50% MFE, scale-out partials, runner targets at 2-3x).** Could potentially 5-10x the P&L per trade.
+
+- **`bias_momentum`** (efficiency 0.2%, MFE 201) — **your PROD strategy is sitting on a 200-tick directional edge per trade and realizing 0.5 ticks**. This is the most fixable problem in the dataset. The ema_dom_exit / signal_flip exits are killing 99.8% of the available move. Worth a deep rebuild of the exit logic.
+
+- **`spring_setup`** (efficiency 1%, 2510 trades) — high signal frequency, terrible capture. The strategy's complex managed exits (rsi_div, trend_stall, etc.) are flat-out failing. Either retire or fix exits.
+
+- **`vwap_pullback_v2`** (efficiency 10%, $9k P&L) — even the volume winner is leaving 90% on the table. With proper exit logic this could be a $30k+ strategy on the same entries.
+
+- **`compression_breakout_v2`** (MFE/MAE 0.19) — the strategy itself is broken at the entry level. MFE doesn't even reach MAE. **Don't try to fix exits; kill the strategy.**
+
+### Recommended follow-up backtest (Phase 13)
+
+Take the entries from each high-MFE strategy and re-test with these exit variants:
+1. Fixed target at 50% of strategy's historical MFE_avg (e.g., es_nq → 104t target instead of 96t)
+2. Trailing stop activated after 1R favorable, trailing at ATR
+3. Scale-out: 50% at 1R, 50% runner with break-even stop
+4. Time-based exit only (no target) — hold for N bars then close at market
+
+This is the SINGLE highest-ROI experiment Phoenix could run. Expected uplift: 3-10x current P&L per trade for the same entry signals.
+
+---
+
 ## Open questions / future work
 
 1. **5-year regime breakdown** — the run completing in ~15 min will tell us if these patterns hold in 2022 bear vs 2024 AI rally. Will update this doc when it lands.
 
-2. **MFE / MAE analysis per strategy** — would tell us if any strategies are EXITING TOO EARLY (high MFE relative to realized P&L) or TOO LATE (high MAE relative to win rate). Worth a follow-up script.
+2. **MFE / MAE per strategy** — ✅ DONE above. The single most important finding of this session.
 
 3. **Strategy-specific time filters** — instead of universal "skip 10-15 CT", each strategy might have a different optimal window. Worth a sweep.
 

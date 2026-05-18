@@ -5,6 +5,73 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+### 2026-05-18 07:00-09:55 CT — Phase 13 research sprint: 7 new strategies tested + 2 bugs root-caused + compounding backtest (PRODUCTION CODE UNTOUCHED)
+
+Operator: "test all the strategies you suggested ... a-g. fix bugs so we can test the opening strategies. keep a log of everything that we're planning on implimenting, but don't change it yet. let's do it all together." Then: "back test the strategies starting with just 1 mnq contract at a time. but as we increase in profit, increase in contracts bought. ... how long until we can start buying 2, 3, 4, 5 etc."
+
+**Step 1 — 7 new candidate strategies built + 5-year backtested (`tools/phoenix_new_strategy_lab.py`):**
+
+Standalone pure-function implementations (NOT touching `strategies/`). 5y MNQ Databento data, 1,771,336 cycles, 234s runtime, 2,470 trades.
+
+3 WINNERS:
+- `g_inside_bar_breakout` — 1015 trades, **+$11,300, WR 70%, PF 4.88, max DD $65, 5min avg hold**
+- `e_multi_day_breakout`  — 685 trades, **+$9,097, WR 78%, PF 6.79, max DD $67, 2min avg hold**
+- `a_asian_continuation`  — 596 trades, **+$5,909, WR 80%, PF 8.29, max DD $21, 2min avg hold**
+
+All 3 positive every single year 2021-2026. Combined +$26,306/5y / +$5.2k/year.
+
+3 KILLED:
+- `b_rth_open_drive_scalp` — -$255, WR 16% (anti-edge — strong-close OR predicts FADE not continuation)
+- `c_poc_magnet_reversion` — n=6 (gates too tight)
+- `f_eod_mean_reversion`   — n=17 (gates too tight)
+
+1 MARGINAL:
+- `d_orb_fade_fixed` — +$145, PF 1.26 (B3 fix unblocks; needs exit-policy testing)
+
+**Step 2 — Bug B2 + B3 root-caused (NO production fix applied yet):**
+
+- **B2 `opening_session.open_drive` pivot_pp target** — `strategies/opening_session.py:372` sets `t1=pivot_pp` which lands BELOW current price for upward open drives → guaranteed loser. Fix: use R1/S1 or VWAP+ATR. Pending operator design decision.
+- **B3 `orb_fade` 0 signals** — `strategies/orb_fade.py:162`: `if (time.time() - last_bar_ts) > 90: return None` — wallclock vs historical bar ts diff = years in seconds → 100% rejected in backtest. **May affect live too** if bar.end_time timebase differs from time.time(). Fix: compare against `market["now_ct"]`. Proof-of-fix: `d_orb_fade_fixed` in lab produces 57 trades.
+
+**Step 3 — Compounding backtest (`tools/phoenix_compounding_backtest.py`):**
+
+Built engine with size-scaled slippage (1t/side ≤5c, 1.5t 6-15c, 2t 16-30c), 30-contract hard cap (CME/MNQ liquidity reality), DD scale-down at 85% of ATH, consecutive-loss scale-down after 3 losers, daily 4% circuit breaker.
+
+Initial unconstrained run produced $907B / 564M contracts — exposed why caps are mandatory. Re-run with realistic constraints on 13,123 trades across 10 winning strategies:
+
+| Policy | Final $ | Max DD | Max Contracts |
+|---|---:|---:|---:|
+| flat_1 (no compounding) | $63,670 | 16.6% | 1 |
+| tier_1500 (aggressive) | $1,067,468 | 77% (rejected) | 30 |
+| **tier_3000 (RECOMMENDED)** | **$1,091,290** | 34% | 30 |
+| tier_5000 (conservative) | $960,270 | 21% | 30 |
+| fixed_ratio_jones | $723,374 | 31% | 30 |
+
+**Compounding path (tier_3000):** 1c day 1 → 2c week 10 → 5c month 4.5 → 10c month 19 → 30c (cap) month 22. Year-end: 2021 $17.7k, 2022 $36.8k, 2023 $345k, 2024 $691k, 2025 $926k, 2026 (partial) $1.09M.
+
+Stress-tested at 55% WR (vs in-sample 70-80%) → still $856k.
+
+**Step 4 — Phase 13 plan document (`docs/PHASE_13_IMPLEMENTATION_PLAN.md`):**
+
+9-section plan: A (verdicts), B (bugs with root causes), C (new strategies with results), D (infrastructure), E (reallocation), F (sequence), G (open questions), H (audit trail), I (compounding plan + per-strategy scale-out tables for N=1,2,3,5,10,20,30).
+
+**Files added:**
+- `tools/phoenix_new_strategy_lab.py`
+- `tools/phoenix_compounding_backtest.py`
+- `tools/phoenix_exit_experiments.py`
+- `tools/phoenix_confluence_filters.py`
+- `tools/opening_session_sub_breakdown.py`
+- `docs/PHASE_13_IMPLEMENTATION_PLAN.md`
+
+**Files modified:**
+- `tools/phoenix_real_backtest.py` (added VAH/VAL via SessionVPState, rth_5min_* tracking, opening_type classifier call, pivot_pp computation, bar.delta enrichment)
+- `docs/STRATEGY_DEEP_DIVE_2026-05-18.md` (initial analysis)
+- `memory/context/CURRENT_STATE.md` (Phase 13 AT-A-GLANCE block)
+
+**Production state unchanged:** sim_bot still on `dbba094`. NO `config/strategies.py` / NO `bots/base_bot.py` / NO `strategies/*.py` modifications. All work is research artifacts for Phase 13 Step 3+ (next session).
+
+---
+
 ### 2026-05-18 00:30-01:25 CT — Phase 12C ES/NQ confluence strategy + memory refresh (commits `dbba094`, `b6bb42d`, `b498512`, `fd35649`)
 
 Operator: "yes, do all 4. read CSVs" — directive to wrap up the overnight Databento + backtest session by (1) committing the overnight artifacts cleanly, (2) implementing the 5-year backtest winner as a new Phase 12C strategy in production, (3) updating memory.
