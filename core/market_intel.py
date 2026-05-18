@@ -996,15 +996,30 @@ async def get_put_call_ratio() -> dict:
 async def get_cnn_fear_greed() -> dict:
     """
     Fetch CNN Fear & Greed Index.
-    No API key needed. Cache: 600 seconds.
+    No API key needed. Cache: 600 seconds normally; 24h when CNN
+    actively bot-blocks (HTTP 418).
+
+    2026-05-17 Phase 9.5 Item D: CNN's `production.dataviz.cnn.io`
+    endpoint returns HTTP 418 ("I'm a teapot. You're a bot.") for
+    bot-classified traffic. The 'Mozilla/5.0' UA spoof isn't enough;
+    Varnish-based bot detection identifies us. To stop wasted hourly
+    polling, detect 418 and back off cache TTL to 24h instead of 10m.
+    Existing consumers continue to get the {score: 0, rating: 'unavailable',
+    source: 'unavailable'} sentinel and degrade gracefully.
 
     Returns: {score: int 0-100, rating: str, source: str}
     """
+    # First check normal cache (10m for successful fetches)
     cached = _cache.get("cnn_fg", 600)
     if cached is not None:
         return cached
+    # Then check the long-TTL block-marker cache (24h for 418-blocked)
+    blocked = _cache.get("cnn_fg_blocked", 24 * 3600)
+    if blocked is not None:
+        return blocked
 
     result = {"score": 0, "rating": "unavailable", "source": "unavailable"}
+    is_bot_blocked = False
 
     try:
         def _fetch():
@@ -1015,15 +1030,25 @@ async def get_cnn_fear_greed() -> dict:
                 timeout=5,
                 headers={"User-Agent": "Mozilla/5.0"},
             )
+            # 2026-05-17 Phase 9.5 Item D: surface the 418 explicitly
+            # so the caller knows to long-TTL the result.
+            if resp.status_code == 418:
+                return ("BLOCKED_418", None)
             resp.raise_for_status()
-            return resp.json()
+            return ("OK", resp.json())
 
-        data = await asyncio.wait_for(
+        status, data = await asyncio.wait_for(
             asyncio.get_event_loop().run_in_executor(None, _fetch),
             timeout=5.0,
         )
 
-        if data:
+        if status == "BLOCKED_418":
+            is_bot_blocked = True
+            logger.debug(
+                "CNN Fear & Greed returned 418 ('I'm a teapot. You're a bot.') "
+                "— caching unavailable for 24h to stop wasted polling."
+            )
+        elif data:
             # CNN response structure: data.fear_and_greed.score / rating
             fg = data.get("fear_and_greed", {})
             score = fg.get("score", None)
@@ -1037,7 +1062,12 @@ async def get_cnn_fear_greed() -> dict:
     except Exception as e:
         logger.debug(f"CNN Fear & Greed fetch failed: {e}")
 
-    _cache.put("cnn_fg", result)
+    if is_bot_blocked:
+        # Long-TTL block-marker cache — prevents hourly polling for 24h.
+        _cache.put("cnn_fg_blocked", result)
+    else:
+        # Normal cache (whether success or non-418 failure)
+        _cache.put("cnn_fg", result)
     return result
 
 
