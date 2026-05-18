@@ -78,3 +78,40 @@ No new (non-orphan) signals fired during the 10-min window — Sunday overnight 
 - **08:00 CT** — verify sim_bot still alive, ticks flowing, COOLOFF cleared.
 - **08:30 – 09:30 CT** — tail logs for session-windowed strategies (`nq_lsr`, `orb_fade`, `orb_v2`) hitting their windows.
 - **After 30 min of clean V2 signals firing and routing to correct accounts:** push branch and declare Phase 9 production-validated.
+
+---
+
+## Phase 9.5 — Findings
+
+### Item A — `vwap_band_reversion` orphan-history archaeology
+
+**Strategy was orphaned in `base_bot.strategy_classes` for 14 days before Phase 9.1 hotfix exposed it.**
+
+| Event | Commit | Date | Files touched |
+|---|---|---|---|
+| Strategy created | `ce1b0cc` | 2026-05-03 | `config/strategies.py`, `config/account_routing.py`, `core/strategy_risk_registry.py`, `tests/test_account_routing.py`, `strategies/vwap_band_reversion.py`, `tests/test_vwap_band_reversion.py` |
+| Registered in `bots/base_bot.py` `strategy_classes` | `853482e` | 2026-05-17 | `bots/base_bot.py` (Phase 9.1 hotfix) |
+| **Orphan window** | — | **14 days** | — |
+
+**Root cause:** The 2026-05-03 commit message has an explicit "Wiring:" section that lists three integration points (`config/strategies.py`, `config/account_routing.py`, `core/strategy_risk_registry.py`) but **omits** `bots/base_bot.py` `strategy_classes`. The class import + dict entry were never added.
+
+**Why it stayed hidden 14 days:** The loader guard at `bots/base_bot.py:1235` —
+
+```python
+for name, config in STRATEGIES.items():
+    if name not in strategy_classes:
+        continue   # silent skip — no warning, no log
+```
+
+— silently skips any config entry without a matching class. So the strategy was:
+- ✅ Present in `STRATEGIES` config (Phase 4 and earlier showed it as `enabled=True`)
+- ✅ Present in `STRATEGY_ACCOUNT_MAP` (routes to `SimVwap Reversion`)
+- ✅ Present in `STRATEGY_KEYS` (risk registry knew about it)
+- ✅ Tested in isolation (9 test cases all green)
+- ❌ Never instantiated by the bot loader
+
+The strategy file itself was perfectly fine; only the bot-side wiring was missing. `validated=False` for those 14 days kept it lab-only, masking the gap — no operator-visible signal-miss because lab-mode signals aren't pushed to OIF anyway.
+
+**Process fix recommendation (out of scope for Phase 9.5):** Add a startup self-check that compares `STRATEGIES.keys()` against `strategy_classes.keys()` and logs `[WARN] strategy '{x}' has config but no class registration` for any orphan. ~5-line addition. Would have caught this in 1 startup instead of 14 days.
+
+**Resolution:** Phase 9.1 hotfix (commit `853482e`) registered the class. No further action required.
