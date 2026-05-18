@@ -623,6 +623,70 @@ This is the lesson from `feedback_silent_failures.md` applied to confluence fact
 
 ---
 
+## N. Mean-reversion strategy research (NEW — 2026-05-18)
+
+Operator requested testing 2 new strategy families: ATR-extension reversal + EMA-distance reversion. Built 17-variant parameter sweep (`tools/phoenix_mean_reversion_lab.py`). Both **FAILED as standalone strategies on MNQ.** Negative empirical finding documented for the rebuild.
+
+### N.1 Test design
+
+- **ATR Reversal:** 9 variants = 3 timeframes (1m/5m/15m ATR) × 3 z-thresholds (2.0/2.5/3.0). Entry: fade when |z = (price-VWAP)/ATR| > threshold. Target: VWAP.
+- **EMA Reversion:** 8 variants = 4 MAs (EMA9, EMA21, EMA50, SMA20 on 5m) × 2 ATR distance thresholds (1.5 / 2.0). Entry: revert when |price - MA| > threshold × ATR_5m. Target: MA.
+- RTH-only fire window (08:30-15:00 CT). Stop ~0.5-0.6 ATR. Per-bar dedup. 5y MNQ Databento data, 1.77M cycles, 256s runtime, 2,934 total trades.
+
+### N.2 Results: pure mean-reversion is NOT viable on MNQ
+
+**Total P&L: -$1,646 across all 17 variants. WR cluster 9-22%.**
+
+Top variants (only ones with positive net):
+| Variant | n | WR | Total $ | PF | Per-year stability |
+|---|---:|---:|---:|---:|---|
+| `ema_rev_ema21_2.0atr` | 62 | 21% | +$243 | 1.44 | **ALL P&L from 2021. Zero trades since.** |
+| `atr_rev_5m_z2.0` | 37 | 22% | +$158 | 1.55 | **ALL from 2021. Zero since.** |
+| `atr_rev_5m_z2.5` | 28 | 21% | +$155 | 1.73 | ALL from 2021 |
+| `ema_rev_ema21_1.5atr` | 94 | 19% | +$130 | 1.15 | ALL from 2021 |
+| `ema_rev_ema50_1.5atr` | 101 | 19% | +$88 | 1.09 | Marginal across years |
+
+Bottom variants (lost money):
+- `atr_rev_1m_*` (3 variants): -$1,559 combined. **1m timeframe = noise.**
+- `ema_rev_ema9_1.5atr`: 821 trades, -$110. Highest fire rate, lowest edge.
+- `ema_rev_ema9_2.0atr`: -$617.
+
+### N.3 Why this happened (matches industry research)
+
+A parallel research agent surveyed the empirical literature on intraday index-futures mean-reversion (Carver, Connors, Raschke, Crabel, Bookmap, academic papers). Key findings:
+
+1. **NQ is the trendiest of major index futures.** Mega-cap tech concentration produces persistent directional drift. Mean-rev structurally hardest on MNQ vs ES. Industry consensus.
+2. **Real edge requires WR 55-65%, PF 1.3-1.7 net of slippage.** Our results show WR 9-22% — far below this.
+3. **The negative-payoff structure of mean-rev** means high WR is required to overcome large losses when wrong. Our low WR combined with this structure produces consistent net losses.
+4. **Year-instability** (2021-only) suggests this was a 2021 volatility-regime artifact, not a robust edge. After 2021 NQ became more disciplined intraday — fewer 2-3 ATR VWAP extensions reverted reliably.
+5. **PF > 2.0 on pure mean-rev MNQ is a red flag for overfit** unless the regime filter is brutally restrictive (which we didn't apply). Our best PF was 1.73 — not even crossing the red-flag threshold.
+
+### N.4 Verdict: do NOT promote either family
+
+**Action:** Both ATR-reversal and EMA-reversion families are DEAD as standalone strategies. Do not promote to production.
+
+**However** — keep the existing `vwap_band_reversion` enabled WITH the `combo_ema_vol` filter (already in Phase 13 plan Section A). That filter combination (ema_counter + vol>1.5×) IS a regime filter, which is precisely what the research said is required. It's the only mean-rev edge that survived Phoenix's backtests.
+
+### N.5 Productive follow-up: Raschke 20-EMA trend-pullback
+
+The research consensus identified **Linda Raschke's 20-EMA pullback** as the most-validated EMA-related intraday futures setup. CRITICAL: it's trend-CONTINUATION (trade WITH the trend back to the EMA), NOT counter-trend reversion. Setup:
+
+- **Trend filter:** ADX(14) > 30 on 5m (or simpler proxy: EMA21 > EMA50 by some delta for uptrend)
+- **Setup:** First pullback to 20-EMA in trend direction (price retraces and touches EMA)
+- **Entry:** Break of high of the bar that touched EMA (LONG in uptrend)
+- **Stop:** Below the pullback-bar low
+- **Target:** 2R or recent swing high
+
+This is essentially a "trend-pullback" — adjacent to bias_momentum but with explicit EMA reference. **Recommend testing as standalone in next research sprint.** Expected to outperform pure mean-rev on MNQ because it trades WITH the structural trend bias.
+
+### N.6 Files created
+
+- `tools/phoenix_mean_reversion_lab.py` (425 LOC)
+- `backtest_results/phoenix_mean_reversion_lab.csv` (2,934 trades, gitignored)
+- `backtest_results/phoenix_mean_reversion_summary.csv` (17-variant summary)
+
+---
+
 ## H. Files created/touched this sprint (audit trail)
 
 **Created:**
