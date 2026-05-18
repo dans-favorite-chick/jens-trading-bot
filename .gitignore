@@ -135,3 +135,34 @@ phoenix_bot/**/*.pyc
 phoenix_bot/**/*.pyo
 .claude/**/__pycache__/
 .claude/**/*.pyc
+
+# === 2026-05-18 overnight session — historical data + backtest artifacts ===
+# Large CSVs are regenerable from tools/decompress_databento.py +
+# tools/databento_to_phoenix_v2.py. Keep the repo lean.
+# To reproduce locally:
+#   1. Re-pull from Databento (their dashboard has download history)
+#   2. python tools/decompress_databento.py
+#   3. python tools/databento_to_phoenix_v2.py
+data/historical/glbx-mdp3-*.csv
+data/historical/glbx-mdp3-*.csv.zst
+data/historical/*_databento.csv
+
+# Backtest CSV outputs. The generator .py scripts are tracked; the CSV
+# results are regenerable and noisy in diffs.
+backtest_results/*.csv
+
+# Pre-existing untracked stragglers from earlier sessions (.Last tick files,
+# legacy backtest outputs). Not deleting in case they're useful for
+# investigation, but not committing.
+data/historical/MNQ 06-26.Last
+data/historical/MES 06-26.Last
+data/historical/MNQ 06-26.Last.txt
+data/historical/backtest_results.csv
+data/historical/backtest_summary.txt
+data/historical/es_nq_strategy_summary_v2.csv
+data/historical/es_nq_strategy_trades_v2.csv
+data/historical/phase12_gridsearch.csv
+data/historical/phase12_validation.csv
+
+# Stray .env backup from a prior gemini-key rotation (must never track).
+.env.backup_*
