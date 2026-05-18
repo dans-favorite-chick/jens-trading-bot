@@ -115,3 +115,21 @@ The strategy file itself was perfectly fine; only the bot-side wiring was missin
 **Process fix recommendation (out of scope for Phase 9.5):** Add a startup self-check that compares `STRATEGIES.keys()` against `strategy_classes.keys()` and logs `[WARN] strategy '{x}' has config but no class registration` for any orphan. ~5-line addition. Would have caught this in 1 startup instead of 14 days.
 
 **Resolution:** Phase 9.1 hotfix (commit `853482e`) registered the class. No further action required.
+
+### Item B — `dupe_test` halt-state cleanup
+
+**Status: cleaned in-place. Effective at next sim_bot restart.**
+
+Pre-clean state of `logs/strategy_halts.json`:
+```json
+{"halted": ["dupe_test"], "reasons": {"dupe_test": "first"}}
+```
+
+Post-clean state:
+```json
+{"halted": [], "reasons": {}}
+```
+
+**Note on git tracking:** `logs/strategy_halts.json` is intentionally gitignored (`.gitignore:10` excludes `logs/`) because it's runtime-mutated state. The bot writes to it whenever a strategy halts or re-enables. Force-tracking it with `git add -f` would create constant dirty-tree noise. Cleanup is therefore filesystem-only; this doc-commit serves as the audit trail.
+
+**Bot still running with stale in-memory copy:** sim_bot (PIDs 76700/66988) loaded `["dupe_test"]` into its halt set at startup and will keep that in memory until the next restart. Since `dupe_test` is not a real strategy (not in `strategy_classes`), the in-memory halt has zero behavioral effect — the loader skips unknown names per the `if name not in strategy_classes: continue` guard. Sweep-up happens naturally on next planned restart.
