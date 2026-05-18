@@ -1209,6 +1209,18 @@ class BaseBot:
         from strategies.opening_session import OpeningSessionStrategy
         from strategies.footprint_cvd_reversal import FootprintCVDReversal
         from strategies.big_move_signal import BigMoveSignal
+        # 2026-05-17: V2 strategy overhaul deployment (Phase 3).
+        # 6 new strategy classes from phoenix_lsr_build/strategies/. Each
+        # has a unique strategy.name field so it coexists with the V1
+        # version until Phase 5 disables the superseded V1 (compression_breakout,
+        # vwap_pullback, orb). nq_lsr / orb_fade / compression_breakout_micro
+        # are net-new (no V1 counterpart).
+        from strategies.nq_lsr import NQLiquiditySweepReversal
+        from strategies.orb_fade import ORBFade
+        from strategies.orb_v2 import ORBv2
+        from strategies.compression_breakout_v2 import CompressionBreakoutV2
+        from strategies.compression_breakout_micro import CompressionBreakoutMicro
+        from strategies.vwap_pullback_v2 import VWAPPullbackV2
 
         strategy_classes = {
             "bias_momentum": BiasMomentumFollow,
@@ -1227,6 +1239,15 @@ class BaseBot:
             # Validation evidence: 15:11:19 score=100 LONG predicted +47pt
             # rally in 8 minutes today (sim). Sim only until n>=30.
             "big_move_signal": BigMoveSignal,
+            # 2026-05-17: V2 strategy overhaul deployment (Phase 3).
+            # Dormant until Phase 4 adds matching blocks to config.strategies.
+            # STRATEGIES — the loop below silently skips entries with no config.
+            "nq_lsr": NQLiquiditySweepReversal,
+            "orb_fade": ORBFade,
+            "orb_v2": ORBv2,
+            "compression_breakout_v2": CompressionBreakoutV2,
+            "compression_breakout_micro": CompressionBreakoutMicro,
+            "vwap_pullback_v2": VWAPPullbackV2,
         }
 
         is_prod = (self.bot_name == "prod")
