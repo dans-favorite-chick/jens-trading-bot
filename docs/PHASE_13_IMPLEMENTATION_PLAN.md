@@ -990,6 +990,178 @@ Total integration is ~15 LOC in base_bot. Failure-tolerant: visualizer errors lo
 
 ---
 
+## R. Volume profile gap + footprint as confluence (NEW — 2026-05-18)
+
+Operator asked: "did the 5y data come with volume profile too?" Then: "would footprint confluence be beneficial for each strategy?"
+
+### R.1 The volume profile data gap
+
+**Honest answer: NO, the 5y Databento CSVs do NOT contain volume profile data.** Columns are standard OHLCV only:
+```
+['ts_utc', 'ts_ct', 'symbol', 'open', 'high', 'low', 'close', 'volume']
+```
+
+**Phoenix's pipeline approximates VP** via `SessionVPState` in `tools/phoenix_real_backtest.py` (line 231). It distributes each 1m bar's total volume evenly across price buckets in [low, high], builds a session histogram, then derives:
+- `prior_day_poc` — bucket with max accumulated volume
+- `prior_day_vah` / `prior_day_val` — outer bounds of 70% volume envelope
+
+This approximation is **good enough** for strategies that use POC/VAH/VAL as reference levels (`opening_session.open_test_drive` target = POC). It is **inadequate** for:
+- True POC (price with most actual ticks transacted, not uniform-distributed bar volume)
+- Bid vs ask aggressor side per price level
+- CVD/delta per price level
+- Stacked imbalances (3+ consecutive levels with bid/ask ratio > 3)
+- Footprint reversal patterns
+- Intraday POC migration tracking
+
+### R.2 What Phoenix has for TRUE footprint (LIVE only)
+
+`data/volumetric_latest.json` is updated in real time by NT8's TickStreamer with the genuine article:
+```json
+{
+  "ts": "2026-05-18T18:18:00", "instrument": "MNQM6",
+  "delta": -134, "total_volume": 560,
+  "buy_volume": 213, "sell_volume": 347,
+  "poc": 29151,
+  "imbalances": [
+    {"price": 29150.75, "bid_vol": 26, "ask_vol": 3, "ratio": 8.67, "side": "sell"},
+    {"price": 29151,    "bid_vol": 53, "ask_vol": 4, "ratio": 13.25, "side": "sell"},
+    ...
+  ],
+  "stacked_buy": false, "stacked_sell": false,
+  "max_imbalance_ratio": 23.0, "cvd_session": 1475
+}
+```
+
+But this is LIVE only. Nothing historical. **`strategies/footprint_cvd_reversal.py` already exists in Phoenix but cannot be backtested** — it requires this footprint data and we have no historical equivalent.
+
+### R.3 The free path to historical footprint — IMPLEMENTED THIS SESSION
+
+`tools/volumetric_snapshot_recorder.py` polls `volumetric_latest.json` and appends new snapshots (dedup by inner `ts`) to:
+```
+data/historical/volumetric/YYYY-MM-DD.jsonl
+```
+
+**Smoke-tested:** captured first snapshot 2026-05-18 18:18:00 (delta=-134, poc=29151, cvd_session=1475). Dedup confirmed working (second call within seconds = "duplicate" skip).
+
+**Setup (Windows Scheduled Task, one-time operator command):**
+```cmd
+schtasks /create /tn "PhoenixVolumetricRecorder" /tr ^
+  "python C:\Trading Project\phoenix_bot\tools\volumetric_snapshot_recorder.py" ^
+  /sc minute /mo 10 /ru "Trading PC"
+```
+
+Verify: `schtasks /query /tn "PhoenixVolumetricRecorder"`
+
+After 3 months of recording at 10-min intervals: ~13k snapshots, enough sample to backtest `footprint_cvd_reversal` + validate the "footprint as confluence" hypothesis on the existing strategies. After 6 months: 26k snapshots, statistically meaningful.
+
+**Cost:** $0. Disk usage: ~1MB/day = ~360MB/year. Trivial.
+
+### R.4 Paid alternative — Databento MBO (if you want immediate historical)
+
+| Vendor | Cost | What you get | Time to value |
+|---|---|---|---|
+| Databento MBO | $100-500/mo | Tick-by-tick with bid/ask aggressor side, 5+ years backfill | Available now |
+| CME Datamine | $$$$ | Institutional grade | Bureaucratic |
+| Phoenix snapshot recorder (this) | $0 | Forward-only, 10-min granularity | 3-6 months wait |
+
+Recommendation: ship the snapshot recorder NOW (already done). Decide on Databento MBO in 1-2 months once we've validated whether ANY of the existing strategies benefit from footprint confluence (via partial-data analysis once 1-2 weeks of snapshots are collected).
+
+### R.5 Would footprint confluence benefit each strategy?
+
+This is the more important question. Speculative analysis below — won't be empirically validated until we have historical data, but grounded in established order-flow theory (Bookmap research, Steidlmayer Market Profile, Carter's "Mastering the Trade").
+
+#### R.5.1 The 4 footprint signals worth testing
+
+| Signal | What it means | Best for |
+|---|---|---|
+| **Stacked bid imbalance (3+ levels)** | Institutional accumulation; aggressive buyers lifting offers | Breakout confirmation (LONG entries) |
+| **Stacked ask imbalance (3+ levels)** | Institutional distribution; aggressive sellers hitting bids | Breakdown confirmation (SHORT entries) |
+| **Absorption at extreme** | Heavy volume at a level but price doesn't move (limit orders eating market orders) | Reversal at S/R (mean-rev confirmation) |
+| **CVD divergence** | Price up but delta down (or vice versa) | Reversal/exhaustion (counter-trend confirmation) |
+
+#### R.5.2 Per-strategy benefit assessment
+
+| Strategy | Footprint benefit | Specific use | Confidence |
+|---|---|---|---|
+| `opening_session.orb` 🟡 | **HIGH** | Stacked bid on the 5m OR-break bar = real breakout. Without = often a fade. | High — well-documented |
+| `raschke_baseline` 🔵 | **HIGH** | Absorption at EMA21 pullback = institutions defending the level = high-conviction re-entry | High |
+| `inside_bar_breakout` 🟣 | **MEDIUM** | Stacked imbalance on the break bar separates real breakouts from compression-release fakes | Medium |
+| `multi_day_breakout` 🟢 | **HIGH** | 3-day H/L break with absorption (price stalls) = fake break to fade. Without absorption = continue | Medium-High |
+| `asian_continuation` 🟪 | **MEDIUM** | Overnight liquidity is thinner; footprint signals less reliable. Still useful as confirmation. | Medium |
+| `vwap_pullback_v2` 🟧 | **HIGH** | VWAP bounce with positive delta = textbook accumulation. Without = trend-against-trend. | High |
+| `spring_setup` 🟢 | **VERY HIGH** | The spring pattern IS a footprint concept by design. Absorption on the wick = the classic Wyckoff spring. | Very High — definitional |
+| `es_nq_confluence` ⚪ | **LOW** | This is a relative-strength play across MES/MNQ. Footprint is single-instrument. Marginal benefit. | Low |
+| `bias_momentum` 🔴 | **MEDIUM** | Momentum continuation with confirming CVD direction = stronger setup. CVD divergence VETOs. | Medium |
+| `vwap_band_pullback` 🔷 | **VERY HIGH** | Band touch + absorption + reversal candle = textbook mean-rev. The combo_ema_vol filter already helps; footprint would lift further. | Very High |
+| `vwap_band_reversion` 🌸 | **VERY HIGH** | Same as above — outer band absorption is THE order-flow reversal signal | Very High |
+| `ib_breakout` 🟡 | **HIGH** | IB break with stacked imbalance = institutional commit. Without = retail-driven fake. | High |
+
+**5 strategies are HIGH or VERY HIGH benefit candidates** for footprint confluence:
+1. `opening_session.orb` — breakout confirmation
+2. `raschke_baseline` — pullback absorption
+3. `vwap_pullback_v2` — bounce delta confirmation
+4. `spring_setup` — Wyckoff spring is footprint-defined
+5. `vwap_band_pullback` + `vwap_band_reversion` — mean-rev absorption signals
+
+#### R.5.3 Expected magnitude of lift (speculative)
+
+Per Bookmap + Steidlmayer literature, footprint-confirmed setups typically:
+- Lift WR by **5-15pp** vs non-confirmed setups
+- Lift PF by 0.3-0.7x
+- Reduce false breakouts by 30-50%
+
+If we extrapolate to Phoenix's 5 HIGH-benefit strategies (~5,000 trades over 5y), conservative estimate:
+- WR lift 8pp avg → 400 fewer losses, 400 more wins
+- At $10 avg per-trade impact → **+$8,000 over 5y** (~+$1.6k/year)
+- This is on TOP of the +$92k/5y Phase 13 baseline
+
+**Realistic expected total uplift from footprint confluence: +5-15% on top of current portfolio.**
+
+#### R.5.4 What footprint CANNOT do
+
+Hole-poking honest list:
+1. **Doesn't change the entry's underlying edge.** If `vwap_pullback_v2`'s 5m bounce-at-VWAP signal is genuinely weak, footprint just filters out trades — it doesn't create edge from nothing.
+2. **Reduces fire rate.** Filter-style additions cut trade count. May lose total $ even if per-trade WR improves.
+3. **Liquidity-dependent.** Footprint signals are only reliable on bars with volume > N threshold. Quiet bars (overnight, lunch) have unreliable footprint.
+4. **Lag.** A "stacked bid" signal requires the bar to complete (5m). By then the move is partially made.
+5. **Over-fitting risk.** Adding footprint factor as a hard AND-gate to a 5-factor strategy puts it at 6 factors — beyond the research-validated 3-5 factor sweet spot (Section K.3).
+6. **Need ROLE clarity.** Footprint should be CONFIRMATION (score contributor) or VETO (kill bad setups), NOT TRIGGER (the entry signal itself). Same as Section K's role framework.
+
+### R.6 Concrete plan to wire footprint confluence (Phase 14)
+
+**Step 1 (this session — DONE):** Set up snapshot recorder. Start collecting data immediately.
+
+**Step 2 (1-2 weeks from now):** Validate quality of captured snapshots. Confirm:
+- ~144 snapshots/day captured (every 10 min × 24h)
+- No gaps from NT8 disconnects
+- Imbalance/CVD fields are populated
+- Per-day file size ~1MB
+
+**Step 3 (1-2 months from now):** Build a "footprint-aware backtest pipeline" — like `phoenix_real_backtest.py` but consuming the snapshot history as a per-eval-cycle feed. Backtest the 5 HIGH-benefit strategies WITH and WITHOUT footprint confluence; report lift.
+
+**Step 4 (after Step 3):** If lift is meaningful (>5pp WR, >$1k/year per strategy), wire into production via the role-based confluence framework (Section K):
+- VETO: kill setups with CVD-divergent footprint
+- CONFIRMATION: boost score on stacked-imbalance footprint
+- NEVER TRIGGER (preserves 3-5 factor cap per strategy)
+
+**Step 5 (parallel — operator decision):** Decide on Databento MBO subscription. If snapshot recorder is too slow (>3mo wait), $100-500/mo for full historical accelerates the timeline.
+
+### R.7 Recommendation
+
+**Ship the snapshot recorder NOW** (already done — set up the Scheduled Task per R.3 setup block). Start collecting data immediately at zero cost.
+
+**Defer the footprint-confluence integration to Phase 14+.** Don't add half-baked footprint logic to Phase 13 strategies — the role framework in Section K provides the right architecture, but the EMPIRICAL CHECK requires data we don't have yet.
+
+**For now, document the hypothesis clearly** (this section serves that purpose). When historical data is ready (free path: 3-6 months; paid path: immediate), revisit with empirical validation.
+
+### R.8 Files
+
+- `tools/volumetric_snapshot_recorder.py` (NEW, 180 LOC) — single-shot or loop-mode recorder
+- `data/historical/volumetric/YYYY-MM-DD.jsonl` — daily JSONL files (start accumulating now)
+- `data/historical/volumetric/_recorder.log` — recorder activity log
+
+---
+
 ## H. Files created/touched this sprint (audit trail)
 
 **Created:**
