@@ -39,6 +39,10 @@ _KNOWN_STRATEGIES = (
     "nq_lsr", "orb_fade", "orb_v2",
     "compression_breakout_v2", "compression_breakout_micro",
     "vwap_pullback_v2",
+    # 2026-05-18: Phase 12C — ES/NQ confluence LONG strategy. Backtested
+    # 5y / 131 trades / 6/6 years positive / max DD $72. Dormant until
+    # MES feed is wired (see strategies/es_nq_confluence.py docstring).
+    "es_nq_confluence",
 )
 
 

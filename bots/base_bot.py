@@ -1227,6 +1227,11 @@ class BaseBot:
         from strategies.compression_breakout_v2 import CompressionBreakoutV2
         from strategies.compression_breakout_micro import CompressionBreakoutMicro
         from strategies.vwap_pullback_v2 import VWAPPullbackV2
+        # 2026-05-18 Phase 12C: ES/NQ confluence LONG strategy. Dormant
+        # until MES feed is wired (logs DATA_NOT_AVAILABLE every eval),
+        # but registered so the moment market["mes_bars_5m"] starts
+        # flowing the strategy auto-activates with no further wiring.
+        from strategies.es_nq_confluence import ESNQConfluence
 
         strategy_classes = {
             "bias_momentum": BiasMomentumFollow,
@@ -1256,6 +1261,9 @@ class BaseBot:
             "compression_breakout_v2": CompressionBreakoutV2,
             "compression_breakout_micro": CompressionBreakoutMicro,
             "vwap_pullback_v2": VWAPPullbackV2,
+            # 2026-05-18 Phase 12C: ES/NQ confluence LONG (regime-robust
+            # backtest 6/6 years incl. 2022 bear, max DD $72, PF 2.63).
+            "es_nq_confluence": ESNQConfluence,
         }
 
         is_prod = (self.bot_name == "prod")

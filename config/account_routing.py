@@ -91,6 +91,15 @@ STRATEGY_ACCOUNT_MAP: Dict[str, Union[str, Dict[str, str]]] = {
     "compression_breakout_micro":  "Sim_Compression_Micro",
     "vwap_pullback_v2":            "Sim_VWAP_Pullback_v2",
 
+    # 2026-05-18 Phase 12C: ES/NQ confluence LONG strategy. Routes to
+    # Sim101 temporarily (same pattern as big_move_signal at Phase 9.1)
+    # because creating a dedicated SimESNQConfluence account in NT8
+    # requires operator GUI action, AND because the strategy is dormant
+    # until the MES feed lands so there are no live trades to isolate
+    # yet. Promote to a dedicated account when graduation decision
+    # is needed (post-30-live-trades + Wilson-CI clearance).
+    "es_nq_confluence":          "Sim101",
+
     # Fallback — lands here on any unmapped strategy or sub_strategy.
     "_default":                  _DEFAULT_ACCOUNT,
 }

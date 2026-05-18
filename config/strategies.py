@@ -808,6 +808,29 @@ STRATEGIES = {
         "min_stop_ticks": 16,
         "target_rr": 1.8,
     },
+
+    # ── 2026-05-18 Phase 12C: ES/NQ Confluence LONG ──────────────────
+    # Selected from 108-config sweep + 30 exit-methodology comparator on
+    # 5 years of Databento data. Regime-robust: 6/6 years positive
+    # including 2022 bear (-33% NQ year): +$1,032. Max drawdown $72,
+    # PF 2.63. See strategies/es_nq_confluence.py docstring for full
+    # backtest evidence and the MES-feed data dependency that gates
+    # live firing until base_bot enrichment is added.
+    #
+    # validated=False intentional: zero live trades yet, AND the strategy
+    # is dormant until the MES feed lands (currently logs DATA_NOT_AVAILABLE
+    # every eval, same as footprint_cvd_reversal was pre-volumetric).
+    # Promote to validated=True only after 30+ live trades confirm the
+    # backtest holds in production. Wilson-CI guardrail applies.
+    "es_nq_confluence": {
+        "enabled": True,
+        "validated": False,
+        "boost_threshold": 25.0,   # 99.9th percentile of |MNQ - MES| 5m return diff
+        "corr_threshold": 0.85,    # rolling-50 Pearson of returns
+        "corr_lookback": 50,       # 50 5m bars = ~4 hours of rolling context
+        "stop_ticks": 24,          # = $12 risk on 1 MNQ
+        "target_ticks": 96,        # = $48 reward (RR 4:1)
+    },
 }
 
 # Backfill default ai_filter_mode="advisory" on every strategy that

@@ -77,6 +77,11 @@ STRATEGY_KEYS: list[str] = [
     "compression_breakout_v2",
     "compression_breakout_micro",
     "vwap_pullback_v2",
+    # 2026-05-18: Phase 12C — ES/NQ confluence LONG strategy. Required
+    # here so StrategyRiskRegistry tracks PER_STRATEGY_DAILY_LOSS_CAP +
+    # halt state per-strategy when it starts firing (dormant until MES
+    # data feed is wired — see strategies/es_nq_confluence.py docstring).
+    "es_nq_confluence",
     # Sprint H v3 footprint plus V2 deployment block above kept together
     # so the per-strategy halt-state file shows them adjacent in load order.
     #
