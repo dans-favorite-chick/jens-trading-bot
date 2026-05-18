@@ -71,6 +71,13 @@ STRATEGY_ACCOUNT_MAP: Dict[str, Union[str, Dict[str, str]]] = {
     # but get dropped at the NT8 side.
     "footprint_cvd_reversal":    "SimFootprintchart",
 
+    # 2026-05-17 Phase 9.1 hotfix: temp Sim101 routing; create dedicated
+    # SimBigMove account when graduation decision is needed. Required to
+    # clear the StrategyRiskRegistry warning + keep STRATEGY_KEYS in sync
+    # with the routing map (the parity test in
+    # tests/test_strategy_risk_registry.py enforces this).
+    "big_move_signal":           "Sim101",
+
     # ── 2026-05-17: V2 overhaul deployment — 6 new strategy accounts ──
     # Note the naming convention shift: existing accounts use spaces
     # ("SimBias Momentum"); these new ones use underscores/hyphens

@@ -59,6 +59,13 @@ STRATEGY_KEYS: list[str] = [
     "noise_area",
     "orb",
     "footprint_cvd_reversal",
+    # 2026-05-17 Phase 9.1 hotfix: big_move_signal was added to base_bot
+    # strategy_classes 2026-05-15 (commit 7f54844) but never added here,
+    # so RiskManager fell back to "ephemeral" tracking (no per-strategy
+    # halt persistence). Discovered when Phase 9 sim deploy logged
+    # "[RISK] unknown strategy key 'big_move_signal' — using ephemeral
+    # fallback".
+    "big_move_signal",
     # 2026-05-17 V2 deployment: 6 new strategy keys (Phase 4 added their
     # config blocks; routing map adds matching Sim_* accounts). Required
     # here so StrategyRiskRegistry tracks PER_STRATEGY_DAILY_LOSS_CAP +

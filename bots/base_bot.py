@@ -1206,6 +1206,12 @@ class BaseBot:
         from strategies.orb import OpeningRangeBreakout
         from strategies.noise_area import NoiseAreaMomentum
         from strategies.vwap_band_pullback import VwapBandPullback
+        # 2026-05-17 Phase 9.1 hotfix: vwap_band_reversion was added to
+        # config/strategies.py but never registered here, so the loader
+        # silently skipped it via the "if name not in strategy_classes"
+        # guard at line 1235. Discovered when Phase 9 sim deploy showed
+        # 14/15 strategies loaded.
+        from strategies.vwap_band_reversion import VwapBandReversion
         from strategies.opening_session import OpeningSessionStrategy
         from strategies.footprint_cvd_reversal import FootprintCVDReversal
         from strategies.big_move_signal import BigMoveSignal
@@ -1227,6 +1233,8 @@ class BaseBot:
             "spring_setup": SpringSetup,
             "vwap_pullback": VWAPPullback,
             "vwap_band_pullback": VwapBandPullback,
+            # 2026-05-17 Phase 9.1 hotfix: register vwap_band_reversion.
+            "vwap_band_reversion": VwapBandReversion,
             "high_precision_only": HighPrecisionOnly,
             "ib_breakout": IBBreakout,
             "compression_breakout": CompressionBreakout,
