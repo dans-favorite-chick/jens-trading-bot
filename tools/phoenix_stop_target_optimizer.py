@@ -672,6 +672,62 @@ def policy_chandelier(trade, mnq_1m, lookback_bars: int = 22,
     return ExitResult(_pnl_ticks(trade.direction, entry, last_close), "time_exit", hold)
 
 
+def policy_tight_trail_post_1r_activate(trade, mnq_1m, trail_ticks: float = 8,
+                                          activate_r: float = 1.0) -> ExitResult:
+    """Parameterized tick trail with configurable activation R.
+
+    Same logic as policy_tight_trail_post_1r but lets us test:
+      - activate_r=0.5 (earlier activation — locks profit faster)
+      - activate_r=1.0 (default)
+      - activate_r=1.5 (later activation — more room before tightening)
+    """
+    entry = float(trade.entry_price)
+    stop = float(trade.stop_price)
+    stop_dist = abs(entry - stop)
+    if stop_dist <= 0:
+        return ExitResult(0, "no_stop", 0)
+    activation = entry + activate_r * stop_dist if trade.direction == "LONG" else entry - activate_r * stop_dist
+    trail_price = trail_ticks * TICK_SIZE
+    current_stop = stop
+    activated = False
+    high_water = entry
+
+    forward = _walk_to_exit(trade, mnq_1m)
+    if forward.empty:
+        return ExitResult(0, "no_forward_data", 0)
+    for ts, row in forward.iterrows():
+        hold = (ts - trade.entry_ts).total_seconds() / 60
+        if trade.direction == "LONG":
+            if row.low <= current_stop:
+                return ExitResult(_pnl_ticks("LONG", entry, current_stop),
+                                   "tick_trail" if activated else "initial_stop", hold)
+            if not activated and row.high >= activation:
+                activated = True
+                high_water = row.high
+                current_stop = max(current_stop, high_water - trail_price)
+            elif activated:
+                high_water = max(high_water, row.high)
+                new_stop = high_water - trail_price
+                if new_stop > current_stop:
+                    current_stop = new_stop
+        else:
+            if row.high >= current_stop:
+                return ExitResult(_pnl_ticks("SHORT", entry, current_stop),
+                                   "tick_trail" if activated else "initial_stop", hold)
+            if not activated and row.low <= activation:
+                activated = True
+                high_water = row.low
+                current_stop = min(current_stop, high_water + trail_price)
+            elif activated:
+                high_water = min(high_water, row.low)
+                new_stop = high_water + trail_price
+                if new_stop < current_stop:
+                    current_stop = new_stop
+    last_close = float(forward.iloc[-1].close)
+    hold = (forward.index[-1] - trade.entry_ts).total_seconds() / 60
+    return ExitResult(_pnl_ticks(trade.direction, entry, last_close), "time_exit", hold)
+
+
 def policy_first_n_min_then_be(trade, mnq_1m, hold_min: int = 5,
                                 target_r: float = 2.0) -> ExitResult:
     """Hold the initial stop for N minutes, then move to BE if profitable.
@@ -738,10 +794,20 @@ POLICIES = [
     ("scale_out_1r",        lambda t, m: policy_scale_out_1r(t, m, 1.0, 2.0)),
     ("scale_out_15r",       lambda t, m: policy_scale_out_1r(t, m, 1.5, 2.5)),
     ("scale_out_3tranche",  lambda t, m: policy_scale_out_3tranche(t, m, 1.0, 2.0, 3.0)),
-    # Trailing stop variants
+    # ATR-based trailing variants (fixed assumed ATR — less adaptive)
     ("trail_atr_1x",        lambda t, m: policy_trail_atr(t, m, atr_ticks=20, multiplier=1.0)),
     ("trail_atr_2x",        lambda t, m: policy_trail_atr(t, m, atr_ticks=20, multiplier=2.0)),
-    ("tight_trail_post_1r", lambda t, m: policy_tight_trail_post_1r(t, m, trail_ticks=8)),
+    # TICK TRAIL VARIANTS — fixed-distance trailing stops activated at +1R
+    # Tests whether tighter (4t) or wider (16t/20t) trails work better per strategy
+    ("tick_trail_4_post_1r",  lambda t, m: policy_tight_trail_post_1r(t, m, trail_ticks=4)),
+    ("tick_trail_8_post_1r",  lambda t, m: policy_tight_trail_post_1r(t, m, trail_ticks=8)),
+    ("tick_trail_12_post_1r", lambda t, m: policy_tight_trail_post_1r(t, m, trail_ticks=12)),
+    ("tick_trail_16_post_1r", lambda t, m: policy_tight_trail_post_1r(t, m, trail_ticks=16)),
+    ("tick_trail_20_post_1r", lambda t, m: policy_tight_trail_post_1r(t, m, trail_ticks=20)),
+    # Tick trail with EARLIER activation (catches faster setups)
+    ("tick_trail_8_post_05r", lambda t, m: policy_tight_trail_post_1r_activate(t, m, trail_ticks=8, activate_r=0.5)),
+    # Tick trail with LATER activation (gives more room before tightening)
+    ("tick_trail_8_post_15r", lambda t, m: policy_tight_trail_post_1r_activate(t, m, trail_ticks=8, activate_r=1.5)),
     # Classic Chuck LeBeau Chandelier Exit (rolling-window high + dynamic ATR)
     ("chandelier_22_3x",    lambda t, m: policy_chandelier(t, m, lookback_bars=22, atr_mult=3.0)),
     ("chandelier_22_2x",    lambda t, m: policy_chandelier(t, m, lookback_bars=22, atr_mult=2.0)),
@@ -757,11 +823,13 @@ POLICIES = [
 
 def analyze_strategy(strat_name: str, trades: pd.DataFrame, mnq_1m: pd.DataFrame) -> dict:
     """Run all policies + MFE/MAE on one strategy. Returns summary dict."""
+    import time as _time
     s_trades = trades[trades.strategy == strat_name].copy()
     n = len(s_trades)
     if n == 0:
         return None
-    print(f"  analyzing {strat_name}  (n={n})...")
+    print(f"  analyzing {strat_name}  (n={n})...", flush=True)
+    _t_strat_start = _time.time()
 
     # MFE/MAE distribution
     mfe_list, mae_list = [], []
@@ -773,6 +841,7 @@ def analyze_strategy(strat_name: str, trades: pd.DataFrame, mnq_1m: pd.DataFrame
         except Exception:
             mfe_list.append(0)
             mae_list.append(0)
+    print(f"    [MFE/MAE done in {_time.time()-_t_strat_start:.1f}s]", flush=True)
 
     mfe_arr = np.array(mfe_list)
     mae_arr = np.array(mae_list)
@@ -784,30 +853,55 @@ def analyze_strategy(strat_name: str, trades: pd.DataFrame, mnq_1m: pd.DataFrame
     mae_p75 = float(np.percentile(np.abs(mae_arr), 75))
     mfe_mae_ratio = mfe_mean / max(mae_mean, 0.01)
 
-    # Per-policy P&L
+    # Per-year coverage check (verify all 5 years tested)
+    s_trades_with_yr = s_trades.copy()
+    s_trades_with_yr["year"] = s_trades_with_yr.entry_ts.dt.year
+    year_counts = s_trades_with_yr.groupby("year").size().to_dict()
+
+    # Per-policy P&L (also tracks per-year P&L for the policy)
     policy_results = {}
-    for pname, pfunc in POLICIES:
+    _n_policies = len(POLICIES)
+    for _pi, (pname, pfunc) in enumerate(POLICIES, 1):
+        _t_pol = _time.time()
         pnls = []
+        years_for_pnl = []
         for tr in s_trades.itertuples(index=False):
             try:
                 res = pfunc(tr, mnq_1m)
                 pnls.append(res.pnl_ticks * TICK_VALUE)
+                years_for_pnl.append(tr.entry_ts.year)
             except Exception:
                 pnls.append(0)
+                years_for_pnl.append(tr.entry_ts.year)
         pnls_arr = np.array(pnls)
         wins = (pnls_arr > 0).sum()
         losses = (pnls_arr < 0).sum()
         gross_win = pnls_arr[pnls_arr > 0].sum() if wins else 0
         gross_loss = -pnls_arr[pnls_arr < 0].sum() if losses else 0
         pf = (gross_win / gross_loss) if gross_loss > 0 else float("inf")
+
+        # Per-year P&L for this policy
+        per_year_pnl = {}
+        years_arr = np.array(years_for_pnl)
+        for yr in sorted(set(years_for_pnl)):
+            mask = years_arr == yr
+            per_year_pnl[int(yr)] = round(float(pnls_arr[mask].sum()), 0)
+        years_positive = sum(1 for yr_pnl in per_year_pnl.values() if yr_pnl > 0)
+        years_total = len(per_year_pnl)
+
         policy_results[pname] = {
             "n": n,
             "wr_pct": round(wins / n * 100, 1) if n > 0 else 0,
             "total": round(pnls_arr.sum(), 0),
             "avg": round(pnls_arr.mean(), 2),
             "pf": round(pf, 2) if not np.isinf(pf) else 99.0,
+            "per_year": per_year_pnl,
+            "years_positive": f"{years_positive}/{years_total}",
         }
+        print(f"    [{_pi:>2d}/{_n_policies} {pname:<24s} {_time.time()-_t_pol:>5.1f}s  "
+              f"total=${pnls_arr.sum():>+10,.0f}  WR={wins/n*100:>5.1f}%]", flush=True)
 
+    print(f"    [{strat_name} TOTAL elapsed {_time.time()-_t_strat_start:.1f}s]", flush=True)
     return {
         "strategy": strat_name,
         "n_trades": n,
@@ -819,6 +913,9 @@ def analyze_strategy(strat_name: str, trades: pd.DataFrame, mnq_1m: pd.DataFrame
         "mae_p75": round(mae_p75, 1),
         "mfe_mae_ratio": round(mfe_mae_ratio, 2),
         "policy_results": policy_results,
+        "year_counts": year_counts,
+        "first_entry": s_trades.entry_ts.min(),
+        "last_entry": s_trades.entry_ts.max(),
     }
 
 
@@ -852,6 +949,30 @@ def main():
         a = analyze_strategy(strat, trades, mnq_1m)
         if a:
             analyses[strat] = a
+
+    # 5-YEAR COVERAGE VERIFICATION
+    print()
+    print("=" * 100)
+    print("5-YEAR COVERAGE VERIFICATION (entries per year, per strategy)")
+    print("=" * 100)
+    print()
+    all_years = sorted(set(yr for a in analyses.values() for yr in a["year_counts"].keys()))
+    header = f"{'strategy':<28s}  " + "  ".join(f"{y:>6d}" for y in all_years) + f"  {'first':>12s}  {'last':>12s}  {'coverage':>10s}"
+    print(header)
+    print("-" * len(header))
+    for strat, a in sorted(analyses.items()):
+        row = f"{strat:<28s}  "
+        for y in all_years:
+            cnt = a["year_counts"].get(y, 0)
+            row += f"{cnt:>6d}  "
+        first = a["first_entry"].date()
+        last = a["last_entry"].date()
+        # Coverage = fraction of years with trades
+        years_with_trades = sum(1 for y in all_years if a["year_counts"].get(y, 0) > 0)
+        coverage = f"{years_with_trades}/{len(all_years)}"
+        row += f"{str(first):>12s}  {str(last):>12s}  {coverage:>10s}"
+        print(row)
+    print()
 
     # Build summary
     print()
@@ -895,11 +1016,11 @@ def main():
     # Final recommendations table
     print()
     print("=" * 100)
-    print("FINAL PER-STRATEGY RECOMMENDATIONS")
+    print("FINAL PER-STRATEGY RECOMMENDATIONS (with per-year P&L for chosen policy)")
     print("=" * 100)
     print()
     rec_rows = []
-    print(f"{'strategy':<28s}  {'best_policy':<18s}  {'wr%':>6s}  {'total$':>10s}  {'pf':>6s}  {'profitable?':>12s}")
+    print(f"{'strategy':<28s}  {'best_policy':<22s}  {'wr%':>6s}  {'total$':>10s}  {'pf':>6s}  {'yrs+/total':>10s}")
     print("-" * 100)
     for strat, a in sorted(analyses.items(),
                             key=lambda x: -x[1]["policy_results"][recommend_best_policy(x[1])[0]]["total"]):
@@ -907,9 +1028,14 @@ def main():
         profitable = "YES" if best_data["total"] > 0 else "NO"
         baseline = a["policy_results"]["baseline"]
         lift = best_data["total"] - baseline["total"]
-        lift_str = f"  (+${lift:,.0f} vs baseline)" if lift > 0 else f"  (${lift:,.0f} vs baseline)"
-        print(f"{strat:<28s}  {best_name:<18s}  {best_data['wr_pct']:>6.1f}  "
-              f"{best_data['total']:>10,.0f}  {best_data['pf']:>6.2f}  {profitable:>12s}{lift_str}")
+        years_str = best_data.get("years_positive", "?/?")
+        print(f"{strat:<28s}  {best_name:<22s}  {best_data['wr_pct']:>6.1f}  "
+              f"{best_data['total']:>10,.0f}  {best_data['pf']:>6.2f}  {years_str:>10s}")
+        # Per-year P&L for this winning policy
+        per_year = best_data.get("per_year", {})
+        if per_year:
+            yr_str = "  ".join(f"{y}=${p:>+7,.0f}" for y, p in sorted(per_year.items()))
+            print(f"  per-year: {yr_str}")
         rec_rows.append({
             "strategy": strat,
             "n_trades": a["n_trades"],
@@ -920,9 +1046,12 @@ def main():
             "baseline_total": baseline["total"],
             "lift_vs_baseline": lift,
             "profitable": profitable,
+            "years_positive": best_data.get("years_positive", "?/?"),
             "mfe_mae_ratio": a["mfe_mae_ratio"],
             "mfe_mean_ticks": a["mfe_mean_ticks"],
             "mae_mean_ticks": a["mae_mean_ticks"],
+            "first_entry": str(a["first_entry"].date()),
+            "last_entry": str(a["last_entry"].date()),
         })
 
     rec_df = pd.DataFrame(rec_rows)

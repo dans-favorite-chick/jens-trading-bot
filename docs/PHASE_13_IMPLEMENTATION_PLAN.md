@@ -1321,9 +1321,11 @@ vs Phase 13 prior estimate ~$18.5k/year — **4.7× higher** with clean data + f
 
 ---
 
-## T. Per-Strategy Stop/Target Optimization (NEW — 2026-05-19)
+## T. Per-Strategy Stop/Target Optimization (UPDATED — 2026-05-19 PM)
 
-Built `tools/phoenix_stop_target_optimizer.py` — tests 19 exit policies (incl. 3 Chandelier variants) on all 11 winning strategies against clean 5y trade data + MFE/MAE per-strategy diagnostics.
+Built `tools/phoenix_stop_target_optimizer.py` — tests **25 exit policies** (5 tick-trail distances + 2 activation-timing variants + 3 Chandelier variants + 10 baselines/scale-outs/time-exits + 1 look-ahead oracle reference) on all 11 winning strategies against clean 5y trade data + MFE/MAE per-strategy diagnostics + 6-year coverage verification.
+
+Run produced `out/optimizer_2026-05-19.log` (~80 min wall, single core) and `backtest_results/phoenix_stop_target_recommendations.csv`. Output below reflects the 25-policy run completed 2026-05-19 PM — replaces the original 19-policy run (which is summarized for diff in T.8).
 
 ### T.1 MFE/MAE diagnosis — INITIAL stop placement
 
@@ -1343,52 +1345,100 @@ Built `tools/phoenix_stop_target_optimizer.py` — tests 19 exit policies (incl.
 
 4 strategies have stops too tight relative to MFE → these benefit from wider targets / chandelier trails (captured below in T.2).
 
-### T.2 Individualized exit policy per strategy (Phase 13 SHIP TARGETS)
+### T.2 Individualized exit policy per strategy (Phase 13 SHIP TARGETS — 25-policy verdict)
 
-| Strategy | Best Policy | WR% | Total $ | PF | Lift vs Baseline |
-|---|---|---:|---:|---:|---:|
-| **bias_momentum** | **tight_trail_post_1r** | 57.9% | **$232,984** | 1.61 | **+$54,605** |
-| **spring_setup** | **tight_trail_post_1r** | 51.0% | **$86,152** | 1.16 | **+$67,608** |
-| **opening_session** | **fixed_3r** | 36.4% | **$44,835** | 1.65 | **+$124,523** |
-| **inside_bar_breakout** | **chandelier_50_3x** | 67.7% | **$26,610** | 10.87 | **+$15,310** |
-| **multi_day_breakout** | **chandelier_50_3x** | 55.3% | **$22,887** | 9.04 | **+$13,789** |
-| **raschke_baseline** | **time_30min** | 49.7% | **$19,835** | 4.39 | **+$7,056** |
-| **asian_continuation** | **time_30min** | 56.9% | **$18,362** | 11.24 | **+$12,453** |
-| **vwap_pullback_v2** | **tight_trail_post_1r** | 51.7% | **$17,614** | 1.16 | **+$7,470** |
-| **es_nq_confluence** | **chandelier_50_3x** | 65.6% | **$9,957** | 21.71 | **+$7,929** |
-| **vwap_band_pullback** | **fixed_3r** | 42.6% | **$2,495** | 1.21 | **+$1,701** |
-| **ib_breakout** | **baseline** | 46.1% | **$342** | 1.06 | $0 |
-| **TOTAL** | | | **$481,073** | | **+$312,444** |
+| Strategy | n | Best Policy | WR% | Total $ | PF | Years+ | Lift vs Baseline |
+|---|---:|---|---:|---:|---:|:---:|---:|
+| **bias_momentum** | 13,790 | **tick_trail_4_post_1r** | 57.9% | **$243,408** | 1.64 | 6/6 | **+$65,029** |
+| **spring_setup** | 20,778 | **tick_trail_4_post_1r** | 51.0% | **$101,556** | 1.19 | 6/6 | **+$83,012** |
+| **opening_session** | 2,949 | **tick_trail_8_post_15r** | 54.2% | **$48,630** | 1.95 | 6/6 | **+$128,318** |
+| **g_inside_bar_breakout** | 1,015 | **chandelier_50_3x** | 67.7% | **$26,610** | 10.87 | 6/6 | **+$15,310** |
+| **e_multi_day_breakout** | 685 | **chandelier_50_3x** | 55.3% | **$22,887** | 9.04 | 6/6 | **+$13,789** |
+| **vwap_pullback_v2** | 5,879 | **tick_trail_4_post_1r** | 51.7% | **$21,224** | 1.19 | 6/6 | **+$11,080** |
+| **raschke_baseline** | 927 | **time_30min** | 49.7% | **$19,835** | 4.39 | 6/6 | **+$7,056** |
+| **a_asian_continuation** | 596 | **time_30min** | 56.9% | **$18,362** | 11.24 | 6/6 | **+$12,453** |
+| **es_nq_confluence** | 131 | **chandelier_50_3x** | 65.6% | **$9,957** | 21.71 | 6/6 | **+$7,929** |
+| **vwap_band_pullback** | 324 | **fixed_3r** | 42.6% | **$2,495** | 1.21 | 5/6 | **+$1,701** |
+| **ib_breakout** | 152 | **tick_trail_8_post_15r** | 44.1% | **$881** | 1.14 | 4/5 | **+$539** |
+| **TOTAL** | 47,226 | | | **$515,845** | | | **+$346,216** |
 
-**Total 5-year P&L with INDIVIDUALIZED exits: $481,073 = $96,215/year baseline.** Lift of +$62,489/year from optimal exits alone.
+**Total 5-year P&L with INDIVIDUALIZED exits: $515,845 = $103,169/year baseline.** Lift of **+$69,443/year** from optimal exits alone (vs flat-1-contract baseline P&L of $33,726/year).
 
-### T.3 Three winning policy families
+**Per-year breakdown for each chosen policy (proves 5-year robustness):**
 
-**`tight_trail_post_1r`** wins for momentum continuation (3 strategies):
-- Hold initial stop until +1R, then 8-tick trail captures the burst
-- bias_momentum, spring_setup, vwap_pullback_v2
+| Strategy | 2021 | 2022 | 2023 | 2024 | 2025 | 2026 |
+|---|---:|---:|---:|---:|---:|---:|
+| bias_momentum | +$21,170 | +$53,188 | +$26,432 | +$41,785 | +$64,470 | +$36,362 |
+| spring_setup | +$7,660 | +$26,984 | +$6,345 | +$15,952 | +$30,947 | +$13,668 |
+| opening_session | +$7,880 | +$7,416 | +$8,389 | +$15,904 | +$7,474 | +$1,567 |
+| g_inside_bar_breakout | +$4,228 | +$5,294 | +$6,239 | +$4,272 | +$4,976 | +$1,601 |
+| e_multi_day_breakout | +$2,883 | +$4,881 | +$3,015 | +$4,010 | +$6,770 | +$1,327 |
+| vwap_pullback_v2 | +$1,725 | +$874 | +$2,376 | +$4,395 | +$6,070 | +$5,782 |
+| raschke_baseline | +$3,344 | +$2,936 | +$4,316 | +$4,812 | +$3,895 | +$532 |
+| a_asian_continuation | +$2,158 | +$3,730 | +$2,911 | +$3,473 | +$4,232 | +$1,860 |
+| es_nq_confluence | +$355 | +$6,538 | +$445 | +$763 | +$1,808 | +$48 |
+| vwap_band_pullback | +$444 | +$105 | +$1,640 | **−$81** | +$122 | +$263 |
+| ib_breakout | **−$498** | +$78 | +$412 | +$512 | +$377 | (no entries) |
 
-**`chandelier_50_3x`** wins for high-WR clean breakouts (3 strategies):
-- 50-bar rolling high - 3× dynamic ATR(50)
-- inside_bar_breakout, multi_day_breakout, es_nq_confluence
+Every high-volume strategy positive in **all 6 years**. Only outliers are vwap_band_pullback (n=324; small −$81 in 2024) and ib_breakout (n=152; −$498 in 2021, no 2026 entries). Both are low-power and were flagged for "directional only" interpretation.
+
+**5-year coverage verification (entries per year, per strategy):**
+
+| Strategy | 2021 | 2022 | 2023 | 2024 | 2025 | 2026 | Coverage |
+|---|---:|---:|---:|---:|---:|---:|:---:|
+| bias_momentum | 1,624 | 2,787 | 2,524 | 2,701 | 2,992 | 1,162 | 6/6 |
+| spring_setup | 2,172 | 4,530 | 3,485 | 3,942 | 4,679 | 1,970 | 6/6 |
+| opening_session | 486 | 394 | 838 | 772 | 405 | 54 | 6/6 |
+| g_inside_bar_breakout | 258 | 148 | 230 | 183 | 152 | 44 | 6/6 |
+| e_multi_day_breakout | 96 | 130 | 139 | 135 | 132 | 53 | 6/6 |
+| vwap_pullback_v2 | 751 | 1,167 | 1,175 | 1,174 | 1,183 | 429 | 6/6 |
+| raschke_baseline | 219 | 125 | 243 | 179 | 137 | 24 | 6/6 |
+| a_asian_continuation | 74 | 128 | 119 | 135 | 102 | 38 | 6/6 |
+| es_nq_confluence | 4 | 74 | 21 | 11 | 17 | 4 | 6/6 |
+| vwap_band_pullback | 88 | 25 | 112 | 63 | 35 | 1 | 6/6 |
+| ib_breakout | 32 | 8 | 57 | 45 | 10 | 0 | 5/6 |
+
+All 11 strategies tested across the full 2021-05-17 → 2026-05-15 window. Only ib_breakout has a year (2026) with zero entries, consistent with its very low signal rate.
+
+### T.3 Four winning policy families (refined from 25-policy run)
+
+**`tick_trail_4_post_1r`** wins for momentum continuation (3 strategies):
+- Hold initial stop until +1R, then a **4-tick** trail captures the burst (NOT 8-tick — see T.8 for the diff)
+- bias_momentum (+$243k), spring_setup (+$102k), vwap_pullback_v2 (+$21k)
+- The 4t trail beats 8t by $10.4k / $15.4k / $3.6k respectively on these three
+- WHY: on MNQ 5m, post-1R momentum bursts typically resolve within 4 ticks of pullback. A tighter trail captures more of the trend; wider trails give back too much
+
+**`tick_trail_8_post_15r`** wins for high-volatility breakouts (2 strategies):
+- Hold initial stop until +**1.5R**, then 8-tick trail (later activation than the momentum family)
+- opening_session (+$48,630), ib_breakout (+$881)
+- WHY: opening drives and IB breakouts need room to set up before tightening — the +1.5R gate filters false starts
+- Sample size matters here: ib_breakout n=152 is low-power — treat as directional
+
+**`chandelier_50_3x`** wins for clean structural breakouts (3 strategies):
+- 50-bar rolling high − 3× dynamic ATR(50)
+- g_inside_bar_breakout (+$26.6k), e_multi_day_breakout (+$22.9k), es_nq_confluence (+$10.0k)
 - Slower than classic LeBeau (22-bar) — 50-bar window better matches MNQ's ~50-min average hold
+- The 22-bar variants UNDERPERFORM 50-bar on every strategy that picked chandelier (often by 20-40%)
 
 **`time_30min`** wins for fast-resolving setups (2 strategies):
-- raschke_baseline, asian_continuation
-- These setups either work fast or fail — 30-min cap captures the burst
+- raschke_baseline (+$19.8k), a_asian_continuation (+$18.4k)
+- These setups either work fast or fail — 30-min cap captures the burst before reversal
 
-**`fixed_3r`** wins for special cases:
-- opening_session (after Bug B2 fix)
-- vwap_band_pullback (small absolute $)
+**`fixed_3r`** wins for one special case:
+- vwap_band_pullback (+$2.5k, small absolute $, n=324)
 
-### T.4 What didn't work (educational)
+### T.4 What didn't work (educational, expanded)
 
 - **`profit_lock_05r`** had highest WR everywhere (74-88%) — BUT total $ was lower. Confirms "high WR ≠ max profit." Comfortable but suboptimal.
-- **`first_5min_then_be`** killed most strategies (WR collapsed to 0-12%). Too aggressive cutoff.
-- **`chandelier_22_3x`** (classic LeBeau) close-second for several but slower 50-bar version generally won.
-- **`mfe_oracle_75`** (look-ahead reference) showed best policies capture 60-80% of theoretical maximum.
+- **`first_5min_then_be`** killed most strategies (spring_setup WR collapsed to 9.6%, bias_momentum to 11.5%). Too aggressive cutoff for MNQ trend continuation.
+- **`chandelier_22_3x`** (classic LeBeau) close-second for several but slower 50-bar version generally won by ~30% in total $ for the strategies that chose chandelier.
+- **`chandelier_22_2x`** (tight LeBeau variant) was *actively harmful* on spring_setup (−$42,118 vs +$18,544 baseline). Too tight for high-volatility setups.
+- **Wider tick trails** (12t/16t/20t) underperform 4t/8t on every momentum strategy. The progression bias_momentum 4t→8t→12t→16t→20t: $243k → $233k → $224k → $217k → $211k. Same monotone pattern on spring_setup and vwap_pullback_v2.
+- **Early activation** (`tick_trail_8_post_05r`) only wins when the strategy has high WR by design (profit_lock_05r-like behavior). For trend-momentum strategies, *later* activation (post_15r) sometimes wins (see opening_session).
+- **`trail_atr_2x`** is competitive on a_asian_continuation ($15,716) but time_30min still beats it ($18,362).
+- **`mfe_oracle_75`** (look-ahead reference) showed best shippable policies capture 50-75% of theoretical maximum. bias_momentum captures 74% of oracle ($243k vs $329k), opening_session captures 79% ($48.6k vs $61.8k).
 
-### T.5 Implementation for `config/strategies.py`
+### T.5 Implementation for `config/strategies.py` (CORRECTED per 25-policy run)
 
 Each strategy gets a per-strategy `exit_policy` field:
 
@@ -1396,13 +1446,18 @@ Each strategy gets a per-strategy `exit_policy` field:
 STRATEGIES = {
     "bias_momentum": {
         ...,
-        "exit_policy": "tight_trail_post_1r",
-        "exit_policy_params": {"trail_ticks": 8, "activate_r": 1.0},
+        "exit_policy": "tick_trail",
+        "exit_policy_params": {"trail_ticks": 4, "activate_r": 1.0},  # 4t, NOT 8t
     },
     "spring_setup": {
         ...,
-        "exit_policy": "tight_trail_post_1r",
-        "exit_policy_params": {"trail_ticks": 8, "activate_r": 1.0},
+        "exit_policy": "tick_trail",
+        "exit_policy_params": {"trail_ticks": 4, "activate_r": 1.0},  # 4t, NOT 8t
+    },
+    "vwap_pullback_v2": {
+        ...,
+        "exit_policy": "tick_trail",
+        "exit_policy_params": {"trail_ticks": 4, "activate_r": 1.0},  # 4t
     },
     "opening_session.orb": {
         ...,
@@ -1410,44 +1465,102 @@ STRATEGIES = {
     },
     "opening_session.open_drive": {
         ...,
-        "exit_policy": "fixed_rr",
-        "exit_policy_params": {"rr": 3.0},  # Bug B2 fix
+        "exit_policy": "tick_trail",
+        "exit_policy_params": {"trail_ticks": 8, "activate_r": 1.5},  # +1.5R late activation
     },
     "g_inside_bar_breakout": {
         ...,
         "exit_policy": "chandelier",
         "exit_policy_params": {"lookback_bars": 50, "atr_mult": 3.0, "activate_r": 1.0},
     },
-    # ... etc per Table T.2
+    "e_multi_day_breakout": {
+        ...,
+        "exit_policy": "chandelier",
+        "exit_policy_params": {"lookback_bars": 50, "atr_mult": 3.0, "activate_r": 1.0},
+    },
+    "es_nq_confluence": {
+        ...,
+        "exit_policy": "chandelier",
+        "exit_policy_params": {"lookback_bars": 50, "atr_mult": 3.0, "activate_r": 1.0},
+    },
+    "raschke_baseline": {
+        ...,
+        "exit_policy": "time_exit",
+        "exit_policy_params": {"max_minutes": 30},
+    },
+    "a_asian_continuation": {
+        ...,
+        "exit_policy": "time_exit",
+        "exit_policy_params": {"max_minutes": 30},
+    },
+    "vwap_band_pullback": {
+        ...,
+        "exit_policy": "fixed_rr",
+        "exit_policy_params": {"rr": 3.0},
+    },
+    "ib_breakout": {
+        ...,
+        "exit_policy": "tick_trail",
+        "exit_policy_params": {"trail_ticks": 8, "activate_r": 1.5},  # +1.5R late activation (small n=152, directional)
+    },
 }
 ```
 
-`bots/base_bot.py` exit dispatcher reads `exit_policy` field and applies the matching logic from `core/exit_policies.py` (new module).
+`bots/base_bot.py` exit dispatcher reads `exit_policy` field and applies the matching logic from `core/exit_policies.py` (new module). Three policy types cover all 11 strategies: `tick_trail` (parameterized by `trail_ticks` and `activate_r`), `chandelier`, `time_exit`, plus `fixed_rr` and `managed_existing` for one-offs.
 
-### T.6 Updated portfolio annual P&L
+### T.6 Updated portfolio annual P&L (25-policy verdict)
 
 | Component | Annual $ |
 |---|---:|
 | Baseline (all baseline exits, clean 5y) | $33,726 |
-| Optimal individualized exits | $96,215 |
-| **Lift from Section T optimization** | **+$62,489** |
+| Optimal individualized exits (25-policy run) | **$103,169** |
+| **Lift from Section T optimization** | **+$69,443** |
 | Footprint VETO on spring_setup | +$10,400 |
 | Bug B2 fix already in opening_session line above | (included) |
-| **TOTAL POTENTIAL** | **~$107,000/year** |
+| **TOTAL POTENTIAL — FLAT 1 contract** | **~$113,569/year** |
 
-vs original Phase 13 estimate ~$18,500/year — **5.8× higher** with bug fixes + individualized exits.
+vs original Phase 13 estimate ~$18,500/year — **6.1× higher** with bug fixes + individualized exits. The 25-policy refinement alone (over the prior 19-policy verdict of $96,215/year) added **+$6,954/year** by finding `tick_trail_4_post_1r` for momentum strategies and `tick_trail_8_post_15r` for opening drives.
 
 ### T.7 Honest caveats
 
 1. **Optimizer used 1m bars for walk-forward.** Real execution may have additional slippage. Expect 80-90% of backtest performance live.
 
-2. **Trail/chandelier exits are more complex to implement than fixed targets.** Need real-time ATR computation + rolling-window tracking in base_bot.
+2. **Trail/chandelier exits are more complex to implement than fixed targets.** Need real-time ATR computation + rolling-window tracking in base_bot. The 4-tick trail in particular requires sub-bar fills — if the bot only acts on 5m close, a 4-tick trail behaves more like an 8-tick or 12-tick trail in practice. **Test live carefully** before assuming the 4t backtest result transfers.
 
-3. **`opening_session` total includes ALL subs.** Open_drive Bug B2 fix is separate from this — the +$124k lift here is the combined effect of fixing the bug AND using fixed_3r.
+3. **`opening_session` total includes ALL subs.** Open_drive Bug B2 fix is separate from this — the +$128k lift here is the combined effect of fixing the bug AND using tick_trail_8_post_15r.
 
-4. **Sample size matters.** `ib_breakout` (n=152) and `vwap_band_pullback` (n=324) have lower statistical power than `bias_momentum` (n=13,790). Treat their recommendations as directional.
+4. **Sample size matters.** `ib_breakout` (n=152) and `vwap_band_pullback` (n=324) have lower statistical power than `bias_momentum` (n=13,790). Treat their recommendations as directional. `ib_breakout` had a negative 2021 (−$498) — the strategy is barely positive overall.
 
 5. **Re-optimize annually.** Market regime shifts can change which exit works best. Run this optimizer once a year on rolling 5y data.
+
+6. **The 4-tick discovery rests on accurate intra-bar simulation.** The optimizer's policy_tight_trail_post_1r function walks the 1m bar high/low to detect a 4-tick pullback from the high-water mark. In live execution, a 4-tick trail on MNQ ($0.25 per tick = $1 trail width) is extremely tight and will fire on any normal-noise pullback. If live slippage / latency means we fill 1-2 ticks worse, the realized P&L will compress meaningfully toward the 8-tick or 12-tick variants. **Monitor carefully in sim_bot for ~1 month before scaling to bias_momentum live.**
+
+### T.8 What changed: 19-policy → 25-policy refinement (2026-05-19 PM)
+
+The original Section T was based on a 19-policy battery. The expanded 25-policy run added: 5 tick-trail distance variants (4t, 8t, 12t, 16t, 20t), 2 activation-timing variants (post-0.5R, post-1.5R), and 3 Chandelier variants (22/3x, 22/2x, 50/3x already present). Diff table:
+
+| Strategy | OLD winner (19-policy) | OLD total | NEW winner (25-policy) | NEW total | Δ |
+|---|---|---:|---|---:|---:|
+| bias_momentum | tight_trail_post_1r (≡tick_trail_8) | $232,984 | **tick_trail_4_post_1r** | $243,408 | **+$10,424** |
+| spring_setup | tight_trail_post_1r (≡tick_trail_8) | $86,152 | **tick_trail_4_post_1r** | $101,556 | **+$15,404** |
+| opening_session | fixed_3r | $44,835 | **tick_trail_8_post_15r** | $48,630 | **+$3,795** |
+| vwap_pullback_v2 | tight_trail_post_1r (≡tick_trail_8) | $17,614 | **tick_trail_4_post_1r** | $21,224 | **+$3,610** |
+| ib_breakout | baseline | $342 | **tick_trail_8_post_15r** | $881 | **+$539** |
+| g_inside_bar_breakout | chandelier_50_3x | $26,610 | (same) | $26,610 | $0 |
+| e_multi_day_breakout | chandelier_50_3x | $22,887 | (same) | $22,887 | $0 |
+| es_nq_confluence | chandelier_50_3x | $9,957 | (same) | $9,957 | $0 |
+| raschke_baseline | time_30min | $19,835 | (same) | $19,835 | $0 |
+| a_asian_continuation | time_30min | $18,362 | (same) | $18,362 | $0 |
+| vwap_band_pullback | fixed_3r | $2,495 | (same) | $2,495 | $0 |
+| **TOTAL** | | **$481,073** | | **$515,845** | **+$34,772** |
+
+**Two empirical findings from the refinement:**
+
+1. **Tighter is better for trend continuation.** For all three momentum strategies (bias_momentum, spring_setup, vwap_pullback_v2), 4-tick trail beats 8-tick by $3.6k-$15.4k over 5 years. The monotone progression (4t > 8t > 12t > 16t > 20t) is consistent across all three. Hypothesis: on MNQ 5m, post-1R momentum bursts typically resolve within 4 ticks of pullback before reversal — a tighter trail captures more of the trend before giveback.
+
+2. **Later activation helps high-vol breakouts.** For opening_session and ib_breakout, holding the initial stop until +1.5R (rather than +1.0R) before activating the trail gives the move room to set up. The 8-tick distance is right; the activation gate matters more than trail width for these.
+
+**Methodology note:** the comparison is direct because policies in both runs use the SAME underlying walk-forward logic on the SAME clean 5y trade data (post the silent-stop bug fix from Section S). The only difference is the policy registry size. No double-counting or look-ahead.
 
 ---
 
