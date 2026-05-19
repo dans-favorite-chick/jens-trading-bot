@@ -331,9 +331,15 @@ class OpeningSessionStrategy(BaseStrategy):
         price = market.get("price")
         v1 = market.get("rth_1min_volume")
         avg_v1 = market.get("avg_1min_volume")
-        pivot_pp = market.get("pivot_pp")
+        pivot_pp = market.get("pivot_pp")  # kept for metadata only; no longer the target
+        pd_high = market.get("prior_day_high")
+        pd_low = market.get("prior_day_low")
 
-        required = (rth_open, h5, l5, c5, price, v1, avg_v1, pivot_pp)
+        # PHASE 13 BUG B2 FIX (2026-05-18): we no longer require pivot_pp
+        # because we don't use it as the target. We DO still want PP for
+        # metadata logging when available, plus prior_day H/L for R1/S1
+        # computation when we want a structural target.
+        required = (rth_open, h5, l5, c5, price, v1, avg_v1)
         if any(v is None for v in required):
             self._log_eval(f"SKIP {sub} missing_fields")
             return None
@@ -364,25 +370,49 @@ class OpeningSessionStrategy(BaseStrategy):
         one_r = abs(price - stop_price)
         be_milestone = price + one_r if direction == "LONG" else price - one_r
 
+        # PHASE 13 BUG B2 FIX (2026-05-18):
+        # OLD: t1 = pivot_pp  (classic Pivot Point, average of prior day H/L/C).
+        #   On a STRONG OPEN DRIVE UP, current price closes ABOVE PP by definition
+        #   (the drive went past the prior-day mean). PP target lands BELOW
+        #   entry → target hit at LOSS instantly. 557 fires / 5y / -$106k.
+        #
+        # NEW: t1 = entry ± 2R (fixed 2:1 reward:risk).
+        #   Open Drive is a CONTINUATION setup — we want a target ABOVE entry
+        #   on a LONG. 2R from stop distance is regime-adaptive (wider stops
+        #   → wider targets) and avoids structural targets that can land
+        #   anywhere relative to entry.
+        #
+        # Future enhancement candidates (Phase 14+): use R1 = 2*PP - PD_L
+        # for LONG / S1 = 2*PP - PD_H for SHORT, IF R1/S1 is at least
+        # 1.5R away from entry; fall back to 2R fixed otherwise.
+        target_distance = 2.0 * one_r
+        if direction == "LONG":
+            t1 = price + target_distance
+        else:
+            t1 = price - target_distance
+
         return self._build_signal(
             direction=direction,
             entry_price=price,
             stop_price=stop_price,
             stop_ticks=stop_ticks,
-            t1=pivot_pp,
+            t1=t1,
             be_milestone=be_milestone,
             time_exit_ct="14:30",
             sub_name=sub,
-            reason=f"Open Drive {direction} — break of 5-min OR with volume",
+            reason=f"Open Drive {direction} — break of 5-min OR with volume (target 2R)",
             confluences=[
                 f"OR break {'>' if direction == 'LONG' else '<'} "
                 f"{h5 if direction == 'LONG' else l5:.2f}",
                 f"1m vol {v1:.0f} > {entry_vol_ratio:.1f}x avg {avg_v1:.0f}",
+                f"Target 2R = {t1:.2f} (stop {one_r:.2f}pts)",
             ],
             invalidation="price_re_enters_5min_or",
             extra_metadata={
                 "or_high": h5,
                 "or_low": l5,
+                "pivot_pp_ref": pivot_pp,  # logged for reference (was the broken target)
+                "target_method": "2R_fixed_post_B2_fix",
                 "trail_after_target": True,
                 "trail_ticks": int(self.config.get("open_drive_trail_ticks", 20)),
             },

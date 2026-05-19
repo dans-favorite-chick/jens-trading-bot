@@ -156,10 +156,13 @@ class ORBFade(BaseStrategy):
         except (AttributeError, TypeError, ValueError):
             return None
 
-        # Freshness
-        import time
+        # Freshness — compare against the strategy's "now" (works in both live
+        # and backtest), not wallclock time.time() which breaks backtests
+        # because wallclock is 2026 while last_bar_ts is the historical bar
+        # epoch. PHASE 13 BUG B3 FIX (2026-05-18).
         bar_freshness = self.config.get("bar_freshness_sec", DEFAULT_BAR_FRESHNESS_SEC)
-        if (time.time() - last_bar_ts) > bar_freshness:
+        now_ts = now_ct.timestamp()
+        if (now_ts - last_bar_ts) > bar_freshness:
             return None
         if last_bar_ts == self._last_signal_bar_ts:
             return None
