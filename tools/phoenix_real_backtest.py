@@ -944,6 +944,12 @@ def simulate_trade(signal_strategy: str, signal_direction: str,
     # Find bars strictly AFTER entry_ts
     forward = mnq_1m_df[mnq_1m_df.ts > entry_ts]
     if forward.empty:
+        # Entry is at/after the last bar of available data — no simulation possible.
+        # CRITICAL: still set exit_ts so the runner's active-position lockout clears.
+        # Without this, the strategy stays "locked" forever (silent-stop bug).
+        res.exit_ts = entry_ts
+        res.exit_price = entry_price
+        res.exit_reason = "no_data_after_entry"
         return res
     max_ts = entry_ts + pd.Timedelta(minutes=max_hold_min)
     forward = forward[forward.ts <= max_ts]
@@ -972,12 +978,23 @@ def simulate_trade(signal_strategy: str, signal_direction: str,
                 res.exit_reason = "target"
                 break
     else:
-        # No exit hit; time-stop at last bar
+        # No stop/target hit during the loop.
+        # CRITICAL FIX: handle BOTH non-empty and empty `forward` cases.
+        # Without the empty-case fallback, exit_ts stays None and the runner
+        # locks the strategy out forever (silent-stop bug).
         if not forward.empty:
             last = forward.iloc[-1]
             res.exit_ts = last.ts
             res.exit_price = last.close
             res.exit_reason = "time_exit"
+        else:
+            # forward became empty after max_hold_min filter — typically
+            # because entry landed at a session edge (Friday close, holiday)
+            # and no bars exist within max_hold_min after entry.
+            # Set exit_ts to the time horizon + entry_price for a no-op P&L.
+            res.exit_ts = entry_ts + pd.Timedelta(minutes=max_hold_min)
+            res.exit_price = entry_price
+            res.exit_reason = "no_data_in_window"
     # P&L
     if res.exit_ts is not None:
         ticks = ((res.exit_price - entry_price) / tick_size
@@ -1095,19 +1112,26 @@ def run_backtest(pipeline: CSVEnrichmentPipeline, strategies: dict,
         for name, strat in strategies.items():
             # Skip if strategy already has an active position (one at a time)
             if active[name] is not None:
-                # Did this strategy's position close on a previous walk?
-                # We pre-simulated to completion, so active is set during signal
-                # emission and stays for max_hold_min wall-clock. Simplify:
-                # just clear after the active position's exit_ts has passed.
-                if active[name].exit_ts is not None and eval_ts >= active[name].exit_ts:
+                # Clear lockout if the active position's exit_ts has passed.
+                # DEFENSE IN DEPTH: if exit_ts is None (legacy bug case), treat
+                # as immediately clearable so a malformed TradeResult can't
+                # permanently lock a strategy out. Loud warning so we notice.
+                if active[name].exit_ts is None:
+                    logger.warning(
+                        f"[{name}] active position has exit_ts=None at "
+                        f"{active[name].entry_ts} — clearing to prevent silent-stop"
+                    )
+                    active[name] = None
+                elif eval_ts >= active[name].exit_ts:
                     active[name] = None
             if active[name] is not None:
                 continue
             try:
                 sig = strat.evaluate(market, bars_5m, bars_1m, session_info)
             except Exception as e:
-                # Log + continue — don't let one strategy crash the run
-                logger.debug(f"[{name}] eval exception at {eval_ts}: {e!r}")
+                # Log + continue — don't let one strategy crash the run.
+                # WARNING level (not DEBUG) so silent-stop bugs become visible.
+                logger.warning(f"[{name}] eval exception at {eval_ts}: {e!r}")
                 continue
             if sig is None:
                 continue
