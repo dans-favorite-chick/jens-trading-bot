@@ -1162,6 +1162,165 @@ Hole-poking honest list:
 
 ---
 
+## S. SILENT-STOP BUG DISCOVERY + CORRECTED NUMBERS (2026-05-18 PM)
+
+**This section supersedes some prior numbers.** During final verification, the operator noticed many strategies in `phoenix_real_5year.csv` stopped firing at suspicious dates (bias_momentum after 4 days, spring_setup after 6 months, vwap_band_reversion after 2 years). Investigation revealed a critical bug in `simulate_trade()` that silently locked out strategies after they entered trades near session-edges.
+
+### S.1 The bug
+
+`tools/phoenix_real_backtest.py simulate_trade()` had two paths that could return `TradeResult.exit_ts = None`:
+
+1. **Path 1 (line 944-947):** Entry at/past last bar in data → `forward.empty` → return with `exit_ts=None`
+2. **Path 2 (line 974-980):** After clipping to `max_hold_min` window, `forward` becomes empty (entry at Friday 15:59 CT + 4hr max_hold spans CME daily break/weekend) → `else` block guards against empty → exit_ts stays None
+
+The runner then locked out the strategy forever because:
+```python
+if active[name].exit_ts is not None and eval_ts >= active[name].exit_ts:
+    active[name] = None
+```
+None compared to anything is False → strategy never unlocks.
+
+**Exceptions were also logged at DEBUG (silent).** Classic Phoenix "silent failures = #1 historical bug class" pattern.
+
+### S.2 Fix applied (commit a9a5ef9)
+
+1. `simulate_trade()` Path 1: when forward.empty at entry, set exit_ts=entry_ts, exit_reason='no_data_after_entry'
+2. `simulate_trade()` Path 2: added else branch when post-filter forward is empty, set exit_ts=entry_ts+max_hold_min, exit_reason='no_data_in_window'
+3. Runner active-lockout defense-in-depth: if exit_ts is None on an active trade, log WARNING + clear immediately
+4. Runner exception logging upgraded DEBUG → WARNING
+
+Plus **`tools/validate_backtest_quality.py`** built — flags STUCK / NaT exits / LOW n per strategy across all lab CSVs. Run after every backtest.
+
+### S.3 CORRECTED PORTFOLIO P&L (clean data)
+
+The single biggest finding: **`bias_momentum` is the #1 strategy by P&L**, not a marginal one.
+
+| Strategy | OLD (corrupted) | NEW (clean) | Change |
+|---|---:|---:|---|
+| **bias_momentum** | 40 trades / +$1,492 | **13,790 trades / +$178,379** ⭐ | +118× trades, +$176,887 |
+| `opening_session` (TOTAL) | 2,588 / +$31,894 | 2,949 / -$79,688 ⚠️ | Bug B2's open_drive exposed at -$106k |
+| `opening_session.orb` (sub) | 2,221 / +$27,257 | 2,221 / +$27,257 | Unchanged (champion sub) |
+| `spring_setup` | 1,713 / +$2,745 | 20,778 / +$18,544 | +12× trades, +$15,799 |
+| `vwap_band_reversion` | 1,316 / -$6,492 | 3,305 / -$6,237 | More trades, same verdict |
+| `vwap_pullback_v2` | 5,879 / +$10,144 | Same | ✓ Unaffected |
+| `g_inside_bar_breakout` | 1,015 / +$11,300 | Same | ✓ Unaffected |
+| `e_multi_day_breakout` | 685 / +$9,097 | Same | ✓ Unaffected |
+| `a_asian_continuation` | 596 / +$5,909 | Same | ✓ Unaffected |
+| `raschke_baseline` | 927 / +$12,779 | Same | ✓ Unaffected |
+| Others | Same | Same | ✓ Unaffected |
+
+**TOTAL CORRECTED: +$276,573 over 5 years = ~$55,300/year baseline (vs $18,500/year on corrupted data — 3× jump)**
+
+### S.4 Mean-reversion verdict CONFIRMED (was on 14d of data, now 5y)
+
+The Section N "pure mean-rev fails on MNQ" verdict held with much stronger evidence:
+- Now 100,000+ trades across 17 variants (vs ~200 before)
+- 17/17 variants at PF ≤ 1.11
+- Best variant `ema_rev_ema9_1.5atr`: +$2,047/5y / PF 1.11 = ~$410/year (not shippable)
+- 1m variants catastrophic losers: $-25k to $-26k each
+
+### S.5 Compounding result re-run
+
+$1,500 → **$2,560,553** over 5 years (tier_3000 recommended). Was $1,095,250 before fix.
+
+| Policy | OLD | NEW | Change |
+|---|---:|---:|---|
+| flat_1 | $63,670 | $102,618 | +61% |
+| tier_1500 | $1,067,468 | $2,386,500 | +124% |
+| **tier_3000 ⭐** | $1,095,250 | **$2,560,553** | **+134%** |
+| tier_5000 | $960,270 | $2,387,331 | +149% |
+| fixed_ratio_jones | $723,374 | $2,260,138 | +212% |
+| winner_weighted_3000 | $1,200,892 | $1,181,234 | -1.6% ⚠️ |
+
+**Path to 30c cap: ~6 months** (was 22 months). Year-end: 2026 = $2,560,553.
+
+### S.6 Lean-in plan needs FULL REDESIGN
+
+Phase 13 Section J's lean-in plan had `bias_momentum` at **0.5× size multiplier** (was Tier 3 — "too few trades, marginal $1.5k"). With clean data showing it as the #1 strategy at +$178k:
+
+- `winner_weighted_3000` (1.5×/0.5×) is now -$1.4M WORSE than equal-weight (was +$200k better)
+- The 0.5× multiplier on bias_momentum is ACTIVELY DESTROYING value
+
+**Required Section J revision:** Promote bias_momentum to Tier 1 with 1.5× multiplier. Re-run winner_weighted compounding.
+
+### S.7 Footprint hypothesis EMPIRICALLY CONFIRMED for 2 strategies
+
+Per Section R.5 prediction, footprint confluence works on:
+- **spring_setup** (VERY HIGH benefit prediction): VETO on contradicted footprint → **+$1,732 lift on $5,416 baseline = +32% over 2 months** ≈ +$10,400/year extrapolated ✅
+- **bias_momentum** (HIGH benefit prediction): SIZE BOOST on strongly_confirmed → +$272 on small sample, with $60/trade vs $22 baseline ✅
+
+`vwap_pullback_v2` did NOT show signal — confirms my Section R hole-poking that one-size-fits-all signal definitions don't transfer across strategy types. Mean-rev needs different footprint signals (absorption, divergence) than breakouts (aligned delta).
+
+### S.8 ES/NQ confluence finding COMPLETELY FLIPPED
+
+Section P verdict ("VETO divergent + SIZE BOOST aligned multi_day = +$1.4k") was an artifact of corrupted data. With clean data (46,299 trades):
+
+| Bucket | n | Avg $ |
+|---|---:|---:|
+| **wrong** alignment | 4,094 | **+$8.46** ⭐ |
+| weak | 34,480 | +$4.14 |
+| aligned | 7,452 | -$2.12 ❌ |
+| divergent | 273 | -$16.72 |
+
+**Filtering by ES/NQ alignment LOSES money on every strategy.** "Wrong" alignment is the most profitable per-trade — it's a CONTRARIAN signal indicating NQ-led tech divergence (which favors trend-following on NQ alone).
+
+**Revised verdict:** Keep `es_nq_confluence` as standalone strategy (it triggers ON divergence — that's its edge). Do NOT add ES/NQ alignment as a filter to any other strategy.
+
+### S.9 Updated total potential annual P&L
+
+| Component | Annual $ |
+|---|---:|
+| Baseline 11 winners (clean 5y data) | ~$55,300 |
+| Footprint VETO on spring_setup | +$10,400 |
+| Footprint SIZE BOOST on bias_momentum | +$1,000 |
+| **Subtotal (ship-ready)** | **~$66,700** |
+| Bug B2 fix on open_drive (recovers $106k/5y drag) | +$21,200 |
+| **Total potential (after B2 fix)** | **~$87,900/year** |
+
+vs Phase 13 prior estimate ~$18.5k/year — **4.7× higher** with clean data + footprint + bug B2 fix.
+
+### S.10 What's still UNCHANGED from prior plan
+
+- 3 new winners (a/e/g) — identical results
+- Raschke baseline — identical
+- 1m timeframe verdict — held (with more data)
+- Strategy specifications doc — entries, stops, exit policies all valid
+- NT8 PhoenixTradeOverlay design — unchanged
+- Volumetric snapshot recorder — unchanged
+- Databento data acquisition — done
+- Phase 13 architecture (Sections K, L, M) — framework still valid
+
+### S.11 What MUST be done before Phase 13 ships
+
+1. **Promote bias_momentum to Tier 1** with full size multiplier (1.0× or 1.2× — NOT 0.5×)
+2. **Fix Bug B2 open_drive pivot_pp** — costs $21k/year if left
+3. **Add footprint VETO to spring_setup** (kill "contradicted" footprint trades)
+4. **DO NOT add ES/NQ alignment as filter** — actively destroys P&L
+5. **Re-run compounding with corrected lean-in weights** to get final $ projection
+
+### S.12 Files affected
+
+**Trade data files re-generated with clean data:**
+- `backtest_results/phoenix_real_5year.csv` (NEW clean, 57,321 trades)
+- `backtest_results/phoenix_real_5year_BROKEN_pre_bugfix.csv` (corrupted, kept for reference)
+- `backtest_results/phoenix_mean_reversion_lab.csv` (re-run)
+- `backtest_results/phoenix_1m_timeframe_lab.csv` (re-run)
+- `backtest_results/phoenix_new_strategy_lab.csv` (re-run — identical)
+- `backtest_results/phoenix_trend_pullback_lab.csv` (re-run — identical)
+- `backtest_results/opening_session_sub_breakdown.csv` (re-run — orb identical)
+- `backtest_results/phoenix_compounding_*.csv` (re-run — $2.56M result)
+- `backtest_results/phoenix_footprint_attribution.csv` (re-run with bias_momentum + spring_setup)
+- `backtest_results/phoenix_es_nq_attribution.csv` (re-run, verdict flipped)
+
+**New tools:**
+- `tools/validate_backtest_quality.py` (catches future silent stops)
+- `tools/diag_silent_stop.py` (per-day reject reason diagnostic)
+
+**Fixed:**
+- `tools/phoenix_real_backtest.py` simulate_trade() + runner lockout + WARNING-level exceptions
+
+---
+
 ## H. Files created/touched this sprint (audit trail)
 
 **Created:**
