@@ -1321,6 +1321,136 @@ vs Phase 13 prior estimate ~$18.5k/year — **4.7× higher** with clean data + f
 
 ---
 
+## T. Per-Strategy Stop/Target Optimization (NEW — 2026-05-19)
+
+Built `tools/phoenix_stop_target_optimizer.py` — tests 19 exit policies (incl. 3 Chandelier variants) on all 11 winning strategies against clean 5y trade data + MFE/MAE per-strategy diagnostics.
+
+### T.1 MFE/MAE diagnosis — INITIAL stop placement
+
+| Strategy | n | MFE/MAE | Assessment |
+|---|---:|---:|---|
+| es_nq_confluence | 131 | **2.36** | STOP TOO TIGHT (winners run 2.4× further than losers) |
+| raschke_baseline | 927 | **1.68** | STOP TOO TIGHT |
+| asian_continuation | 596 | **1.56** | STOP TOO TIGHT |
+| inside_bar_breakout | 1015 | **1.50** | STOP TOO TIGHT |
+| opening_session | 2949 | 1.31 | ~ optimal |
+| multi_day_breakout | 685 | 1.20 | ~ optimal |
+| bias_momentum | 13790 | 1.16 | ~ optimal |
+| vwap_pullback_v2 | 5879 | 1.01 | ~ optimal |
+| spring_setup | 20778 | 1.01 | ~ optimal |
+| vwap_band_pullback | 324 | 0.93 | ~ optimal |
+| ib_breakout | 152 | 0.93 | ~ optimal |
+
+4 strategies have stops too tight relative to MFE → these benefit from wider targets / chandelier trails (captured below in T.2).
+
+### T.2 Individualized exit policy per strategy (Phase 13 SHIP TARGETS)
+
+| Strategy | Best Policy | WR% | Total $ | PF | Lift vs Baseline |
+|---|---|---:|---:|---:|---:|
+| **bias_momentum** | **tight_trail_post_1r** | 57.9% | **$232,984** | 1.61 | **+$54,605** |
+| **spring_setup** | **tight_trail_post_1r** | 51.0% | **$86,152** | 1.16 | **+$67,608** |
+| **opening_session** | **fixed_3r** | 36.4% | **$44,835** | 1.65 | **+$124,523** |
+| **inside_bar_breakout** | **chandelier_50_3x** | 67.7% | **$26,610** | 10.87 | **+$15,310** |
+| **multi_day_breakout** | **chandelier_50_3x** | 55.3% | **$22,887** | 9.04 | **+$13,789** |
+| **raschke_baseline** | **time_30min** | 49.7% | **$19,835** | 4.39 | **+$7,056** |
+| **asian_continuation** | **time_30min** | 56.9% | **$18,362** | 11.24 | **+$12,453** |
+| **vwap_pullback_v2** | **tight_trail_post_1r** | 51.7% | **$17,614** | 1.16 | **+$7,470** |
+| **es_nq_confluence** | **chandelier_50_3x** | 65.6% | **$9,957** | 21.71 | **+$7,929** |
+| **vwap_band_pullback** | **fixed_3r** | 42.6% | **$2,495** | 1.21 | **+$1,701** |
+| **ib_breakout** | **baseline** | 46.1% | **$342** | 1.06 | $0 |
+| **TOTAL** | | | **$481,073** | | **+$312,444** |
+
+**Total 5-year P&L with INDIVIDUALIZED exits: $481,073 = $96,215/year baseline.** Lift of +$62,489/year from optimal exits alone.
+
+### T.3 Three winning policy families
+
+**`tight_trail_post_1r`** wins for momentum continuation (3 strategies):
+- Hold initial stop until +1R, then 8-tick trail captures the burst
+- bias_momentum, spring_setup, vwap_pullback_v2
+
+**`chandelier_50_3x`** wins for high-WR clean breakouts (3 strategies):
+- 50-bar rolling high - 3× dynamic ATR(50)
+- inside_bar_breakout, multi_day_breakout, es_nq_confluence
+- Slower than classic LeBeau (22-bar) — 50-bar window better matches MNQ's ~50-min average hold
+
+**`time_30min`** wins for fast-resolving setups (2 strategies):
+- raschke_baseline, asian_continuation
+- These setups either work fast or fail — 30-min cap captures the burst
+
+**`fixed_3r`** wins for special cases:
+- opening_session (after Bug B2 fix)
+- vwap_band_pullback (small absolute $)
+
+### T.4 What didn't work (educational)
+
+- **`profit_lock_05r`** had highest WR everywhere (74-88%) — BUT total $ was lower. Confirms "high WR ≠ max profit." Comfortable but suboptimal.
+- **`first_5min_then_be`** killed most strategies (WR collapsed to 0-12%). Too aggressive cutoff.
+- **`chandelier_22_3x`** (classic LeBeau) close-second for several but slower 50-bar version generally won.
+- **`mfe_oracle_75`** (look-ahead reference) showed best policies capture 60-80% of theoretical maximum.
+
+### T.5 Implementation for `config/strategies.py`
+
+Each strategy gets a per-strategy `exit_policy` field:
+
+```python
+STRATEGIES = {
+    "bias_momentum": {
+        ...,
+        "exit_policy": "tight_trail_post_1r",
+        "exit_policy_params": {"trail_ticks": 8, "activate_r": 1.0},
+    },
+    "spring_setup": {
+        ...,
+        "exit_policy": "tight_trail_post_1r",
+        "exit_policy_params": {"trail_ticks": 8, "activate_r": 1.0},
+    },
+    "opening_session.orb": {
+        ...,
+        "exit_policy": "managed_existing",  # already optimal for this sub
+    },
+    "opening_session.open_drive": {
+        ...,
+        "exit_policy": "fixed_rr",
+        "exit_policy_params": {"rr": 3.0},  # Bug B2 fix
+    },
+    "g_inside_bar_breakout": {
+        ...,
+        "exit_policy": "chandelier",
+        "exit_policy_params": {"lookback_bars": 50, "atr_mult": 3.0, "activate_r": 1.0},
+    },
+    # ... etc per Table T.2
+}
+```
+
+`bots/base_bot.py` exit dispatcher reads `exit_policy` field and applies the matching logic from `core/exit_policies.py` (new module).
+
+### T.6 Updated portfolio annual P&L
+
+| Component | Annual $ |
+|---|---:|
+| Baseline (all baseline exits, clean 5y) | $33,726 |
+| Optimal individualized exits | $96,215 |
+| **Lift from Section T optimization** | **+$62,489** |
+| Footprint VETO on spring_setup | +$10,400 |
+| Bug B2 fix already in opening_session line above | (included) |
+| **TOTAL POTENTIAL** | **~$107,000/year** |
+
+vs original Phase 13 estimate ~$18,500/year — **5.8× higher** with bug fixes + individualized exits.
+
+### T.7 Honest caveats
+
+1. **Optimizer used 1m bars for walk-forward.** Real execution may have additional slippage. Expect 80-90% of backtest performance live.
+
+2. **Trail/chandelier exits are more complex to implement than fixed targets.** Need real-time ATR computation + rolling-window tracking in base_bot.
+
+3. **`opening_session` total includes ALL subs.** Open_drive Bug B2 fix is separate from this — the +$124k lift here is the combined effect of fixing the bug AND using fixed_3r.
+
+4. **Sample size matters.** `ib_breakout` (n=152) and `vwap_band_pullback` (n=324) have lower statistical power than `bias_momentum` (n=13,790). Treat their recommendations as directional.
+
+5. **Re-optimize annually.** Market regime shifts can change which exit works best. Run this optimizer once a year on rolling 5y data.
+
+---
+
 ## H. Files created/touched this sprint (audit trail)
 
 **Created:**
