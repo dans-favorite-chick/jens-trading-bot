@@ -1654,8 +1654,166 @@ With `tier_3000` compounding: previously $2.56M; tick-validated estimate is **$1
 |---|---|
 | `bb927bb` | Agent A - tick exit verification + `phoenix_tick_trail_verification.py` |
 | `48cd829` | Agent B - tick entry slippage + `phoenix_tick_entry_quality.py` |
-| (pending) | TBBO hygiene + `tools/tbbo_cache_builder.py` |
-| (pending) | Section U + `core/exit_policies.py` + base_bot order_type wiring + compounding re-run |
+| `222c6de` | TBBO hygiene tool `tools/tbbo_cache_builder.py` |
+| `9bc8039` | TBBO metadata + README + .gitignore + Section Z |
+| `c766ddb` | Section U + `core/exit_policies.py` + base_bot order_type wiring + compounding re-run |
+
+---
+
+## V. Edge-Sweep Investigations (NEW — 2026-05-20)
+
+After Section U shipped the production code, operator asked three follow-up questions to find any remaining edge:
+
+1. Is there an **entrance edge** from waiting for retest vs first-touch?
+2. Are there **tick-level reversal patterns** that let us lock profit early before our exit policy fires?
+3. Can we detect **support/resistance zones** from 5y data and trade them?
+
+Three parallel research spawns. **Two negative, one modest positive — but all valuable.**
+
+### V.1 Entry Retest Analyzer (commit `42abc1a`) — MODEST POSITIVE
+
+Built `tools/phoenix_entry_retest_analyzer.py`. Tested across 2,141 winning-strategy trades in the TBBO window (2026-03-17 to 2026-05-15).
+
+**Key methodological decision:** naive retest detection ("did price come back within 2 ticks?") gave 100% retest rate. Fixed with two-stage rule: price must first RUN >=4 ticks in trade direction, THEN return ±2 ticks. That's the economically meaningful definition.
+
+**Per-strategy verdict (n≥30):**
+
+| Strategy | n | Retest rate | First-touch $ | Retest-only $ | Verdict |
+|---|---:|---:|---:|---:|---|
+| **bias_momentum** | 497 | 99.2% | $9,804 | $10,336 | ✅ **Pilot RETEST** (+$532) |
+| **spring_setup** | 870 | 98.9% | $4,388 | $4,413 | ✅ **Pilot RETEST** (+$25) |
+| raschke_ema9_ref | 30 | 100% | $528 | $647 | ✅ Pilot (+$119, WR 70%→83%) |
+| vwap_band_reversion | 57 | 96.5% | -$324 | -$198 | ✅ Pilot (+$126) |
+| noise_area | 326 | 99.7% | -$310 | -$346 | ❌ Keep first-touch |
+| vwap_pullback_v2 | 190 | 98.4% | $3,386 | $3,242 | ❌ Keep first-touch |
+
+**Mechanism:** Median fill is 3 ticks WORSE on retest (chasing back). The dollar improvement comes from OUTCOME SELECTION — retests filter for signals where the initial run validated the level.
+
+**HYBRID 50/50 always landed between A and B by construction — no strategy preferred it.** Commit fully to one mode.
+
+**Aggregate lift:** +$623 (+3.6%) over 60 days = **~$3-4K/year extrapolated** when applied as opt-in pilot for bias_momentum + spring_setup.
+
+**Recommendation:** Ship as `entry_mode` config field — default `first_touch`, opt-in `retest` for the 4 strategies above. Low risk, modest free lift.
+
+### V.2 Early Reversal Exit Signals (commit `a5fc66d`) — NEGATIVE
+
+Built `tools/phoenix_early_reversal_signals.py`. Tested 5 tick-level reversal patterns as early-exit triggers across 1,640 trades:
+- delta_divergence (60s aggressor delta turns counter while near MFE peak)
+- tape_speed_collapse (10s tick rate < 50% of 60s avg)
+- volume_climax (5s vol > 2.5x avg)
+- aggressor_flip (last 30 ticks counter-side > 1.5x)
+- stacked_imbalance (3+ levels with counter > 3:1)
+
+Three combined policies: aggressive (any), conservative (2+ within 5s), high-confidence (stacked OR climax).
+
+**Every (strategy, signal) cell had negative `sum_delta_$`. No improvement anywhere.**
+
+| Strategy | Baseline $ | Best early-exit $ | Δ |
+|---|---:|---:|---:|
+| bias_momentum | +$12,326 | +$7,288 | -$5,038 |
+| spring_setup | +$5,206 | +$1,063 | -$4,143 |
+| vwap_pullback_v2 | +$4,654 | +$1,986 | -$2,668 |
+| opening_session | +$903 | +$40 | -$863 |
+| inside_bar_breakout | +$92 | +$59 | -$33 |
+| raschke_baseline | +$46 | +$22 | -$24 |
+
+**Why it fails:** WR climbs 30-45% → 67-77% (you ARE catching reversals). BUT trades that hit fixed_RR targets capture MFE that extends WAY past the early-warning signal. Per-trade $ drops more than WR rises.
+
+**This is the SAME insight as Section U:** fixed RR > all trail/exit-management variants. Tick-level reality keeps confirming **let winners run to target**.
+
+**Recommendation:** Do NOT add early-exit triggers. Phoenix's exit policies (from Section U.3) are near-optimal at tick level.
+
+### V.3 S/R Zone Strategy Investigation (commit `717d23f`) — NEGATIVE (but reusable engine)
+
+Built `core/sr_zones.py` (280 LOC, importable detection engine) + `tools/phoenix_sr_strategy_lab.py` (6 variants).
+
+**6 variants, 10,357 trades over 5 years, all unprofitable:**
+
+| Variant | n | WR | Wilson low | Total $ | PF |
+|---|---:|---:|---:|---:|---:|
+| sr_bounce_round_only | 610 | 29.8% | 26.3% | -$476 | 0.83 |
+| sr_bounce_vwap_dev | 390 | 26.7% | 22.5% | -$464 | 0.74 |
+| sr_bounce_swing_only | 1,975 | 27.1% | 25.2% | -$1,832 | 0.73 |
+| sr_bounce_strict | 2,078 | 27.0% | 25.1% | -$2,059 | 0.73 |
+| sr_bounce_moderate | 2,647 | 27.4% | 25.7% | -$2,613 | 0.74 |
+| sr_bounce_loose | 2,657 | 27.3% | 25.7% | -$2,613 | 0.74 |
+
+**All Wilson 95% lower bounds < 33% breakeven → statistically confirmed negative edge, not bad luck.**
+
+**Why it fails:** Median stop 2.5 pts, median hold 1 minute, 73% stopped out. MNQ noise (1-3 pt whipsaws on 5m bars) destroys 2R-target setups. Detection engine finds REAL S/R, but the rejection-candle entry captures the move after the edge is already gone.
+
+**However — 3 valuable outputs despite the negative:**
+
+1. **`core/sr_zones.py` is reusable.** Composes swing pivots + round numbers + prior-day H/L/POC + VWAP 2.1σ bands with composite strength scoring. Can be imported anywhere.
+
+2. **3 follow-up uses identified** (future sprints):
+   - VETO filter: block `bias_momentum` longs when strong resistance <4t above price
+   - CONFLUENCE boost: size-up `spring_setup` when wick is at strength ≥0.7 zone
+   - Failed-hold continuation: zones that BREAK often continue strongly — untested
+
+3. **🔥 CAUGHT + FIXED a new silent-stop bug pattern.** Agent used `len(bars_5m)` as cache freshness key, but `bars_5m` is `deque(maxlen=200)` — len() saturates and stops growing. Cache went permanently stale → trades stopped at 2023-05-15. Fixed with `bars_5m[-1].end_time` (monotonic). **Updated `validate_backtest_quality.py` to include the new lab.**
+
+### V.4 What ships from Section V
+
+**To production (one small change):**
+- Add `entry_mode` config field, default `first_touch`, opt-in `retest` for:
+  - bias_momentum
+  - spring_setup
+  - raschke_baseline (when sample matures)
+  - vwap_band_reversion
+- Expected lift: ~$3-4K/year (modest but free)
+
+**To toolkit (already shipped via agents' commits):**
+- `core/sr_zones.py` — reusable detection engine
+- `tools/phoenix_entry_retest_analyzer.py` — re-runnable validation
+- `tools/phoenix_early_reversal_signals.py` — for future regression testing
+- `tools/phoenix_sr_strategy_lab.py` — for future S/R variants
+- Updated `validate_backtest_quality.py` — now covers the S/R lab
+
+**To NOT ship:**
+- Early reversal exit triggers (negative across the board)
+- Direct S/R-bounce strategy (negative; 6/6 variants)
+
+**Deferred for future sprints:**
+- S/R as VETO filter for bias_momentum
+- S/R as CONFLUENCE boost for spring_setup
+- Failed-hold continuation strategy
+
+### V.5 Combined consistency check
+
+Section V's findings are **internally consistent** with Sections T and U:
+
+- Section T (bar-level): trails appeared to win
+- Section U (tick-level): trails were artifacts; fixed_rr won
+- **Section V (tick-level extension): NO early-exit signal beats fixed_rr** ← reconfirms U
+
+- Section S (silent-stop bug pattern): "Phoenix failures are silent"
+- **Section V.3 caught the SAME pattern in a different form** (deque saturation) ← reconfirms S, validator now catches it
+
+- Section U entry slippage: mostly favorable on mean-rev
+- **Section V.1 retest analysis: outcome-selection effect dominates** ← consistent: mean-rev has POSITIVE structure that retest can exploit
+
+The story is now coherent: **Phoenix's edges live in entry selection (good triggers) and patient exits (fixed RR). Trying to micro-manage exit timing hurts. Trying to add reactive strategies to existing concepts (S/R direct, early-reversal triggers) all underperforms.**
+
+### V.6 Final Phase 13 portfolio expectation
+
+| Component | Annual $ |
+|---|---:|
+| Section U production (clean exits, slippage-aware orders) | ~$60-90K |
+| + Section V.1 retest mode (bias_momentum + spring_setup) | +$3-4K |
+| **TOTAL PHASE 13 PRODUCTION TARGET** | **~$65-95K/year** |
+
+With `tier_3000` compounding: ~$1.5M-$3M range over 5 years.
+
+### V.7 Commits
+
+| Commit | Spawn / source |
+|---|---|
+| `222c6de` + `9bc8039` | TBBO hygiene canonical loader |
+| `c766ddb` | Section U production code (exit_policies + base_bot wiring + compounding) |
+| `42abc1a` | Spawn 1 — Entry retest analyzer |
+| `a5fc66d` | Spawn 2 — Early reversal exit signals (NEGATIVE) |
+| `717d23f` | Spawn 3 — S/R zones detection + strategy lab (NEGATIVE; engine reusable) |
 
 ---
 
