@@ -1,0 +1,43 @@
+{
+  "source_file": "data/historical/databento_tbbo/mnq_tbbo_2026-03-17_2026-05-17.dbn.zst",
+  "source_file_mtime": "2026-05-19T00:02:49.468304+00:00",
+  "source_file_size_bytes": 977807092,
+  "output_file": "data/historical/databento_tbbo/mnq_ticks_clean.parquet",
+  "output_size_bytes": 438366586,
+  "row_count": 43815631,
+  "date_range_start": "2026-03-17T00:00:00.041910655+00:00",
+  "date_range_end": "2026-05-15T20:59:59.996674953+00:00",
+  "price_min": 22960.5,
+  "price_max": 29783.75,
+  "symbols_included": {
+    "MNQM6": 43815631
+  },
+  "max_price_jump_ticks_overall": 1315,
+  "max_price_jump_location_overall": {
+    "symbol": "MNQM6",
+    "ts_event": "2026-04-12T22:00:00+00:00",
+    "price": 25004.25,
+    "prev_price": 25333.0,
+    "gap_ms": 176400142.403
+  },
+  "max_price_jump_ticks_intrasession": 242,
+  "max_price_jump_location_intrasession": {
+    "symbol": "MNQM6",
+    "ts_event": "2026-05-12T12:30:00.998847+00:00",
+    "price": 29145.75,
+    "prev_price": 29206.25,
+    "gap_ms": 2.327
+  },
+  "max_price_jump_seen": 242,
+  "rows_dropped_count": 553174,
+  "rows_dropped_reasons": {
+    "calendar_spreads": 5858,
+    "non_outright_after_spread_drop": 0,
+    "non_dominant_symbol_per_day": 547316,
+    "price_band_out_of_range": 0
+  },
+  "sanity_ok": true,
+  "sanity_failures": [],
+  "generated_at": "2026-05-20T01:22:46.673374+00:00",
+  "builder_version": "1.0.1"
+}

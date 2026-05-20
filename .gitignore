@@ -166,3 +166,11 @@ data/historical/phase12_validation.csv
 
 # Stray .env backup from a prior gemini-key rotation (must never track).
 .env.backup_*
+
+# === 2026-05-19 — TBBO directory ===
+# Raw DBN dumps from Databento are ~1 GB; never track.  Generated CSVs
+# from the same dataset (footprints, etc.) are regenerable so ignore them.
+# The README.md and .metadata.json files in this dir ARE tracked because
+# they document what the regenerable binaries should look like.
+data/historical/databento_tbbo/*.dbn.zst
+data/historical/databento_tbbo/*.csv

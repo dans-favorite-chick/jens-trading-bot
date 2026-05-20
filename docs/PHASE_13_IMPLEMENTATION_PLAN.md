@@ -1687,3 +1687,82 @@ With `tier_3000` compounding: previously $2.56M; tick-validated estimate is **$1
 - `strategies/orb_fade.py` (B3 fix — pending investigation)
 - `strategies/opening_session.py` (B2 fix — pending operator decision)
 - `ninjatrader/TickStreamer.cs` (D4 MES feed — separate sprint)
+
+---
+
+## Z. Tick data cache hygiene (2026-05-19 — shipped)
+
+The MNQ TBBO tick data feeding all tick-level verification work
+(`phoenix_tick_trail_verification.py`, `phoenix_tick_entry_quality.py`,
+and future similar tools) now goes through a single canonical builder
++ cache so two different agents can't disagree on what "the tick stream"
+is and produce contradictory results.
+
+### Canonical artifacts
+
+| Path | Purpose |
+|---|---|
+| `data/historical/databento_tbbo/mnq_ticks_clean.parquet` | Canonical clean tick cache (~43.8M rows, 418 MB, snappy). |
+| `data/historical/databento_tbbo/mnq_ticks_clean.metadata.json` | Provenance: source DBN, row count, date range, per-symbol counts, drop reasons, sanity stats. |
+| `tools/tbbo_cache_builder.py` | The ONLY thing that should build the clean parquet. Exposes `build_clean_tick_cache(force_rebuild=False)` and `load_clean_ticks(symbol_filter=None, start=None, end=None)`. |
+| `data/historical/databento_tbbo/README.md` | Directory-level explainer of which parquet to load when. |
+
+### Hygiene gotchas (why future tools must NOT re-roll their own filter)
+
+The raw DBN at `mnq_tbbo_2026-03-17_2026-05-17.dbn.zst` was downloaded
+with `MNQ.FUT` continuous symbology (`stype_in='parent'`). That contains:
+
+1. **Multiple expirations** (MNQH6, MNQM6, MNQU6, MNQZ6, MNQH7, MNQM7).
+2. **Calendar spread instruments** — e.g., `MNQH6-MNQM6` quoted at ~$215
+   vs the ~$24,800 outright. If those leak into a fill simulator you
+   get nonsense like a SHORT @ 24818 "filling" at 215 for $49K of fake P&L.
+3. **Rollover overlap** — at expiration two outrights coexist with very
+   different prices; a naive sort interleaves them.
+
+The canonical builder defends against all three:
+* (b) drop any symbol containing a hyphen,
+* (c) keep only `^MNQ[HMUZ]\d+$` outrights,
+* (d) per UTC date, keep only the symbol with the most volume that day,
+* (f) verify `max intra-session tick-to-tick jump < 500 ticks`. (Weekend
+      gaps Fri-close -> Sun-open are real market events of ~1300 ticks /
+      $325 and are reported separately as `max_price_jump_ticks_overall`.)
+
+For 2026-03-17..2026-05-15 the dominant-per-day filter picks MNQM6 every
+single day (share 81%-99.9%; only Mar 17 drops below 90% as the H6 contract
+expires). Net retention: 43.8M / 44.4M raw rows = 98.75%.
+
+### How to rebuild
+
+```
+python tools/tbbo_cache_builder.py --rebuild   # full rebuild from DBN (~85s)
+python tools/tbbo_cache_builder.py --inspect   # print metadata, no rebuild
+python tools/tbbo_cache_builder.py             # rebuild only if missing/stale
+```
+
+### Legacy caches (deprecated, regenerated for back-compat)
+
+The two earlier per-tool caches still exist because in-tree tools import
+them by name, but they are now regenerated FROM `mnq_ticks_clean.parquet`
+and should NOT be the target of new code:
+
+* `data/historical/databento_tbbo/mnq_ticks.parquet`      (Agent A schema)
+* `data/historical/databento_tbbo/mnq_ticks_slim.parquet` (Agent B schema)
+
+When `tbbo_cache_builder.py --rebuild` runs after a fresh DBN download,
+run the regeneration snippet documented in
+`data/historical/databento_tbbo/README.md` to refresh those two too.
+
+### Sanity stats at ship time
+
+* Row count: 43,815,631
+* Date range: 2026-03-17T00:00 -> 2026-05-15T20:59 UTC
+* Symbols included: MNQM6 (43.8M)
+* Price band: $22,960.50 — $29,783.75 (well inside MNQ outright range)
+* Max intra-session jump: 242 ticks ($60.50) at 2026-05-12T12:30 UTC
+  (US cash open burst, 2.3 ms apart)
+* Max overall jump: 1315 ticks ($328.75) at 2026-04-12T22:00 UTC
+  (Sunday futures re-open following Friday close — REAL market gap,
+  documented as expected)
+* Rows dropped: 553,174 total = 5,858 calendar spreads + 547,316
+  non-dominant-symbol-per-day (= H6 ticks during early-window rollover
+  and a small number of MNQU6 / MNQZ6 ticks) + 0 price-band violations.
