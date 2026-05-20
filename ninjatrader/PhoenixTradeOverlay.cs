@@ -63,47 +63,63 @@ using NinjaTrader.NinjaScript.Indicators;
 namespace NinjaTrader.NinjaScript.Indicators
 {
     // Color map per strategy (RGB hex from STRATEGY_SPECIFICATIONS.md §5.1)
+    //
+    // 2026-05-20 SHIP AUDIT FIX: rewrote from collection-initializer to
+    // a static constructor so each brush is .Freeze()'d before publication.
+    // Without freezing, the static field initializer creates WPF brushes
+    // bound to the thread that loaded the assembly — NT8's NinjaScript
+    // load happens on a worker thread, so any attempt to use the brushes
+    // from OnBarUpdate (a different worker thread) throws InvalidOperation
+    // and the indicator silently fails to appear in the Indicators picker.
+    // Built-in Brushes.* are pre-frozen, so we use them where the
+    // STRATEGY_SPECIFICATIONS color happens to match a named WPF color.
     public static class StrategyColors
     {
-        public static readonly Dictionary<string, Brush> Map = new Dictionary<string, Brush>(StringComparer.OrdinalIgnoreCase)
-        {
-            { "opening_session",       new SolidColorBrush(Color.FromRgb(0xFF, 0xD7, 0x00)) }, // Yellow
-            { "raschke_baseline",      new SolidColorBrush(Color.FromRgb(0x00, 0xFF, 0xFF)) }, // Cyan
-            { "g_inside_bar_breakout", new SolidColorBrush(Color.FromRgb(0xFF, 0x00, 0xFF)) }, // Magenta
-            { "inside_bar_breakout",   new SolidColorBrush(Color.FromRgb(0xFF, 0x00, 0xFF)) }, // Magenta (alias)
-            { "e_multi_day_breakout",  new SolidColorBrush(Color.FromRgb(0x00, 0xFF, 0x00)) }, // Lime
-            { "multi_day_breakout",    new SolidColorBrush(Color.FromRgb(0x00, 0xFF, 0x00)) },
-            { "a_asian_continuation",  new SolidColorBrush(Color.FromRgb(0x93, 0x70, 0xDB)) }, // Purple
-            { "asian_continuation",    new SolidColorBrush(Color.FromRgb(0x93, 0x70, 0xDB)) },
-            { "vwap_pullback_v2",      new SolidColorBrush(Color.FromRgb(0xFF, 0x8C, 0x00)) }, // Orange
-            { "spring_setup",          new SolidColorBrush(Color.FromRgb(0x00, 0x64, 0x00)) }, // DarkGreen
-            { "es_nq_confluence",      new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF)) }, // White
-            { "bias_momentum",         new SolidColorBrush(Color.FromRgb(0xFF, 0x00, 0x00)) }, // Red
-            { "vwap_band_pullback",    new SolidColorBrush(Color.FromRgb(0x87, 0xCE, 0xEB)) }, // SkyBlue
-            { "vwap_band_reversion",   new SolidColorBrush(Color.FromRgb(0xFF, 0x69, 0xB4)) }, // Pink
-            { "ib_breakout",           new SolidColorBrush(Color.FromRgb(0xDA, 0xA5, 0x20)) }, // Gold
-            // 2026-05-20 SHIP AUDIT: explicit colors for strategies that
-            // were emitting events but falling back to LightGray (nearly
-            // invisible on light backgrounds). big_move_signal is now
-            // validated=False in config, but sim_bot may still fire it.
-            { "big_move_signal",       new SolidColorBrush(Color.FromRgb(0xFF, 0x45, 0x00)) }, // OrangeRed
-            { "dom_pullback",          new SolidColorBrush(Color.FromRgb(0xB2, 0x22, 0x22)) }, // Firebrick
-            { "nq_lsr",                new SolidColorBrush(Color.FromRgb(0x40, 0xE0, 0xD0)) }, // Turquoise
-            { "orb_fade",              new SolidColorBrush(Color.FromRgb(0x80, 0x80, 0x80)) }, // Gray (killed)
-            { "orb_v2",                new SolidColorBrush(Color.FromRgb(0x6A, 0x5A, 0xCD)) }, // SlateBlue
-            { "compression_breakout_v2",   new SolidColorBrush(Color.FromRgb(0x80, 0x80, 0x80)) }, // Gray (killed)
-            { "compression_breakout_micro",new SolidColorBrush(Color.FromRgb(0x80, 0x80, 0x80)) }, // Gray (killed)
-            { "footprint_cvd_reversal",new SolidColorBrush(Color.FromRgb(0x80, 0x80, 0x80)) }, // Gray (dormant)
-            { "orb",                   new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0x00)) }, // Yellow (top-level orb)
-            // NOTE: opening_session already defined above at line 70 (yellow).
-        };
+        public static readonly Dictionary<string, Brush> Map;
+        public static readonly Brush DefaultColor;
 
-        public static readonly Brush DefaultColor = Brushes.LightGray;
+        static StrategyColors()
+        {
+            DefaultColor = Brushes.LightGray;  // built-in: already frozen
+            Map = new Dictionary<string, Brush>(StringComparer.OrdinalIgnoreCase);
+
+            // Plan §1.1 winners — use built-in Brushes.* where the color
+            // matches the spec exactly; Make() for non-standard hex.
+            Map["opening_session"]       = Brushes.Yellow;       // canonical Yellow
+            Map["raschke_baseline"]      = Brushes.Cyan;
+            Map["g_inside_bar_breakout"] = Brushes.Magenta;
+            Map["inside_bar_breakout"]   = Brushes.Magenta;      // alias
+            Map["e_multi_day_breakout"]  = Brushes.Lime;
+            Map["multi_day_breakout"]    = Brushes.Lime;          // alias
+            Map["a_asian_continuation"]  = Brushes.MediumPurple;
+            Map["asian_continuation"]    = Brushes.MediumPurple;  // alias
+            Map["vwap_pullback_v2"]      = Brushes.DarkOrange;
+            Map["spring_setup"]          = Brushes.DarkGreen;
+            Map["es_nq_confluence"]      = Brushes.White;
+            Map["bias_momentum"]         = Brushes.Red;
+            Map["vwap_band_pullback"]    = Brushes.SkyBlue;
+            Map["vwap_band_reversion"]   = Brushes.HotPink;
+            Map["ib_breakout"]           = Brushes.Goldenrod;
+
+            // Disabled / dormant strategies — keep colors so sim_bot
+            // overlays are still readable, but use muted Gray for plan-
+            // killed ones so the operator can spot them at a glance.
+            Map["big_move_signal"]            = Brushes.OrangeRed;
+            Map["dom_pullback"]               = Brushes.Firebrick;
+            Map["nq_lsr"]                     = Brushes.Turquoise;
+            Map["orb_fade"]                   = Brushes.Gray;       // killed
+            Map["orb_v2"]                     = Brushes.SlateBlue;
+            Map["compression_breakout_v2"]    = Brushes.Gray;       // killed
+            Map["compression_breakout_micro"] = Brushes.Gray;       // killed
+            Map["footprint_cvd_reversal"]     = Brushes.Gray;       // dormant
+            Map["orb"]                        = Brushes.Yellow;     // top-level
+        }
 
         public static Brush Get(string strategy)
         {
             if (string.IsNullOrEmpty(strategy)) return DefaultColor;
-            return Map.TryGetValue(strategy, out var b) ? b : DefaultColor;
+            Brush b;
+            return Map.TryGetValue(strategy, out b) ? b : DefaultColor;
         }
     }
 
@@ -150,9 +166,16 @@ namespace NinjaTrader.NinjaScript.Indicators
             {
                 lastFileOffset = 0;
                 trades.Clear();
+                // 2026-05-20 SHIP AUDIT: visible load-confirmation Print so
+                // operator can verify the indicator is at least running.
+                // Look for this line in Tools -> NinjaScript -> Output Window.
+                Print("[PhoenixTradeOverlay] Configure: loaded, watching " +
+                      SIGNAL_FILE_PATH + " (" + StrategyColors.Map.Count +
+                      " strategy colors mapped)");
             }
             else if (State == State.Realtime)
             {
+                Print("[PhoenixTradeOverlay] Realtime: processing existing events");
                 // On entering realtime, read any existing events so we sync state
                 ProcessNewEvents();
             }
@@ -252,7 +275,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         private void HandleFillEvent(Dictionary<string, string> p, string id)
         {
-            if (!trades.TryGetValue(id, out var trade)) return;
+            // 2026-05-20 SHIP AUDIT: out-var declarations rewritten to explicit
+            // types so the file compiles on older NT8 C# 5/6 toolchains.
+            ActiveTrade trade;
+            if (!trades.TryGetValue(id, out trade)) return;
             trade.FillPrice = GetDouble(p, "fill_price");
             trade.FillTime  = ParseTimestamp(GetStr(p, "ts"));
             // No additional drawing — entry marker already placed at signal
@@ -260,7 +286,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         private void HandleStopMovedEvent(Dictionary<string, string> p, string id)
         {
-            if (!trades.TryGetValue(id, out var trade)) return;
+            ActiveTrade trade;
+            if (!trades.TryGetValue(id, out trade)) return;
             trade.StopPrice = GetDouble(p, "new_stop");
             // Stop line will be re-drawn on next UpdateActiveLineDrawings call
             // (existing drawing object overwritten by same name tag)
@@ -268,7 +295,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         private void HandleExitEvent(Dictionary<string, string> p, string id)
         {
-            if (!trades.TryGetValue(id, out var trade)) return;
+            ActiveTrade trade;
+            if (!trades.TryGetValue(id, out trade)) return;
             trade.IsClosed = true;
             double exitPrice  = GetDouble(p, "exit_price");
             string exitReason = GetStr(p, "exit_reason");
@@ -430,13 +458,16 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         private string GetStr(Dictionary<string, string> dict, string key)
         {
-            return dict.TryGetValue(key, out var v) ? v : "";
+            string v;
+            return dict.TryGetValue(key, out v) ? v : "";
         }
 
         private double GetDouble(Dictionary<string, string> dict, string key)
         {
-            if (!dict.TryGetValue(key, out var v)) return double.NaN;
-            if (double.TryParse(v, NumberStyles.Any, CultureInfo.InvariantCulture, out var d))
+            string v;
+            if (!dict.TryGetValue(key, out v)) return double.NaN;
+            double d;
+            if (double.TryParse(v, NumberStyles.Any, CultureInfo.InvariantCulture, out d))
                 return d;
             return double.NaN;
         }
@@ -444,9 +475,10 @@ namespace NinjaTrader.NinjaScript.Indicators
         private DateTime ParseTimestamp(string ts)
         {
             if (string.IsNullOrEmpty(ts)) return DateTime.MinValue;
+            DateTime dt;
             if (DateTime.TryParse(ts, CultureInfo.InvariantCulture,
                                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
-                                   out var dt))
+                                   out dt))
             {
                 return dt.ToLocalTime();
             }
