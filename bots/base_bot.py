@@ -227,6 +227,79 @@ def _validate_nt8_paths():
 _OIF_SINK = None  # cached per-process; rebuilt on env-flag flip is not supported
 
 
+# ════════════════════════════════════════════════════════════════════
+# PHASE 13 SECTION U: per-strategy overrides (tick-validated)
+# ════════════════════════════════════════════════════════════════════
+
+def _apply_phase13_overrides(signal) -> None:
+    """Mutate a Signal in-place to apply the tick-validated per-strategy
+    overrides from core/exit_policies.py:
+      - order_type: from PHASE_13_ORDER_TYPES (market | limit_5s)
+      - exit_policy: from PHASE_13_EXIT_ASSIGNMENTS; if it computes a target,
+        overwrite signal.target_price
+
+    Safe no-op for strategies not in the registry. Logs at INFO when an
+    override is applied so we can see it in the live logs.
+
+    Called at the top of BaseBot._process_signal — see Section U of
+    docs/PHASE_13_IMPLEMENTATION_PLAN.md for the rationale.
+    """
+    try:
+        from core.exit_policies import (
+            PHASE_13_EXIT_ASSIGNMENTS,
+            PHASE_13_ORDER_TYPES,
+            get_policy,
+        )
+    except Exception:
+        return  # exit_policies module not present yet; gracefully skip
+
+    strat = getattr(signal, "strategy", None)
+    if not strat:
+        return
+
+    # 1) Order type override
+    if strat in PHASE_13_ORDER_TYPES:
+        order_type = PHASE_13_ORDER_TYPES[strat]
+        if order_type == "limit_5s":
+            # Map to Phoenix's LIMIT entry type. NT8 OIF + bracket logic
+            # will use the signal.entry_price as the limit price. The
+            # "5s cancel + market" behavior requires a separate mechanism
+            # (TODO: implement in Phase 14 via limit timeout watcher).
+            # For now, plain LIMIT at signal price.
+            if getattr(signal, "entry_type", "MARKET") != "LIMIT":
+                signal.entry_type = "LIMIT"
+                logger.info(
+                    f"[Phase13 override] {strat}: entry_type "
+                    f"-> LIMIT (per Section U slippage analysis)"
+                )
+        # market stays at default (MARKET)
+
+    # 2) Exit policy override — set target_price if policy computes one
+    if strat in PHASE_13_EXIT_ASSIGNMENTS:
+        pname, params = PHASE_13_EXIT_ASSIGNMENTS[strat]
+        try:
+            policy = get_policy(pname, params)
+            initial_stop = getattr(signal, "stop_price", None)
+            entry_price = getattr(signal, "entry_price", None)
+            direction = getattr(signal, "direction", None)
+            if initial_stop is not None and entry_price is not None and direction:
+                new_target = policy.compute_initial_target(
+                    direction, float(entry_price), float(initial_stop)
+                )
+                # Only override if the policy provided a target (None means
+                # "let the strategy keep its own target", used by managed_existing)
+                if new_target is not None:
+                    old_target = getattr(signal, "target_price", None)
+                    if old_target != new_target:
+                        signal.target_price = new_target
+                        logger.info(
+                            f"[Phase13 override] {strat}: target_price "
+                            f"{old_target} -> {new_target} via {pname}({params})"
+                        )
+        except Exception as e:
+            logger.warning(f"[Phase13 override] exit policy error for {strat}: {e!r}")
+
+
 def _get_oif_sink():
     """Return the configured OIF sink (DirectFileSink by default,
     RiskGateSink if PHOENIX_RISK_GATE=1). Cached per-process for speed."""
@@ -2336,6 +2409,16 @@ class BaseBot:
         Called inside asyncio.wait_for(timeout=15s) so it can never
         freeze the tick loop.
         """
+        # ── PHASE 13 SECTION U: tick-validated per-strategy overrides ──
+        # Apply per-strategy entry order_type AND exit policy from the
+        # canonical assignments in core/exit_policies.py. Safe no-op if
+        # the strategy isn't in the registry — strategies that aren't
+        # listed there keep their Signal-provided defaults.
+        try:
+            _apply_phase13_overrides(signal)
+        except Exception as _e:
+            logger.warning(f"[Phase13 override] {_e!r}")
+
         # Phase 4: Pre-trade filter (3s timeout, defaults to CLEAR)
         if AGENTS_AVAILABLE and AGENT_PRETRADE_FILTER_ENABLED:
             try:

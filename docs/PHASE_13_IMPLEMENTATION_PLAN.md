@@ -1564,6 +1564,101 @@ The original Section T was based on a 19-policy battery. The expanded 25-policy 
 
 ---
 
+## U. Tick-Validated Production Specifications (NEW — 2026-05-19)
+
+After Section T's 25-policy bar-level optimizer flagged `tick_trail_4_post_1r` as best for 3 momentum strategies, the operator correctly intuited: "4 ticks is nothing, we'll be out in 0.2 seconds." Two parallel verification agents tested this empirically using 44.4M MNQM6 ticks from our Databento TBBO data (2026-03-17 -> 2026-05-17).
+
+### U.1 Agent A - Tick-Level EXIT/Trail Verification (docs/TICK_LEVEL_EXIT_VERIFICATION.md)
+
+**The operator was right. The 4-tick recommendation was a bar-level artifact.**
+
+**Phantom P&L finding:** Across all (strategy, policy) cells, bar-level simulation overstated P&L by an average of **+45.4%** (worst case +90%). **70.1% of trades exit EARLIER at tick level than the bar simulation predicted** - exactly the intra-minute "free-look" artifact.
+
+**Head-to-head (2-month TBBO window):**
+
+| Strategy | Bar 4t (was recommended) | Tick 4t (real) | **TICK WINNER** |
+|---|---:|---:|---:|
+| `bias_momentum` | $16,732 (inflated) | $10,740 | **`fixed_2r` $12,326** |
+| `spring_setup` | $7,572 (inflated) | $2,257 | **`fixed_3r` $5,206** |
+| `vwap_pullback_v2` | $3,523 (inflated) | $2,728 | **`fixed_3r` $4,654** |
+
+**Within trail family:** `4t > 8t > 12t > 20t` collapses to a coin flip at tick level. **"Trail at all" vs "fixed RR target" is the decisive choice.** Fixed RR wins for all 3 momentum strategies.
+
+### U.2 Agent B - Tick-Level ENTRY Fill Quality (docs/TICK_LEVEL_ENTRY_VERIFICATION.md)
+
+**Surprise finding: portfolio P&L IMPROVES from $33.3K/yr to $64.4K/yr with realistic 500ms slippage applied.** Most winning strategies are mean-reversion plays that fire at extension extremes. The bar that closes at the extreme has a few more ticks of follow-through before reversing, so the bot's market order fills BETTER than the bar close.
+
+**Per-strategy slippage** (negative = price improvement):
+
+| Strategy | n | Mean (ticks) | Recommendation |
+|---|---:|---:|---|
+| `vwap_pullback_v2` | 163 | **-15.7** | market |
+| `spring_setup` | 854 | **-8.3** | market |
+| `a_asian_continuation` | 17 | -7.5 | market |
+| `opening_session` | 13 | -5.8 | market |
+| `bias_momentum` | 355 | -3.1 | market |
+| `raschke_baseline` | 6 | +3.8 | market (close call) |
+| `g_inside_bar_breakout` | 17 | **+4.8** | **5s LIMIT** |
+| `e_multi_day_breakout` | 16 | **+15.6** | **5s LIMIT** |
+
+### U.3 FINAL PRODUCTION SPECS (tick-validated)
+
+| Strategy | Entry Order | Exit Policy | Source |
+|---|---|---|---|
+| `bias_momentum` | market | **`fixed_2r`** | Agent A reversed 4t |
+| `spring_setup` | market | **`fixed_3r`** | Agent A reversed 4t |
+| `vwap_pullback_v2` | market | **`fixed_3r`** | Agent A reversed 4t |
+| `opening_session.orb` | market | existing managed | Already optimal |
+| `opening_session.open_drive` | market | `fixed_3r` | Post Bug B2 fix |
+| `g_inside_bar_breakout` | **`limit_5s`** | `chandelier_50_3x` | Agent B requires limit |
+| `e_multi_day_breakout` | **`limit_5s`** | `chandelier_50_3x` | Agent B requires limit |
+| `a_asian_continuation` | market | `time_30min` | Both confirm |
+| `raschke_baseline` | market | `time_30min` | Close call; small sample |
+| `es_nq_confluence` | market | `chandelier_50_3x` | DORMANT (needs MES) |
+| `vwap_band_pullback` | market | `fixed_3r` | Standard |
+| `ib_breakout` | market | baseline | Smallest contributor |
+
+### U.4 NEW Architectural Requirements
+
+Production-ready code requires:
+
+1. **`core/exit_policies.py`** (NEW module, ~250 LOC):
+   - `fixed_rr` (parameters: `rr`)
+   - `chandelier` (parameters: `lookback_bars`, `atr_mult`, `activate_r`)
+   - `time_exit` (parameter: `minutes`)
+   - `managed_existing` (passthrough)
+
+2. **`bots/base_bot.py`** - wire `order_type` config field:
+   - `"market"` - current default
+   - `"limit_5s"` - submit limit at signal price, cancel + market after 5 sec
+
+3. **`config/strategies.py`** - per-strategy fields:
+   - `exit_policy`: name from core/exit_policies.py
+   - `exit_policy_params`: kwargs
+   - `order_type`: "market" | "limit_5s"
+
+### U.5 Honest P&L picture after both tick corrections
+
+| Adjustment | Direction |
+|---|---|
+| Bar-level baseline (no slippage) | $33.3K/yr |
+| + Entry slippage (mostly favorable, Agent B) | +$31.1K |
+| + Tick-validated exits (lose phantom edge, fixed RR optimal, Agent A) | mostly cancels |
+| **Realistic 1-contract annual P&L** | **~$60-90K/yr** |
+
+With `tier_3000` compounding: previously $2.56M; tick-validated estimate is **$1.5M-$3M range** (re-run pending in next section).
+
+### U.6 Commits
+
+| Commit | Source |
+|---|---|
+| `bb927bb` | Agent A - tick exit verification + `phoenix_tick_trail_verification.py` |
+| `48cd829` | Agent B - tick entry slippage + `phoenix_tick_entry_quality.py` |
+| (pending) | TBBO hygiene + `tools/tbbo_cache_builder.py` |
+| (pending) | Section U + `core/exit_policies.py` + base_bot order_type wiring + compounding re-run |
+
+---
+
 ## H. Files created/touched this sprint (audit trail)
 
 **Created:**

@@ -137,8 +137,16 @@ def sizing_jones(equity, ath, start, delta=None):
 # Winner-weighted multipliers — Tier 1 strategies get 1.5x, Tier 3 get 0.5x.
 # Based on per-strategy contribution to compounded P&L (see Phase 13 doc Section J).
 STRATEGY_SIZE_MULT = {
-    # TIER 1 (top 5 contributors = 96% of compounded P&L)
-    "opening_session":       1.5,
+    # PHASE 13 SECTION U REVISION (2026-05-19):
+    # After silent-stop bug fix + tick validation, bias_momentum revealed
+    # as #1 strategy (+$178k baseline, 6/6 years positive). Spring_setup
+    # also massively up after bug fix (+$18k baseline). These were Tier 3
+    # at 0.5x — that's now actively destroying value.
+    #
+    # TIER 1 (top contributors = >90% of compounded P&L)
+    "bias_momentum":         1.5,  # NEW #1 (was 0.5 pre-bug-fix)
+    "opening_session":       1.5,  # orb sub is the consistent champion
+    "spring_setup":          1.3,  # NEW Tier 1 (was 0.5 pre-bug-fix)
     "g_inside_bar_breakout": 1.3,
     "e_multi_day_breakout":  1.3,
     "vwap_pullback_v2":      1.2,
@@ -146,10 +154,10 @@ STRATEGY_SIZE_MULT = {
     # TIER 2 (proven, normal weight)
     "es_nq_confluence":      1.0,
     "ib_breakout":           1.0,
+    "raschke_baseline":      1.0,  # NEW: 5y baseline +$12,779 / PF 4.10
     # TIER 3 (small contributors — half size pending validation)
-    "vwap_band_pullback":    0.5,
-    "spring_setup":          0.5,   # 0.5 until fixed_2x_target ships
-    "bias_momentum":         0.5,   # too few trades
+    "vwap_band_pullback":    0.5,  # n=324, baseline +$794
+    "vwap_band_reversion":   0.5,  # requires combo_ema_vol filter to be positive
 }
 
 
