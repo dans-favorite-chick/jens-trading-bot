@@ -285,27 +285,40 @@ bias_momentum has 56% max DD on the compounding curve. To survive that:
 
 ## 6. WHAT'S DEFERRED (next sprint)
 
-### 6.1 Sprints currently running in parallel (will report soon)
+### 6.1 Sprint A/B/C results (S/R is 0-for-4 in production use cases)
 
-| Sprint | Question | Status |
-|---|---|---|
-| S/R as VETO filter for bias_momentum | Block longs when strong resistance <4t above? | Running (spawn `a350a236...`) |
-| S/R as CONFLUENCE boost for spring_setup | Size-up springs at strong S/R zones? | Running (spawn `a3a0977b...`) |
-| Failed-hold continuation strategy | Trade S/R breakouts (opposite of bounce)? | Running (spawn `a9933862...`) |
+After Section V.3's direct S/R-bounce strategy failed, 3 follow-up sprints tested the alternative use cases for `core/sr_zones.py`. **All 3 negative or marginal — DO NOT SHIP any S/R-based wiring.**
 
-### 6.2 Full retest-wait implementation
+| Sprint | Use case | Verdict | Commit |
+|---|---|---|---|
+| A | VETO filter for bias_momentum (block longs near resistance) | **NEGATIVE** — vetoed trades earn +$13/trade. Hypothesis structurally wrong: bias_momentum's edge IS breaking through nearby walls. | `3a62d23` |
+| B | CONFLUENCE boost for spring_setup (size-up springs at S/R zones) | **MARGINAL** (+$300/5y, 3/6 years positive). Counterintuitive: very_strong_sr (≥0.70) is ANTI-EDGE — strongest levels break more than they hold. | `c92b931` |
+| C | Failed-hold continuation (trade S/R BREAKS) | **NEGATIVE** -$5.9K/5y, all 5 variants, every year negative. Same root cause as V.3: MNQ noise destroys 2R setups on confirmation-bar entries. | `e9e9a9d` |
+
+**Combined with V.3 (direct S/R bounce, also negative), S/R is 0-for-4 in production applications.** The `core/sr_zones.py` engine remains valuable for research/analysis but has no current ship use case.
+
+**Most interesting empirical finding from these 4 spawns:**
+- The STRONGEST S/R levels (strength ≥0.70) systematically UNDERPERFORM the medium-strength levels (0.50-0.70). Heavily-tested levels accumulate stop liquidity; when they break they break with conviction. Real market microstructure insight but not translatable to a tradeable rule.
+
+### 6.2 Latent bug discovered (pandas 3.0 datetime precision)
+
+Both Sprint A and Sprint B independently hit this: `pandas 3.0` default datetime precision is **microseconds, not nanoseconds**. The common idiom `df.astype("int64") // 10**9` returns wrong-by-1000× values.
+
+**Audit task (deferred):** sweep all Phoenix tools for this pattern. Replace with `.timestamp()` per-row or explicit `.astype("datetime64[ns, UTC]")` conversion first. Could affect any tool that converts pandas timestamps to epoch seconds.
+
+### 6.3 Full retest-wait implementation
 
 Section V.1 retest mode is currently **flagged-but-not-enforced** — base_bot logs the intent but submits market order. Full implementation (per-strategy tick buffer + cancellation + timeout) needs careful integration with live tick feed. Estimated 1-2 day sprint when operator green-lights it. Expected lift: +$3-4K/yr.
 
-### 6.3 5-second limit order timeout
+### 6.4 5-second limit order timeout
 
 Section U.3 recommended `limit_5s` for `g_inside_bar_breakout` + `e_multi_day_breakout`. Currently `_apply_phase13_overrides` sets entry_type=LIMIT but doesn't implement the "cancel after 5 seconds and fall back to market." The plain LIMIT works (will sit as a working order); the operator can manually monitor for now or implement the timeout in a focused sprint.
 
-### 6.4 Footprint backtest pipeline
+### 6.5 Footprint backtest pipeline
 
 We have 2 months of TBBO data + `tools/tbbo_cache_builder.py`. The snapshot recorder is collecting live footprint. After 3-6 more months of accumulation, build a footprint-aware backtest pipeline (`tools/phoenix_footprint_backtest_pipeline.py`) to validate per-strategy footprint VETO/CONFIRMATION hypotheses from Section R/U.
 
-### 6.5 MES feed for es_nq_confluence
+### 6.6 MES feed for es_nq_confluence
 
 es_nq_confluence is profitable in backtest (+$2,028/5y, PF 3.38) but DORMANT live because Phoenix doesn't yet stream MES ticks. To activate:
 - NT8 chart on MES with TickStreamer loaded
@@ -315,7 +328,7 @@ es_nq_confluence is profitable in backtest (+$2,028/5y, PF 3.38) but DORMANT liv
 
 Expected: small but free +$400/year contribution.
 
-### 6.6 Re-allocation decisions (Section E)
+### 6.7 Re-allocation decisions (Section E)
 
 | Action | Status |
 |---|---|
