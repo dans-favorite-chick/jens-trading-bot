@@ -82,6 +82,11 @@ from core.tca_tracker import TCATracker
 from core.circuit_breakers import CircuitBreakers, HALT_MARKER_FILE
 from core.chart_patterns_v1 import extract_v1_patterns
 from core.vix_term_structure import get_cached as get_vix_term_cached
+# Chart overlay JSONL writer (read by ninjatrader/PhoenixTradeOverlay.cs)
+# All emit_*() calls are wrapped in try/except inside the helper, so a
+# visualizer failure never breaks the bot. Hook points: signal emit,
+# fill confirmation, BE stop move, exit.
+from core import signal_visualizer as _signal_viz
 from core.gamma_flip_detector import GammaFlipDetector
 from core.pinning_detector import PinningDetector
 from core.opex_calendar import get_opex_status
@@ -4072,6 +4077,19 @@ class BaseBot:
                 logger.debug(f"[PREENTRY:{tid}] reconcile check failed "
                              f"(non-blocking): {e}")
 
+        # Chart overlay hook 1/4: emit signal event for PhoenixTradeOverlay.
+        # Writes JSONL line so the NT8 indicator can draw the entry triangle
+        # (strategy-colored) + stop/target dashed lines. Non-blocking; helper
+        # swallows all errors so visualization never breaks the trade path.
+        _signal_viz.emit_signal(
+            strategy=signal.strategy,
+            direction=signal.direction,
+            entry=float(price),
+            stop=float(stop_price),
+            target=float(target_price) if target_price is not None else 0.0,
+            trade_id=tid,
+        )
+
         # B55: split bracket submit — ENTRY first, stop+target AFTER fill.
         # Prior behavior submitted entry + OCO stop/target in one burst; NT8
         # rejected protection legs with "Exceeds account's maximum position
@@ -4509,6 +4527,9 @@ class BaseBot:
         logger.info(f"[FILLED:{tid}] {signal.direction} {contracts}x @ {price:.2f} "
                      f"fill_latency={fill_result.get('latency_ms', 0):.0f}ms")
 
+        # Chart overlay hook 2/4: fill confirmed at NT8.
+        _signal_viz.emit_fill(trade_id=tid, fill_price=float(price))
+
         # NOW mark signal as actually taken (after confirmed fill)
         self.tracker.record_signal(
             strategy=signal.strategy, direction=signal.direction,
@@ -4633,6 +4654,11 @@ class BaseBot:
         except Exception as e:
             logger.warning(f"[SCALE_OUT:{tid}] BE stop-modify failed (non-blocking): {e}")
 
+        # Chart overlay hook 3/4: stop moved to break-even after 1R scale-out.
+        _signal_viz.emit_stop_moved(
+            trade_id=tid, new_stop=float(be_price), reason="scale_out_1r_BE"
+        )
+
         # STEP 6: Activate rider mode — stall detector now owns the exit
         pos.rider_mode = True
         self._rider_active = True
@@ -4677,6 +4703,15 @@ class BaseBot:
             self.circuit_breakers.record_trade_outcome(trade.get("result", "UNKNOWN"))
         except Exception as e:
             logger.debug(f"[_on_trade_closed] record_trade_outcome error (non-blocking): {e}")
+
+        # Chart overlay hook 4/4: trade closed. Writes X marker + P&L
+        # annotation to NT8 PhoenixTradeOverlay indicator.
+        _signal_viz.emit_exit(
+            trade_id=trade.get("trade_id", ""),
+            exit_price=float(trade.get("exit_price", 0.0)),
+            exit_reason=str(trade.get("exit_reason", "unknown")),
+            pnl=float(trade.get("pnl_dollars", 0.0)),
+        )
 
     async def _exit_trade(self, ws, price: float, reason: str,
                           trade_id: str | None = None):

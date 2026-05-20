@@ -82,6 +82,14 @@ STRATEGY_KEYS: list[str] = [
     # halt state per-strategy when it starts firing (dormant until MES
     # data feed is wired — see strategies/es_nq_confluence.py docstring).
     "es_nq_confluence",
+    # 2026-05-19 Phase 13 ship audit: 4 lab winners promoted to production
+    # in commit 2c77d35. Dedicated NT8 accounts created by operator. Keys
+    # added here so per-strategy daily cap + halt persistence work from
+    # first live signal (parity with config.account_routing.STRATEGY_ACCOUNT_MAP).
+    "raschke_baseline",
+    "g_inside_bar_breakout",
+    "e_multi_day_breakout",
+    "a_asian_continuation",
     # Sprint H v3 footprint plus V2 deployment block above kept together
     # so the per-strategy halt-state file shows them adjacent in load order.
     #

@@ -137,19 +137,31 @@ class TestFallbackAndEdges:
         #   Sim_LSR, Sim_ORB-Fade, SimORB_v2, Sim_Compression_v2,
         #   Sim_Compression_Micro, Sim_VWAP_Pullback_v2
         # Account count permanently increased to 25.
+        #
+        # 2026-05-19 Phase 13 ship audit: 4 NEW accounts permanently added
+        # for the lab-promoted strategies (commit 2c77d35 + this audit):
+        #   Sim_Raschke, Sim_Inside_Bar, Sim_multi_Day, Sim_Asian
+        # Also renamed: SimVwap Reversion → SimVwap_Reversion (underscore
+        # matches what operator actually has in NT8; the old name silently
+        # routed to Sim101 fallback). Net account count: 25 + 4 = 29.
         accounts = validate_account_map()
-        assert len(accounts) == 25
+        assert len(accounts) == 29
         # Spot-check a few known members.
         assert "Sim101" in accounts
         assert "SimOpenDrive" in accounts
         assert "SimORB" in accounts
         assert "SimStand alone ORB" in accounts
         assert "SimCompression Break out 30 MIN" in accounts
-        assert "SimVwap Reversion" in accounts  # 2026-05-03 new strategy
+        assert "SimVwap_Reversion" in accounts  # 2026-05-19 renamed (underscore)
         # 2026-05-17 V2 deployment spot-checks
         assert "Sim_LSR" in accounts
         assert "SimORB_v2" in accounts
         assert "Sim_Compression_Micro" in accounts
+        # 2026-05-19 Phase 13 ship spot-checks
+        assert "Sim_Raschke" in accounts
+        assert "Sim_Inside_Bar" in accounts
+        assert "Sim_multi_Day" in accounts  # NB: lowercase 'm' is intentional
+        assert "Sim_Asian" in accounts
 
 
 # ═══════════════════════════════════════════════════════════════════

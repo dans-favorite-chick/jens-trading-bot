@@ -56,7 +56,10 @@ STRATEGY_ACCOUNT_MAP: Dict[str, Union[str, Dict[str, str]]] = {
     "spring_setup":              "SimSpring Setup",
     "vwap_pullback":             "SimVWapp Pullback",
     "vwap_band_pullback":        "SimVwap Band Pullback",
-    "vwap_band_reversion":       "SimVwap Reversion",
+    # 2026-05-19: operator's NT8 account is "SimVwap_Reversion" (underscore,
+    # not space). Earlier map had "SimVwap Reversion" which silently routed
+    # every fill to Sim101 fallback. Caught during Phase 13 ship audit.
+    "vwap_band_reversion":       "SimVwap_Reversion",
     "dom_pullback":              "SimDom Pull Back",
     "ib_breakout":               "SimIB Breakout",
     "compression_breakout_15m":  "SimCompression Breakout",
@@ -99,6 +102,16 @@ STRATEGY_ACCOUNT_MAP: Dict[str, Union[str, Dict[str, str]]] = {
     # yet. Promote to a dedicated account when graduation decision
     # is needed (post-30-live-trades + Wilson-CI clearance).
     "es_nq_confluence":          "Sim101",
+
+    # ── 2026-05-19: Phase 13 ship audit — 4 new dedicated accounts ──
+    # Lab winners promoted to production strategies in commit 2c77d35.
+    # Account names are BYTE-EXACT NT8 display names verified against
+    # operator's account list screenshot. Note Sim_multi_Day's lowercase
+    # 'm' — that is intentional, NT8 display is literally "Sim_multi_Day".
+    "raschke_baseline":          "Sim_Raschke",
+    "g_inside_bar_breakout":     "Sim_Inside_Bar",
+    "e_multi_day_breakout":      "Sim_multi_Day",
+    "a_asian_continuation":      "Sim_Asian",
 
     # Fallback — lands here on any unmapped strategy or sub_strategy.
     "_default":                  _DEFAULT_ACCOUNT,
