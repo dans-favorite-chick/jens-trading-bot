@@ -257,6 +257,24 @@ def _apply_phase13_overrides(signal) -> None:
     if not strat:
         return
 
+    # 0) Entry mode override (Section V.1: pilot RETEST for 4 strategies)
+    # For now, log the intent only. Full retest-wait implementation
+    # deferred to next sprint (requires per-strategy tick buffer).
+    try:
+        from core.entry_modes import is_retest_strategy
+        if is_retest_strategy(strat):
+            # Annotate the signal so downstream code/logs can see the
+            # intent. Actual retest-wait logic will be added later.
+            setattr(signal, "entry_mode", "retest")
+            logger.info(
+                f"[Phase13 override] {strat}: entry_mode=retest (per Section V.1) "
+                f"-- mode flagged; retest-wait logic pending implementation"
+            )
+        else:
+            setattr(signal, "entry_mode", "first_touch")
+    except Exception:
+        pass  # entry_modes module not present, default behavior
+
     # 1) Order type override
     if strat in PHASE_13_ORDER_TYPES:
         order_type = PHASE_13_ORDER_TYPES[strat]
