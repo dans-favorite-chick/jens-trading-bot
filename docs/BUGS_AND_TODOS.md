@@ -116,6 +116,13 @@ of them so that we don't forget."
 **Fixed:** Commit `c62b72d` (audit agent ad9edd2e...)
 **Impact:** Found 1 HIGH bug (`tools/phoenix_sr_confluence_analyzer.py:169`) and 1 MEDIUM defensive fix (`tools/phoenix_tick_entry_quality.py:149`). 10 other files SAFE. **Production code (bots/, core/, bridge/, strategies/) was CLEAN — no live trade path affected.** Audit report: `docs/PANDAS_30_DATETIME_AUDIT.md`. 6 regression tests added (`tests/test_pandas_30_datetime_precision.py`).
 
+### B-CLOSED-006 — test fixture pollutes production strategy_halts.json (MEDIUM)
+**Discovered:** 2026-05-19 (overnight ship-completeness audit)
+**Location:** `tests/test_halt_log_signature.py:20-29` (fixture `fresh_registry`)
+**Root cause:** Fixture used `monkeypatch.setattr(srr_module, "_HALTS_FILE", ..., raising=False)` — the `_HALTS_FILE` attribute does NOT exist on `core.strategy_risk_registry` (real name: `STRATEGY_HALT_STATE_FILE`). The `raising=False` flag silently made the monkeypatch a no-op, so every halt the test created was written to the REAL `logs/strategy_halts.json` (a phantom `dupe_test` key persisted across test runs and made it into commits).
+**Fix:** Use the correct attribute name + drop `raising=False` so an attribute typo fails loudly in the future. Pattern matches `tests/test_strategy_risk_registry.py::halt_file_tmp`.
+**Lesson:** `monkeypatch.setattr(..., raising=False)` is dangerous for tests that depend on the patch having an effect — it silently passes when the target is wrong.
+
 ---
 
 ## How to add new items

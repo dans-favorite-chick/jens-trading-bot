@@ -19,11 +19,25 @@ from core.strategy_risk_registry import StrategyRiskRegistry
 @pytest.fixture
 def fresh_registry(tmp_path, monkeypatch):
     """Each test gets a registry with its own empty halts file so
-    halt state from other tests / previous runs doesn't bleed in."""
+    halt state from other tests / previous runs doesn't bleed in.
+
+    2026-05-19 BUG FIX: previously monkeypatched ``_HALTS_FILE`` with
+    ``raising=False`` — that attribute does not exist on srr_module,
+    so the monkeypatch silently set a no-op attribute and the test's
+    halt writes leaked into the REAL ``logs/strategy_halts.json``,
+    persisting a phantom "dupe_test" halt across CI runs and locally.
+    The correct attribute (imported from config.settings line 30) is
+    ``STRATEGY_HALT_STATE_FILE``. Matching pattern used in
+    test_strategy_risk_registry.py::halt_file_tmp.
+    """
     halts_file = tmp_path / "strategy_halts.json"
-    monkeypatch.setattr(srr_module, "_HALTS_FILE", str(halts_file), raising=False)
+    monkeypatch.setattr(
+        "core.strategy_risk_registry.STRATEGY_HALT_STATE_FILE",
+        str(halts_file),
+    )
     reg = StrategyRiskRegistry()
-    # If the module exposes the path differently, also clear loaded state
+    # Belt-and-suspenders: clear any state that loaded before monkeypatch
+    # took effect (init runs _load_halt_state() during __init__).
     reg._halted = set()
     reg._halt_reasons = {}
     return reg
