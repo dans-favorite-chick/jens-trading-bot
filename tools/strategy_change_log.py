@@ -43,6 +43,14 @@ _KNOWN_STRATEGIES = (
     # 5y / 131 trades / 6/6 years positive / max DD $72. Dormant until
     # MES feed is wired (see strategies/es_nq_confluence.py docstring).
     "es_nq_confluence",
+    # 2026-05-19: Phase 13 ship audit — promoted 4 lab winners from
+    # tools/phoenix_new_strategy_lab.py + tools/phoenix_trend_pullback_lab.py
+    # to production strategy classes. See docs/STRATEGY_SHIP_AUDIT.md
+    # and commit 2c77d35.
+    "raschke_baseline",          # +$12.8k/5y, PF 4.88
+    "g_inside_bar_breakout",     # +$11.3k/5y
+    "e_multi_day_breakout",      # +$9.1k/5y, PF 6.79
+    "a_asian_continuation",      # +$5.9k/5y, PF 8.29, DD $21
 )
 
 

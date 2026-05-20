@@ -232,17 +232,19 @@ class TestUniversalStopMath:
 class TestRequiredFieldGating:
     def test_skips_when_required_field_missing_returns_none_not_crash(self):
         s = make_strategy()
-        # Drop the pivot_pp field that Open Drive requires — evaluator
-        # must return None without raising (Phase 4 will populate it).
+        # Drop rth_open_price (still a required field post Bug B2 fix).
+        # NOTE: pivot_pp was the original test field but B2 fix (2026-05-18)
+        # removed pivot_pp as a hard requirement — it's now metadata only.
+        # Any of (rth_open, h5, l5, c5, price, v1, avg_v1) still gates.
         m = open_drive_market()
-        m.pop("pivot_pp")
+        m.pop("rth_open_price")
         assert s.evaluate(m) is None
 
     def test_log_eval_emits_skip_reason_for_missing_fields(self, caplog):
         import logging
         s = make_strategy()
         m = open_drive_market()
-        m.pop("pivot_pp")
+        m.pop("rth_open_price")  # see B2-fix note above
         with caplog.at_level(logging.DEBUG, logger="strategies.opening_session"):
             s.evaluate(m)
         assert any(
@@ -284,13 +286,22 @@ class TestOpenDrive:
         # ORB fields absent, Auction windows blocked by opening_type; nothing fires.
         assert s.evaluate(m) is None
 
-    def test_open_drive_target_is_pivot_pp(self):
+    def test_open_drive_target_is_2r_post_b2_fix(self):
+        # Bug B2 fix (2026-05-18): open_drive no longer targets pivot_pp
+        # (which landed wrong side of entry on a strong drive). Now uses
+        # entry ± 2R. See strategies/opening_session.py:373-388.
+        # Fixture: price=25025, h5=25020, l5=24998 → structural stop=25009,
+        # 1R=16pts, 2R target=25025+32=25057.
         s = make_strategy()
         m = open_drive_market()
         sig = s.evaluate(m)
         assert sig is not None
-        assert sig.metadata["t1"] == pytest.approx(m["pivot_pp"])
-        assert sig.target_price == pytest.approx(m["pivot_pp"])
+        structural_stop = (m["rth_5min_high"] + m["rth_5min_low"]) / 2.0
+        one_r = abs(m["price"] - structural_stop)
+        expected_target = m["price"] + 2.0 * one_r  # LONG direction
+        assert sig.metadata["t1"] == pytest.approx(expected_target)
+        assert sig.target_price == pytest.approx(expected_target)
+        assert sig.metadata["target_method"] == "2R_fixed_post_B2_fix"
 
 
 # ═══════════════════════════════════════════════════════════════════

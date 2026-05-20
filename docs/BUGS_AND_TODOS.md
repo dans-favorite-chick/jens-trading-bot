@@ -16,12 +16,7 @@ of them so that we don't forget."
 
 ## 🔴 OPEN BUGS
 
-### B-001 — pandas 3.0 datetime precision idiom (HIGH)
-**Discovered:** 2026-05-20 (Phase 13 Sprints A + B independently)
-**Location:** Multiple Phoenix tools likely affected
-**Symptom:** Common idiom `df["ts"].astype("int64") // 10**9` returns wrong-by-1000× values because pandas 3.0 default datetime precision is microseconds, not nanoseconds.
-**Fix pattern:** Use `.timestamp()` per-row OR explicit `.astype("datetime64[ns, UTC]")` first.
-**Status:** Audit agent `ad9edd2e...` running. Per-file findings + fixes will land in `docs/PANDAS_30_DATETIME_AUDIT.md`.
+### ~~B-001 — pandas 3.0 datetime precision idiom (HIGH)~~ → see B-CLOSED-005
 
 ### B-002 — orb_v2 strategy only ever produced 1 trade in 5y backtest (MEDIUM)
 **Discovered:** Section S validator output
@@ -116,6 +111,10 @@ of them so that we don't forget."
 ### B-CLOSED-004 — Silent-stop variant in deque saturation
 **Fixed:** Commit `717d23f` (during S/R lab build)
 **Impact:** New silent-stop pattern caught by Sprint 3 agent. `len(bars_5m)` saturates because `bars_5m` is `deque(maxlen=200)`. Cache went permanently stale → trades stopped at 2023-05-15. Fixed with `bars_5m[-1].end_time`. Validator updated.
+
+### B-CLOSED-005 — pandas 3.0 datetime precision idiom (HIGH)
+**Fixed:** Commit `c62b72d` (audit agent ad9edd2e...)
+**Impact:** Found 1 HIGH bug (`tools/phoenix_sr_confluence_analyzer.py:169`) and 1 MEDIUM defensive fix (`tools/phoenix_tick_entry_quality.py:149`). 10 other files SAFE. **Production code (bots/, core/, bridge/, strategies/) was CLEAN — no live trade path affected.** Audit report: `docs/PANDAS_30_DATETIME_AUDIT.md`. 6 regression tests added (`tests/test_pandas_30_datetime_precision.py`).
 
 ---
 
