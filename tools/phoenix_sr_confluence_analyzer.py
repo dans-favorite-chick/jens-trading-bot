@@ -165,8 +165,12 @@ def load_5m_bars(bars_csv: Path) -> pd.DataFrame:
     df = pd.read_csv(bars_csv)
     df["ts"] = pd.to_datetime(df["ts_utc"], utc=True)
     df = df.sort_values("ts").reset_index(drop=True)
-    # Add epoch seconds for FakeBar end_time
-    df["epoch"] = df["ts"].astype("int64") // 1_000_000_000
+    # Add epoch seconds for FakeBar end_time.
+    # pandas 3.0 defaults to datetime64[us] (microseconds), so naive
+    # ``df["ts"].astype("int64") // 1_000_000_000`` returns values 1000x
+    # too small. Force ns precision before the int64 cast — or, equivalently,
+    # use .apply(lambda t: t.timestamp()). See docs/PANDAS_30_DATETIME_AUDIT.md.
+    df["epoch"] = df["ts"].astype("datetime64[ns, UTC]").astype("int64") // 1_000_000_000
     return df[["ts", "epoch", "open", "high", "low", "close", "volume"]]
 
 

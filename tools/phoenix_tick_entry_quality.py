@@ -146,7 +146,10 @@ def _normalize_ticks_df(df: pd.DataFrame) -> pd.DataFrame:
         for cand in ("ts_recv", "ts_event", "ts", "timestamp"):
             if cand in df.columns:
                 ts = pd.to_datetime(df[cand], utc=True)
-                df["ts_ns"] = ts.astype("int64")
+                # pandas 3.0 defaults to datetime64[us, UTC]; pin ns or the
+                # int64 cast yields microseconds (1000x too small).
+                # See docs/PANDAS_30_DATETIME_AUDIT.md.
+                df["ts_ns"] = ts.astype("datetime64[ns, UTC]").astype("int64")
                 break
         else:
             raise ValueError(f"no usable timestamp column in {df.columns.tolist()}")
