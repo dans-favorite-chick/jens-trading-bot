@@ -82,6 +82,20 @@ namespace NinjaTrader.NinjaScript.Indicators
             { "vwap_band_pullback",    new SolidColorBrush(Color.FromRgb(0x87, 0xCE, 0xEB)) }, // SkyBlue
             { "vwap_band_reversion",   new SolidColorBrush(Color.FromRgb(0xFF, 0x69, 0xB4)) }, // Pink
             { "ib_breakout",           new SolidColorBrush(Color.FromRgb(0xDA, 0xA5, 0x20)) }, // Gold
+            // 2026-05-20 SHIP AUDIT: explicit colors for strategies that
+            // were emitting events but falling back to LightGray (nearly
+            // invisible on light backgrounds). big_move_signal is now
+            // validated=False in config, but sim_bot may still fire it.
+            { "big_move_signal",       new SolidColorBrush(Color.FromRgb(0xFF, 0x45, 0x00)) }, // OrangeRed
+            { "dom_pullback",          new SolidColorBrush(Color.FromRgb(0xB2, 0x22, 0x22)) }, // Firebrick
+            { "nq_lsr",                new SolidColorBrush(Color.FromRgb(0x40, 0xE0, 0xD0)) }, // Turquoise
+            { "orb_fade",              new SolidColorBrush(Color.FromRgb(0x80, 0x80, 0x80)) }, // Gray (killed)
+            { "orb_v2",                new SolidColorBrush(Color.FromRgb(0x6A, 0x5A, 0xCD)) }, // SlateBlue
+            { "compression_breakout_v2",   new SolidColorBrush(Color.FromRgb(0x80, 0x80, 0x80)) }, // Gray (killed)
+            { "compression_breakout_micro",new SolidColorBrush(Color.FromRgb(0x80, 0x80, 0x80)) }, // Gray (killed)
+            { "footprint_cvd_reversal",new SolidColorBrush(Color.FromRgb(0x80, 0x80, 0x80)) }, // Gray (dormant)
+            { "orb",                   new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0x00)) }, // Yellow (top-level orb)
+            // NOTE: opening_session already defined above at line 70 (yellow).
         };
 
         public static readonly Brush DefaultColor = Brushes.LightGray;

@@ -261,7 +261,10 @@ STRATEGIES = {
     },
     "dom_pullback": {
         "enabled": True,
-        "validated": True,    # 2026-05-17: was False — operator override (V2 deployment)
+        # 2026-05-20 PHASE 13 SHIP AUDIT: validated=False. Not in
+        # PHOENIX_BEST_PLAN.md §1.1 (11 winners). V2 operator override
+        # never went through the Phase 13 5-year backtest.
+        "validated": False,
         # Entry: pullback to EMA9 or VWAP + sell orders being pulled/absorbed by buyers
         # NQ-calibrated ATR-anchored stop (B14 2026-04-20). Replaces fixed 10t — too tight.
         "stop_method": "atr_anchored",
@@ -366,8 +369,15 @@ STRATEGIES = {
         # 15:11:19 today fired score=100 LONG and price ran +47pt in
         # 8 minutes (would have been a 2R win on a $50 budget).
         # Sim only until n>=30 trades + post-tune review.
+        #
+        # 2026-05-20 PHASE 13 SHIP-AUDIT: validated=False (was True).
+        # big_move_signal is NOT in PHOENIX_BEST_PLAN.md §1.1 (the 11
+        # winners). The 2026-05-17 promotion was an operator override
+        # outside the Phase 13 5-year backtest. Today 2026-05-20 it cost
+        # -$117.46 (3L / 1W) on prod_bot before this revert. Returning
+        # to validated=False until it goes through the Phase 13 backtest.
         "enabled": True,
-        "validated": True,           # 2026-05-17: was False — operator override (V2)
+        "validated": False,          # 2026-05-20 SHIP AUDIT: not on Phase 13 list
         # 2026-05-17: was 90 — at score=90 the all-flags-must-fire gate
         # produced < 1 signal/week. 70 catches strong 3-of-4 setups too.
         # The strategy reads "min_score" from config (see big_move_signal.py
@@ -648,7 +658,13 @@ STRATEGIES = {
     # 50+ trades + PF > 1.3.
     "footprint_cvd_reversal": {
         "enabled": True,
-        "validated": True,            # 2026-05-17: was False — operator override (FCD-6 V2)
+        # 2026-05-20 PHASE 13 SHIP AUDIT: validated=False. Strategy is
+        # documented dormant pending volumetric NT8 feed (per docstring
+        # above) — operator override to validated=True was premature.
+        # Logs DATA_NOT_AVAILABLE 100% of the time anyway, but having
+        # validated=False prevents it firing if the feed lands without
+        # the n>=50 / PF>1.3 promotion check.
+        "validated": False,
         # HTF level confluence
         "level_buffer_ticks": 8,
         "require_menthorq_level": True,
@@ -697,7 +713,10 @@ STRATEGIES = {
 
     "nq_lsr": {
         "enabled": True,
-        "validated": True,   # FIRING (operator override — was lab-only)
+        # 2026-05-20 PHASE 13 SHIP AUDIT: validated=False. Not in
+        # PHOENIX_BEST_PLAN.md §1.1 (11 winners). V2 operator override
+        # never went through the Phase 13 5-year backtest.
+        "validated": False,
         "session_windows_ct": [("08:30", "11:00"), ("13:30", "15:00")],
         "max_trades_per_day": 4,
         "max_stop_ticks": 30,
@@ -719,7 +738,11 @@ STRATEGIES = {
 
     "orb_fade": {
         "enabled": True,
-        "validated": True,
+        # 2026-05-20 PHASE 13 SHIP AUDIT: validated=False.
+        # PHASE_13_IMPLEMENTATION_PLAN §O explicitly KILLED this strategy
+        # (PF 0.34, -$255/5y, "anti-edge" verdict). Don't re-enable
+        # without a new backtest reversing the verdict.
+        "validated": False,
         "session_windows_ct": [("08:45", "12:00")],
         "max_trades_per_day": 2,
         "max_stop_ticks": 30,
@@ -735,7 +758,12 @@ STRATEGIES = {
 
     "orb_v2": {
         "enabled": True,
-        "validated": True,
+        # 2026-05-20 PHASE 13 SHIP AUDIT: validated=False. Plan ships
+        # opening_session.orb (managed-exit chandelier), NOT orb_v2.
+        # B-002 in BUGS_AND_TODOS.md notes orb_v2 only produced 1 trade
+        # in 5y backtest — gates may be impossibly strict. Disable until
+        # gates are re-tuned and re-backtested.
+        "validated": False,
         "or_duration_minutes": 15,
         "min_or_size_points": 11,
         "max_or_size_points": 80,
@@ -753,7 +781,12 @@ STRATEGIES = {
 
     "compression_breakout_v2": {
         "enabled": True,
-        "validated": True,
+        # 2026-05-20 PHASE 13 SHIP AUDIT: validated=False.
+        # PHASE_13_IMPLEMENTATION_PLAN.md §A Bug B4 EXPLICITLY KILLED
+        # this strategy: PF 0.61, MFE/MAE 0.19, "fundamentally anti-edge
+        # for MNQ in current regime. No fix recommended -- just kill."
+        # Don't re-enable without a new backtest reversing the verdict.
+        "validated": False,
         "max_trades_per_day": 3,
         "bb_period": 20,
         "bb_std": 1.5,            # NQ-tuned (was 2.0 Carter default)
@@ -776,7 +809,12 @@ STRATEGIES = {
 
     "compression_breakout_micro": {
         "enabled": True,
-        "validated": True,    # FIRING — catches fast 5-15pt breakouts on 1m TF
+        # 2026-05-20 PHASE 13 SHIP AUDIT: validated=False.
+        # PHASE_13_IMPLEMENTATION_PLAN.md §A: -$48, PF 0.97 — marginal
+        # anti-edge variant of compression_breakout family. Sibling
+        # compression_breakout_v2 already on the kill list. Disable
+        # until a new backtest reverses the verdict.
+        "validated": False,
         "max_trades_per_day": 5,
         "bb_period": 20,
         "bb_std": 1.4,            # tighter still — 1m bars naturally tighter
@@ -860,6 +898,11 @@ STRATEGIES = {
         "max_stop_ticks": 14,
         "target_rr": 2.0,
         "min_overnight_range_ticks": 8,
+        # 2026-05-20 SHIP AUDIT: belt-and-suspenders behind the
+        # TimeExitPolicy now wired in base_bot per-bar loop. If the
+        # policy mis-fires the position_manager legacy time-stop at
+        # 30min still cuts the trade.
+        "max_hold_min": 30,
     },
 
     "e_multi_day_breakout": {
@@ -914,6 +957,9 @@ STRATEGIES = {
         "max_stop_ticks": 40,
         "target_rr": 2.0,
         "pullback_lookback": 3,
+        # 2026-05-20 SHIP AUDIT: belt-and-suspenders behind the
+        # TimeExitPolicy now wired in base_bot per-bar loop.
+        "max_hold_min": 30,
     },
 }
 

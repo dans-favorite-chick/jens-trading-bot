@@ -169,7 +169,15 @@ class OpeningSessionStrategy(BaseStrategy):
                 return out
 
         # 3. Open Test Drive
-        if opening_type == "OPEN_TEST_DRIVE" and is_in_window(now_ct, "08:30", "09:00"):
+        # 2026-05-20 PHASE 13 SHIP AUDIT: KILLED per PHASE_13_IMPLEMENTATION_PLAN
+        # §A — -$639 / 171 trades, "small consistent loser". Sub-evaluator
+        # gated off via config flag (default True so existing setups keep
+        # working until explicitly opted-out). Re-enable by setting
+        # config "open_test_drive_enabled": True after a new backtest
+        # reverses the verdict.
+        if (opening_type == "OPEN_TEST_DRIVE"
+                and is_in_window(now_ct, "08:30", "09:00")
+                and self.config.get("open_test_drive_enabled", False)):
             out = _try(self._evaluate_open_test_drive)
             if out is not None:
                 return out

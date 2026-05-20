@@ -306,17 +306,22 @@ class TestOpenDrive:
 
 # ═══════════════════════════════════════════════════════════════════
 # Open Test Drive
+# NOTE 2026-05-20 PHASE 13 SHIP AUDIT: the open_test_drive sub is
+# DISABLED by default (Phase 13 explicit kill — PHASE_13_PLAN.md §A:
+# -$639 / 171 trades). These tests still verify the sub-evaluator works
+# correctly when explicitly re-enabled, so the operator can flip it
+# back on (and re-test) if a future backtest reverses the verdict.
 # ═══════════════════════════════════════════════════════════════════
 class TestOpenTestDrive:
     def test_open_test_drive_short_after_failed_bull_test(self):
-        s = make_strategy()
+        s = make_strategy(open_test_drive_enabled=True)
         sig = s.evaluate(open_test_drive_market())
         assert sig is not None
         assert sig.direction == "SHORT"
         assert sig.metadata["sub_name"] == "open_test_drive"
 
     def test_open_test_drive_long_after_failed_bear_test(self):
-        s = make_strategy()
+        s = make_strategy(open_test_drive_enabled=True)
         m = open_test_drive_market(
             rth_open_price=24992.0,
             rth_5min_high=25000.0,
@@ -335,13 +340,13 @@ class TestOpenTestDrive:
 
     def test_open_test_drive_skips_without_full_reversal(self):
         # SHORT setup but price is still above rth_open (no reversal through open).
-        s = make_strategy()
+        s = make_strategy(open_test_drive_enabled=True)
         m = open_test_drive_market(price=25010.0)  # > rth_open=25008
         assert s.evaluate(m) is None
 
     def test_open_test_drive_target_uses_prior_day_levels(self):
         # SHORT: T1 = min(prior_day_poc, prior_day_val)
-        s = make_strategy()
+        s = make_strategy(open_test_drive_enabled=True)
         m = open_test_drive_market()  # SHORT; pd_poc=24990, pd_val=24970
         sig = s.evaluate(m)
         assert sig is not None
@@ -349,7 +354,7 @@ class TestOpenTestDrive:
         assert sig.metadata["t1"] == pytest.approx(min(m["prior_day_poc"], m["prior_day_val"]))
 
         # LONG: T1 = max(prior_day_poc, prior_day_vah)
-        s2 = make_strategy()
+        s2 = make_strategy(open_test_drive_enabled=True)
         m2 = open_test_drive_market(
             rth_open_price=24992.0,
             rth_5min_high=25000.0,
@@ -368,12 +373,19 @@ class TestOpenTestDrive:
         assert sig2.metadata["t1"] == pytest.approx(max(m2["prior_day_poc"], m2["prior_day_vah"]))
 
     def test_open_test_drive_time_exit_is_hhmm_string(self):
-        s = make_strategy()
+        s = make_strategy(open_test_drive_enabled=True)
         m = open_test_drive_market(now_ct=ct(8, 50))
         sig = s.evaluate(m)
         assert sig is not None
         # 08:50 + 75 min = 10:05 → "HH:MM"
         assert sig.metadata["time_exit_ct"] == "10:05"
+
+    def test_open_test_drive_disabled_by_default(self):
+        # Phase 13 ship audit: sub is KILLED by default. Verify the
+        # default config (no enable flag) returns None even with a
+        # valid OPEN_TEST_DRIVE setup.
+        s = make_strategy()  # no override - default-disabled
+        assert s.evaluate(open_test_drive_market()) is None
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -592,7 +604,11 @@ class TestSubStrategyMetadata:
         assert sig.metadata["sub_strategy"] == "open_drive"
 
     def test_open_test_drive_emits_sub_strategy(self):
-        sig = make_strategy().evaluate(open_test_drive_market())
+        # Phase 13 ship audit (2026-05-20) disabled open_test_drive by
+        # default. Re-enable for this metadata smoke check so the test
+        # validates the SUB-STRATEGY field is correctly attached when
+        # the sub does fire.
+        sig = make_strategy(open_test_drive_enabled=True).evaluate(open_test_drive_market())
         assert sig is not None
         assert sig.metadata["sub_strategy"] == "open_test_drive"
 

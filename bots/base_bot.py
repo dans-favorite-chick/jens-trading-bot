@@ -298,6 +298,23 @@ def _apply_phase13_overrides(signal) -> None:
         # market stays at default (MARKET)
 
     # 2) Exit policy override — set target_price if policy computes one
+    #
+    # 2026-05-20 BUG FIX (Phase 13 ship audit): this block has a SILENT
+    # no-op problem. Most strategies (spring_setup, bias_momentum,
+    # vwap_pullback_v2, ib_breakout, vwap_band_pullback) emit a Signal
+    # WITHOUT entry_price/stop_price set — those are computed later in
+    # the trade execution path. So when this runs at the top of
+    # _process_signal(), the guard `if initial_stop is not None and
+    # entry_price is not None` is False and the override silently bails
+    # with no log line. Today (2026-05-20) spring_setup fired with
+    # target=1.5R (legacy) instead of 3R (Phase 13) because of this.
+    #
+    # FIX: leave the early attempt here (handles strategies that DO set
+    # prices at emit time, like ORB), but ALSO fire a loud warning when
+    # the early attempt no-ops so the operator can see the deferred
+    # re-application is the only path actually working. The actual
+    # re-apply happens via `recompute_phase13_target()` below, called
+    # from the trade execution path after stop/entry are finalized.
     if strat in PHASE_13_EXIT_ASSIGNMENTS:
         pname, params = PHASE_13_EXIT_ASSIGNMENTS[strat]
         try:
@@ -319,8 +336,96 @@ def _apply_phase13_overrides(signal) -> None:
                             f"[Phase13 override] {strat}: target_price "
                             f"{old_target} -> {new_target} via {pname}({params})"
                         )
+            else:
+                # Prices not yet set on Signal — deferred re-apply needed.
+                # Tag the signal so the trade execution path knows to call
+                # recompute_phase13_target() once stop/entry are finalized.
+                # FAIL LOUDLY (Phoenix's I-002 lesson) — if the deferred
+                # path is missing, this warning makes it visible.
+                setattr(signal, "_phase13_target_deferred", True)
+                logger.info(
+                    f"[Phase13 override] {strat}: target deferred — "
+                    f"signal has no entry/stop yet (policy={pname}); "
+                    f"will re-apply after price computation"
+                )
         except Exception as e:
             logger.warning(f"[Phase13 override] exit policy error for {strat}: {e!r}")
+
+
+class _PolicyPosAdapter:
+    """Map core.position_manager.Position -> the field names ExitPolicy
+    implementations expect (initial_stop, entry_ts, policy_state).
+    Lightweight wrapper; mutating policy_state mutates the real position.
+    """
+    __slots__ = ("_real", "entry_price", "initial_stop", "direction",
+                 "entry_ts", "policy_state")
+
+    def __init__(self, real_pos):
+        self._real = real_pos
+        self.entry_price = float(real_pos.entry_price)
+        # Position has `initial_stop_price` (frozen at open); policies want `initial_stop`.
+        self.initial_stop = float(getattr(real_pos, "initial_stop_price",
+                                          real_pos.stop_price))
+        self.direction = str(real_pos.direction)
+        # Position has `entry_time` (epoch seconds); policies want `entry_ts`.
+        # TimeExitPolicy accepts float directly via the isinstance check at line 320.
+        self.entry_ts = float(real_pos.entry_time)
+        # policy_state persists on the real Position across bar calls.
+        if not hasattr(real_pos, "_phase13_policy_state"):
+            object.__setattr__(real_pos, "_phase13_policy_state", {})
+        self.policy_state = real_pos._phase13_policy_state
+
+
+class _PolicyBarAdapter:
+    """Map TickAggregator.bars_1m bar objects -> the field names ExitPolicy
+    implementations expect (high, low, close, end_time).
+    """
+    __slots__ = ("high", "low", "close", "end_time")
+
+    def __init__(self, bar):
+        self.high = float(bar.high)
+        self.low = float(bar.low)
+        self.close = float(bar.close)
+        # Bar.end_time is a datetime; policy code uses it in arithmetic.
+        # Convert to epoch-seconds float so TimeExitPolicy's subtraction
+        # with pos.entry_ts (also float) is well-defined.
+        _et = getattr(bar, "end_time", None)
+        if _et is None:
+            self.end_time = time.time()
+        elif hasattr(_et, "timestamp"):
+            self.end_time = _et.timestamp()
+        else:
+            self.end_time = float(_et)
+
+
+def recompute_phase13_target(strategy: str, direction: str,
+                              entry_price: float, stop_price: float) -> float | None:
+    """Re-apply the Phase 13 exit policy now that entry+stop are finalized.
+
+    Called from the trade execution path AFTER `stop_price` and `entry_price`
+    are computed locally (not from the Signal). Returns the new target
+    price, or None if no override should be applied (managed_existing
+    policy, or strategy not in PHASE_13_EXIT_ASSIGNMENTS).
+
+    2026-05-20 ship-audit fix: pairs with the deferred-target tag set
+    in `_apply_phase13_overrides` step 2. Fixes the silent no-op that
+    caused spring_setup to ship 1.5R targets instead of 3R Phase 13.
+    """
+    if strategy not in PHASE_13_EXIT_ASSIGNMENTS:
+        return None
+    pname, params = PHASE_13_EXIT_ASSIGNMENTS[strategy]
+    try:
+        policy = get_policy(pname, params)
+        new_target = policy.compute_initial_target(
+            direction, float(entry_price), float(stop_price)
+        )
+        return new_target  # None = managed_existing, no override
+    except Exception as e:
+        logger.warning(
+            f"[Phase13 override] recompute_phase13_target error for "
+            f"{strategy}: {e!r}"
+        )
+        return None
 
 
 def _get_oif_sink():
@@ -2365,6 +2470,68 @@ class BaseBot:
                     except Exception as e:
                         logger.debug(f"[CHANDELIER] update error (non-blocking): {e}")
 
+                    # ── 2026-05-20 PHASE 13 SHIP-AUDIT FIX ──────────────────────
+                    # Per-bar Phase 13 exit-policy enforcement. Without this,
+                    # ChandelierPolicy.should_exit() and TimeExitPolicy.should_exit()
+                    # are NEVER called for the 5 strategies that depend on them:
+                    #   - g_inside_bar_breakout (chandelier_50_3x)
+                    #   - e_multi_day_breakout  (chandelier_50_3x)
+                    #   - es_nq_confluence      (chandelier_50_3x)
+                    #   - a_asian_continuation  (time_exit 30m)
+                    #   - raschke_baseline      (time_exit 30m)
+                    # Before this fix they only ever exited on the wide-bracket
+                    # placeholder target (10R chandelier / 5R time) or the
+                    # structural stop — losing the entire trailing-exit edge.
+                    try:
+                        from core.exit_policies import (
+                            get_policy as _ph13_get_policy,
+                            PHASE_13_EXIT_ASSIGNMENTS as _PH13_EXITS,
+                        )
+                        _bars_phase13 = list(self.aggregator.bars_1m.completed)
+                        if _bars_phase13:
+                            _last_bar = _bars_phase13[-1]
+                            for _pos in list(self.positions.active_positions):
+                                _strat = getattr(_pos, "strategy", None)
+                                if _strat not in _PH13_EXITS:
+                                    continue
+                                _pname, _params = _PH13_EXITS[_strat]
+                                # Only enforce the policies that have per-bar
+                                # should_exit logic. fixed_rr + managed_existing
+                                # are handled by the OCO bracket / strategy.
+                                if _pname not in ("chandelier", "time_exit"):
+                                    continue
+                                # Skip if the legacy chandelier-trail path is
+                                # already handling this position (avoid double-fire).
+                                if (_pname == "chandelier" and
+                                        getattr(_pos, "trail_state", None) is not None and
+                                        str(getattr(_pos, "exit_trigger", "")).startswith("chandelier_trail")):
+                                    continue
+                                # Lazy-init / cache the policy instance + state
+                                if getattr(_pos, "_phase13_policy", None) is None:
+                                    _pos._phase13_policy = _ph13_get_policy(_pname, _params)
+                                if not hasattr(_pos, "_phase13_policy_state"):
+                                    _pos._phase13_policy_state = {}
+                                # Build pos adapter matching policy's expected
+                                # field names (initial_stop, entry_ts, policy_state).
+                                _adapter = _PolicyPosAdapter(_pos)
+                                # Build bar adapter — last 1m bar (matches the
+                                # existing chandelier-trail code's choice).
+                                _bar_adapter = _PolicyBarAdapter(_last_bar)
+                                _decision = _pos._phase13_policy.should_exit(_adapter, _bar_adapter)
+                                if _decision is not None:
+                                    logger.info(
+                                        f"[PHASE13_EXIT:{_pos.trade_id}] {_strat} "
+                                        f"policy={_pname} fired exit_reason="
+                                        f"{_decision.exit_reason} at price={_decision.exit_price:.2f}"
+                                    )
+                                    await self._exit_trade(
+                                        ws, _decision.exit_price,
+                                        _decision.exit_reason,
+                                        trade_id=_pos.trade_id,
+                                    )
+                    except Exception as e:
+                        logger.debug(f"[PHASE13_EXIT] per-bar enforcement error (non-blocking): {e}")
+
                     # Phase C: managed-exit hook per position — strategies with
                     # dynamic exits (Noise Area) get a chance to close their own
                     # position on a signal flip before bracket checks fire.
@@ -3847,6 +4014,34 @@ class BaseBot:
             target_price = price + (stop_ticks * tick_value * signal.target_rr)
         else:
             target_price = price - (stop_ticks * tick_value * signal.target_rr)
+
+        # ── 2026-05-20 PHASE 13 SHIP-AUDIT FIX ─────────────────────────
+        # Re-apply Phase 13 exit-policy target now that stop_price and
+        # entry price (`price`) are finalized. The earlier call in
+        # _apply_phase13_overrides() silently no-oped for any strategy
+        # that didn't pre-compute prices on the Signal — that was every
+        # strategy except ORB. Today (2026-05-20) spring_setup shipped
+        # 1.5R targets instead of 3R Phase 13 because of this. The
+        # deferred-tag was set in step 2 of _apply_phase13_overrides;
+        # consume it here and override.
+        if getattr(signal, "_phase13_target_deferred", False) and not _managed_exit_target:
+            try:
+                _new_target = recompute_phase13_target(
+                    signal.strategy, signal.direction, price, stop_price,
+                )
+                if _new_target is not None and _new_target != target_price:
+                    _old = target_price
+                    target_price = _new_target
+                    logger.info(
+                        f"[Phase13 override] {signal.strategy}: target_price "
+                        f"{_old:.2f} -> {target_price:.2f} (deferred recompute, "
+                        f"entry={price:.2f} stop={stop_price:.2f})"
+                    )
+            except Exception as _e:
+                logger.warning(
+                    f"[Phase13 override] deferred recompute failed for "
+                    f"{signal.strategy}: {_e!r}"
+                )
 
         # Phase 6b: Microstructure filter check (advisory only -- does NOT block)
         try:

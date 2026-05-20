@@ -99,6 +99,33 @@ class VWAPPullbackV2(BaseStrategy):
         if self._trades_today >= max_trades:
             return None
 
+        # ── 2026-05-20 PHASE 13 SHIP AUDIT: session window gate ─────
+        # PHOENIX_BEST_PLAN §J.2 (hidden insight): vwap_pullback_v2's
+        # edge comes from the 17:00-04:59 CT overnight session ONLY —
+        # tested as +$10K/5y if restricted to that window vs roughly
+        # flat in RTH. Per-strategy windows can be overridden via the
+        # session_windows_ct config key. Defaults to the J.2 window so
+        # the plan's +$10K/5y is captured out of the box.
+        sw = self.config.get("session_windows_ct",
+                              [("17:00", "23:59"), ("00:00", "04:59")])
+        hh = now_ct.hour
+        mm = now_ct.minute
+        cur_hhmm = f"{hh:02d}:{mm:02d}"
+        _in_window = False
+        for _start, _end in sw:
+            # Allow normal ordering only (start <= end). The default
+            # config above splits the overnight session across midnight
+            # to handle the CT day-rollover cleanly.
+            if _start <= cur_hhmm <= _end:
+                _in_window = True
+                break
+        if not _in_window:
+            logger.debug(
+                f"[EVAL] {self.name}: SKIP outside_session_window "
+                f"now={cur_hhmm} windows={sw}"
+            )
+            return None
+
         # ── Data sanity ────────────────────────────────────────────
         if not bars_1m or len(bars_1m) < 2:
             return None

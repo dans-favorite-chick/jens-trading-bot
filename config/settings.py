@@ -66,10 +66,17 @@ TICK_BUFFER_SIZE = 500          # Ring buffer — ~1.5 min of bars on reconnect 
 
 # ─── Risk Limits ────────────────────────────────────────────────────
 MAX_LOSS_PER_TRADE = 20.0       # Hard limit per trade ($)
-# 2026-05-17: SIM TESTING — raised from $45 to $1_000_000 to disable
-# daily-loss circuit-breaker during the V2 strategy overhaul rollout.
-# RESTORE to 45.0 before live.
-DAILY_LOSS_LIMIT = 1_000_000.0  # was 45.0 — SIM TESTING, restore before live
+# 2026-05-20 PHASE 13 SHIP AUDIT: restored from $1M sim value back to
+# production. Per PHOENIX_BEST_PLAN.md §5.3 the daily circuit breaker
+# is documented at 4% of equity; we keep a hard-dollar floor here as a
+# belt-and-suspenders. $200 = roughly 4% of a $5K starter account; the
+# legacy $45 was sized for the original $1,500 starter. Re-tune if the
+# operator's starting account size changes materially.
+# Previous (2026-05-17 SIM TESTING) value was 1_000_000.0 — disabled
+# the breaker during V2 deployment. Cost was 4 unintentionally-large
+# loss days could have racked up with no auto-halt. Closed via this
+# audit.
+DAILY_LOSS_LIMIT = 200.0        # production: 4% of $5K starter equity
 WEEKLY_LOSS_LIMIT = 150.0       # Stop trading for the week ($)
 RECOVERY_MODE_TRIGGER = 30.0    # At -$30 daily: cut size 50%, raise thresholds
 MAX_TRADES_PER_SESSION = 999  # Uncapped — don't limit winning days
@@ -224,10 +231,12 @@ MENTHORQ_NET_GEX_NORMAL_THRESHOLD = 500_000
 # apply PER STRATEGY, not per bot. Purpose: gather 50+ trades/strategy
 # at WR≥50% PF≥1.3 before any prod graduation.
 PER_STRATEGY_ACCOUNT_SIZE = 2000.00     # starting balance
-# 2026-05-17: SIM TESTING — raised from $200 to $1_000_000 to disable
-# per-strategy daily halt during the V2 strategy overhaul rollout.
-# RESTORE to 200.00 before live.
-PER_STRATEGY_DAILY_LOSS_CAP = 1_000_000.0  # was 200.00 — SIM TESTING, restore before live
+# 2026-05-20 PHASE 13 SHIP AUDIT: restored from $1M sim value to $200
+# production cap. Per docs/PHOENIX_BEST_PLAN.md §5.3 each strategy gets
+# a 10%-of-account-size daily halt → $200 on $2K. Was raised to $1M on
+# 2026-05-17 during V2 overhaul rollout (intentional, but should have
+# been reverted before validated=True promotions landed).
+PER_STRATEGY_DAILY_LOSS_CAP = 200.00    # production: 10% of $2K account
 PER_STRATEGY_FLOOR = 1500.00            # halt + alert, MANUAL re-enable only
 
 # ─── B40 — NT8 ATI multi-account routing flag ─────────────────────
