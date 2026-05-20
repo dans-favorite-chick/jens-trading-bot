@@ -40,6 +40,7 @@ LAB_FILES = [
     ("backtest_results/phoenix_mean_reversion_lab.csv",    "Mean-reversion lab"),
     ("backtest_results/phoenix_1m_timeframe_lab.csv",      "1m timeframe lab"),
     ("backtest_results/opening_session_sub_breakdown.csv", "Opening session subs"),
+    ("backtest_results/phoenix_sr_strategy_lab.csv",       "S/R zone strategy lab"),
 ]
 
 # Thresholds
