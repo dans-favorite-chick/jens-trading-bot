@@ -1,5 +1,19 @@
 # Phoenix Strategy Deep-Dive — 2026-05-18
 
+> **[RESEARCH ARCHIVE — superseded]** — This was the initial 16.5-month
+> analysis (run 2026-05-18 AM) used as input to Phase 13 research. The
+> verdicts and ensemble numbers below were refined throughout Phase 13
+> Sections C–V, and the FINAL portfolio + numbers live in
+> `docs/PHOENIX_BEST_PLAN.md` (labeled `[CURRENT — SHIP PLAN]`).
+>
+> Kept because:
+> 1. It documents the original CSV-backed pipeline that bootstrapped the
+>    Phase 13 work (`tools/phoenix_real_backtest.py`).
+> 2. It is the first place several Phase-13 verdicts (kill compression_v2,
+>    time-of-day filter, etc.) were articulated with data.
+>
+> Use PHOENIX_BEST_PLAN.md as the source of truth for current decisions.
+
 ## Executive summary
 
 We built a CSV-backed enrichment pipeline (`tools/phoenix_real_backtest.py`) that calls Phoenix's **actual strategy classes** against 5 years of Databento MNQ + MES data. This replaces the canonical approximations the overnight session used (`tools/multi_strategy_backtest.py`) with the real Phoenix code paths.

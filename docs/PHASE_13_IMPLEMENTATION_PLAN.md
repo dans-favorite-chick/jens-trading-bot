@@ -1,6 +1,19 @@
 # Phase 13 Implementation Plan — 2026-05-18
 
-**Status:** PLANNING (nothing in production yet). Each item below is what we INTEND to ship after backtest validation completes.
+> **[RESEARCH ARCHIVE — historical context]** — This is the long-form
+> research record for Phase 13. Every Section A through V (plus Section Z)
+> documents what we tested, what worked, what failed, and *why* — including
+> dead ends kept for reference. **It is NOT the current ship plan.**
+>
+> The CURRENT operator-facing ship plan is `docs/PHOENIX_BEST_PLAN.md`
+> (labeled `[CURRENT — SHIP PLAN]`). If anything here conflicts with that
+> document, defer to PHOENIX_BEST_PLAN.md.
+>
+> This file is preserved (rather than deleted) because the research record
+> answers future "why did we decide X?" questions that the executive summary
+> intentionally omits. Treat it as durable archive — append-only.
+
+**Original status (preserved as written):** PLANNING (nothing in production yet). Each item below is what we INTEND to ship after backtest validation completes.
 
 **Why this doc exists:** Sprint scope grew during research. Tracking all planned changes here so nothing slips through the cracks when we actually ship.
 

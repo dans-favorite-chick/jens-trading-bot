@@ -1,5 +1,15 @@
 # Phoenix MNQ Trading Bot — THE BEST PLAN
 
+> **[CURRENT — SHIP PLAN]** — This is the operator-facing executive summary
+> and the canonical reference for what Phoenix is shipping. If a fact here
+> conflicts with another doc, this one wins. Last revised 2026-05-20.
+>
+> For the FULL research record (every Section A-V plus Section Z, with all
+> the "why" and the dead ends), see `docs/PHASE_13_IMPLEMENTATION_PLAN.md`
+> (labeled `[RESEARCH ARCHIVE]`).
+>
+> For live operational state, see `memory/context/CURRENT_STATE.md`.
+
 **Status:** Phase 13 COMPLETE. Ready to ship. (2026-05-20)
 **Branch:** `weekly-evolution/2026-05-17`
 **Latest commit:** see `git log --oneline -1`
