@@ -1323,6 +1323,15 @@ class BaseBot:
         # but registered so the moment market["mes_bars_5m"] starts
         # flowing the strategy auto-activates with no further wiring.
         from strategies.es_nq_confluence import ESNQConfluence
+        # 2026-05-19 Phase 13 ship: 4 NEW production strategy classes
+        # ported from tools/phoenix_new_strategy_lab.py + phoenix_trend_pullback_lab.py.
+        # All four are tick-validated winners with per-strategy exit policy +
+        # entry order type in core/exit_policies.PHASE_13_EXIT_ASSIGNMENTS.
+        # See docs/STRATEGY_SHIP_AUDIT.md for ship-blocker rationale.
+        from strategies.a_asian_continuation import AsianContinuation
+        from strategies.e_multi_day_breakout import MultiDayBreakout
+        from strategies.g_inside_bar_breakout import InsideBarBreakout
+        from strategies.raschke_baseline import RaschkeBaseline
 
         strategy_classes = {
             "bias_momentum": BiasMomentumFollow,
@@ -1355,6 +1364,15 @@ class BaseBot:
             # 2026-05-18 Phase 12C: ES/NQ confluence LONG (regime-robust
             # backtest 6/6 years incl. 2022 bear, max DD $72, PF 2.63).
             "es_nq_confluence": ESNQConfluence,
+            # 2026-05-19 Phase 13 ship: Phase 13 winners promoted from
+            # lab to production class. Each has a tick-validated
+            # exit policy + entry order type assignment in
+            # core/exit_policies.PHASE_13_EXIT_ASSIGNMENTS that base_bot
+            # applies in _apply_phase13_overrides() at signal emit.
+            "a_asian_continuation": AsianContinuation,
+            "e_multi_day_breakout": MultiDayBreakout,
+            "g_inside_bar_breakout": InsideBarBreakout,
+            "raschke_baseline": RaschkeBaseline,
         }
 
         is_prod = (self.bot_name == "prod")

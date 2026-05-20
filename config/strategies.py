@@ -831,6 +831,90 @@ STRATEGIES = {
         "stop_ticks": 24,          # = $12 risk on 1 MNQ
         "target_ticks": 96,        # = $48 reward (RR 4:1)
     },
+
+    # ── 2026-05-19 Phase 13 ship: 4 NEW promoted strategies ───────────
+    # All four were validated in tools/phoenix_new_strategy_lab.py +
+    # phoenix_trend_pullback_lab.py over 5 years of MNQ Databento data.
+    # Each ships with a per-strategy tick-validated exit policy +
+    # entry order type in core/exit_policies.PHASE_13_EXIT_ASSIGNMENTS.
+    # The base_bot._apply_phase13_overrides() rewrites target_price /
+    # entry_type at signal emit — the values here are the strategy's
+    # LEGACY-LAB defaults, which serve as a wide bracket placeholder
+    # for chandelier/time_exit policies. See docs/STRATEGY_SHIP_AUDIT.md.
+    #
+    # validated=True is INTENTIONAL: the 5-year backtests have orders
+    # of magnitude more data than the standard Wilson-CI n>=100 gate
+    # requires. They ship enabled so prod_bot picks them up on restart.
+
+    "a_asian_continuation": {
+        # +$5,909 baseline / PF 8.29 / 6/6 years positive (Phase 13).
+        # Window: 03:00-08:00 CT. Trigger: 5m close beyond overnight
+        # 17:00-08:30 CT range +- 0.5*ATR. Exit: time_exit(30m) per
+        # core.exit_policies.PHASE_13_EXIT_ASSIGNMENTS.
+        "enabled": True,
+        "validated": True,
+        "window_start_ct": "03:00",
+        "window_end_ct": "08:00",
+        "range_break_atr_mult": 0.5,
+        "min_stop_ticks": 6,
+        "max_stop_ticks": 14,
+        "target_rr": 2.0,
+        "min_overnight_range_ticks": 8,
+    },
+
+    "e_multi_day_breakout": {
+        # +$9,097 baseline / PF 6.79 / 6/6 years positive (Phase 13).
+        # Window: 08:45-13:00 CT. Trigger: 5m close beyond prior 3 RTH
+        # sessions' high/low. Exit: chandelier(50, 3x, 1R). Entry:
+        # limit_5s (Section U.2 RTH-open breakout slippage).
+        "enabled": True,
+        "validated": True,
+        "window_start_ct": "08:45",
+        "window_end_ct": "13:00",
+        "lookback_days": 3,
+        "break_buffer_ticks": 1,
+        "stop_buffer_ticks": 2,
+        "min_stop_ticks": 6,
+        "max_stop_ticks": 30,
+        "target_rr": 2.0,
+    },
+
+    "g_inside_bar_breakout": {
+        # +$11,300 baseline / PF 4.88 / 6/6 years positive (Phase 13).
+        # Window: 08:45-14:00 CT, 5m bar-close boundaries only.
+        # Trigger: 5m inside bar broken by next 5m close. Exit:
+        # chandelier(50, 3x, 1R). Entry: limit_5s.
+        "enabled": True,
+        "validated": True,
+        "window_start_ct": "08:45",
+        "window_end_ct": "14:00",
+        "min_inside_range_ticks": 4,
+        "max_inside_range_ratio": 0.85,
+        "break_buffer_ticks": 1,
+        "stop_buffer_ticks": 1,
+        "min_stop_ticks": 6,
+        "max_stop_ticks": 30,
+        "target_rr": 2.0,
+    },
+
+    "raschke_baseline": {
+        # +$12,779 baseline / PF 4.10 / 6/6 years positive (Phase 13).
+        # Linda Raschke's 20-EMA trend-pullback. Window: 08:30-15:00 CT,
+        # 5m bar-close boundaries only. Trend filter: EMA21-EMA50 spread
+        # > 0.3 * ATR_5m. Exit: time_exit(30m). Entry: market with
+        # retest entry-mode pilot (Section V.1: +$119 / 60d in analyzer).
+        "enabled": True,
+        "validated": True,
+        "trend_spread_atr": 0.3,
+        "ema_ref_period": 21,
+        "touch_buffer_ticks": 2,
+        "break_buffer_ticks": 1,
+        "stop_buffer_ticks": 1,
+        "min_stop_ticks": 6,
+        "max_stop_ticks": 40,
+        "target_rr": 2.0,
+        "pullback_lookback": 3,
+    },
 }
 
 # Backfill default ai_filter_mode="advisory" on every strategy that
