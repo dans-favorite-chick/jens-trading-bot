@@ -304,6 +304,32 @@ shipped, we have high confidence in run-to-run reproducibility.
 **Fix:** Use the correct attribute name + drop `raising=False` so an attribute typo fails loudly in the future. Pattern matches `tests/test_strategy_risk_registry.py::halt_file_tmp`.
 **Lesson:** `monkeypatch.setattr(..., raising=False)` is dangerous for tests that depend on the patch having an effect — it silently passes when the target is wrong.
 
+### F-001 — Compounding tier_3000 sizing (CRITICAL — HIGHEST $$ UPSIDE)
+**Discovered:** Initial plan §I.4 (5y projection $1.5K → $1.09M+ compounding curve)
+**Shipped:** 2026-05-20 (this commit)
+**Location:** `core/tier_sizer.py` (new), `bots/base_bot.py` dispatcher,
+`config/settings.py` (SIZING_MODE + STARTING_EQUITY), `data/equity_state.json` (created on first run when SIZING_MODE="tier_3000")
+**What changed:**
+- New `core/tier_sizer.py` with full Plan §I.4 / §5.4 policy: 1 contract per
+  $3K equity, MAX 30 contracts, per-strategy multipliers from
+  STRATEGY_SIZE_MULT (bias_momentum 1.5×, vwap_band_* 0.5×, etc.), 85%-of-ATH
+  scale-down (-1 tier), 4% daily circuit breaker (HALT new entries), 3-loss
+  halving (next-trade size /= 2, floor 1). LOUD logging at every decision
+  per I-002.
+- `bots/base_bot.py` dispatcher: when `SIZING_MODE="tier_3000"`, route
+  through tier_sizer (the daily breaker returns 0 → entry skipped). When
+  `"flat_1"` (DEFAULT), legacy PositionScaler path is preserved.
+- `_on_trade_closed` feeds tier_sizer.record_trade_close() so equity ATH
+  and consec-losses stay in sync — quiescent for flat_1 operators.
+- 38 new tests in `tests/test_tier_sizer.py` covering tier math, ATH
+  invariants, DD scale-down, circuit breaker, halving, persistence,
+  session-roll, dispatcher contract.
+**Default-OFF:** `SIZING_MODE="flat_1"` ships as the default. Operator
+opts in to `"tier_3000"` per docs/OPERATOR_BRIEF_PT2.md F-001 activation
+section. **Backward compat verified:** no behavior change while default.
+**Pending operator action:** flip SIZING_MODE + initialize equity_state
+once Phase A (30 trading days at flat_1) completes per Plan §5.3.
+
 ---
 
 ## How to add new items

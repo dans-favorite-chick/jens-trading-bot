@@ -262,6 +262,29 @@ PER_STRATEGY_ACCOUNT_SIZE = 2000.00     # starting balance
 PER_STRATEGY_DAILY_LOSS_CAP = 200.00    # production: 10% of $2K account
 PER_STRATEGY_FLOOR = 1500.00            # halt + alert, MANUAL re-enable only
 
+# ─── F-001 — Compounding Sizing (2026-05-20) ─────────────────────────
+# Source of truth for which sizing policy the bot uses for entries.
+#
+#   "flat_1"     — current production behavior. Always 1 contract per entry
+#                  (passes through to RiskManager + PositionScaler). Default
+#                  while the operator commits to F-001 Phase A (per
+#                  docs/PHOENIX_BEST_PLAN.md §5.3).
+#   "tier_3000"  — F-001 ACTIVE. 1 contract per $3K equity, capped at 30,
+#                  with per-strategy multipliers, 85%-of-ATH DD scale-down,
+#                  4% daily circuit breaker, 3-consecutive-loss halving.
+#                  See core/tier_sizer.py for the full policy.
+#
+# To activate F-001: flip to "tier_3000", initialize data/equity_state.json
+# with the live account size (or let it auto-init from STARTING_EQUITY),
+# restart bots. See docs/OPERATOR_BRIEF_PT2.md F-001 Activation section.
+SIZING_MODE = "flat_1"
+
+# Starting equity seed for tier_3000 when data/equity_state.json is absent.
+# Should be set to the actual Sim/live account balance the operator funded
+# when they flip SIZING_MODE to "tier_3000". Plan §I projects $1.5K starter
+# compounding to $1M+ in 5y; the operator's real account may differ.
+STARTING_EQUITY = 1500.00
+
 # ─── B40 — NT8 ATI multi-account routing flag ─────────────────────
 # TRUE = route each strategy to its dedicated NT8 Sim sub-account.
 # FALSE = kill-switch; forces everything to Sim101 (emergency fallback).

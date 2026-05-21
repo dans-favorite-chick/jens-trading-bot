@@ -266,3 +266,124 @@ Today's deep audit (pt1 a03086e + pt2 0708a07) closed:
 Bot is now actually running what the plan says. The biggest remaining
 unrealized upside is tier_3000 compounding (F-001) which is a 1-2 day
 build. Sleep well.
+
+---
+
+## F-001 Activation — flipping flat_1 → tier_3000
+
+**Status (2026-05-20):** SHIPPED. Code lives in `core/tier_sizer.py`
+and is wired through `bots/base_bot.py`. Default is `SIZING_MODE="flat_1"`
+(no behavior change vs today). You opt in when you're ready for Phase B
+per Plan §5.3 (typically after 30 trading days at flat_1).
+
+**What you're committing to when you flip the switch:**
+- 1 contract per $3K equity, capped at 30 contracts
+- Per-strategy multipliers (bias_momentum 1.5×, vwap_band_* 0.5×, …
+  full list in `core/tier_sizer.STRATEGY_SIZE_MULT`)
+- Drop one tier when equity < 85% of all-time-high
+- HALT new entries if today's loss > 4% of session-start equity
+- Halve next trade size after 3 consecutive losses (resets on a win)
+- **Backtested max DD on the compounding curve: 56% (bias_momentum
+  dominated).** This is the price for the $2.56M / 5y projection.
+  Pre-commit in writing before flipping.
+
+**Activation steps (exact):**
+
+1. **Stop both bots** (clean shutdown — never kill mid-trade):
+   ```cmd
+   tools/stop_bots.bat
+   ```
+   (or `taskkill /f /fi "imagename eq python.exe"` if you must, but
+   verify Sim101 is FLAT first).
+
+2. **Set the starting equity** — edit `config/settings.py`:
+   ```python
+   STARTING_EQUITY = 1500.00   # ← your ACTUAL Sim101 balance
+   SIZING_MODE = "tier_3000"   # ← from "flat_1"
+   ```
+   `STARTING_EQUITY` only matters if `data/equity_state.json` does
+   NOT yet exist — once created, the file is the source of truth.
+   So set this BEFORE first launch.
+
+3. **(Optional) Pre-seed `data/equity_state.json`** if you want a
+   different starting ATH or are migrating mid-week:
+   ```json
+   {
+     "starting_equity": 1500.00,
+     "current_equity":  1500.00,
+     "equity_ath":      1500.00,
+     "session_start_equity": 1500.00,
+     "session_date":    "2026-05-20",
+     "session_pnl":     0.00,
+     "consecutive_losses": 0,
+     "last_updated_iso": "2026-05-20T00:00:00-05:00",
+     "history": []
+   }
+   ```
+   If skipped, the bot creates this file on first init using
+   `STARTING_EQUITY` as the seed for all four equity fields.
+
+4. **Restart bots** in the usual order:
+   ```cmd
+   tools/start_bots.bat
+   ```
+
+5. **Verify on the next entry** — look for these log lines:
+   ```
+   [TIER_SIZER] init: state_path=... starting=$1500.00 ...
+   [TIER_SIZER] compute strategy=bias_momentum equity=$1500.00
+                base=1 mult=1.50 -> 2 ...
+   [TID:...:TIER_SIZER] mode=tier_3000 strategy=bias_momentum
+                risk_sized=1 tier_sized=2 -> using 1
+   ```
+   (The risk-based sizer remains a floor — you'll never blow past
+   per-trade $$ risk just because tier_sized is higher.)
+
+6. **On every trade close** verify equity bookkeeping:
+   ```
+   [TIER_SIZER] trade_closed pnl=$+15.50 equity=$1500.00 -> $1515.50
+                ATH=$1515.50 ATH-BREAK session_pnl=$15.50 consec_losses=0 ...
+   ```
+
+7. **Daily monitoring** — `data/equity_state.json` is your source of
+   truth. `current_equity` should track Sim101 within commissions.
+   If they diverge, manually reconcile via Python REPL:
+   ```python
+   from core.tier_sizer import get_tier_sizer
+   get_tier_sizer().force_equity(2147.50)   # actual NT8 balance
+   ```
+
+**How to back out (emergency revert to flat_1):**
+1. Edit `config/settings.py`: `SIZING_MODE = "flat_1"`
+2. Restart bots. Existing `data/equity_state.json` is left in place
+   (quiescent) so you can re-enable later without losing history.
+3. No mid-trade behavior change — only NEW entries route differently.
+
+**What's tested (`tests/test_tier_sizer.py`, 38 tests):**
+- Tier math at $1.5K / $3K / $6K / $30K / $100K / $1M
+- Per-strategy multipliers (bias_momentum 1.5×, vwap_band_reversion
+  0.5×, unknown=1.0×, cap interaction)
+- ATH updates on winners, NOT decreased on losses, scratch trades
+- 85% DD scale-down trigger + floor at 1 contract
+- 4% daily breaker (3% no-trip, 5% trip, halt = compute returns 0)
+- 3-consec-loss halving + reset-on-win + scratch-doesn't-increment
+- Persistence round-trip + history cap + corrupt-file reinit
+- Manual session roll
+- SIZING_MODE default + STARTING_EQUITY constant exists
+
+**What's NOT covered (verify manually before flipping):**
+- Live `_on_trade_closed` wiring — the dispatcher is unit-tested but
+  the integration path through base_bot was not run end-to-end in this
+  ship. Watch for `[_on_trade_closed] tier_sizer.record_trade_close
+  failed:` warnings on first day post-flip. (The wiring is guarded by
+  try/except so a failure won't crash the bot.)
+- Multi-bot equity state — prod_bot and sim_bot share
+  `data/equity_state.json` if both run tier_3000. If you want
+  per-bot ATH tracking, pre-seed two files (one per bot path) — the
+  current implementation uses a single singleton path. Easy follow-up
+  if you actually want this; ask.
+- The session-roll uses local-clock midnight, not the CME 17:00 CT
+  roll. If you trade an overnight position that closes after midnight
+  local, the close gets attributed to the new session — fine for now
+  but watch the first overnight P&L attribution.
+

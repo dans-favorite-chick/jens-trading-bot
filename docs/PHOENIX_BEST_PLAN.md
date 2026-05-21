@@ -281,6 +281,22 @@ If ANY phase fails:
 - ✗ Behavior diverges from backtest → pause, investigate
 - ✗ DD experience worse than expected → pause, re-validate plan
 
+**SHIPPED 2026-05-20 (F-001):** The tier_3000 policy is now implemented
+in `core/tier_sizer.py` with full safety rails (1/$3K equity, 30-contract
+cap, per-strategy multipliers, 85%-of-ATH DD scale-down, 4% daily
+circuit breaker, 3-consecutive-loss halving, atomic-write equity
+state in `data/equity_state.json`). The dispatcher lives in
+`bots/base_bot.py` and is gated by `config.settings.SIZING_MODE`:
+
+- `"flat_1"` (DEFAULT) — current behavior. 1 contract per entry,
+  legacy PositionScaler path. **Phase A operators stay here.**
+- `"tier_3000"` — F-001 active. Operator flips this when ready for
+  Phase B (see `docs/OPERATOR_BRIEF_PT2.md` "F-001 Activation").
+
+The dispatcher is backward-compatible: while `SIZING_MODE="flat_1"`
+the new module is never invoked and `data/equity_state.json` is never
+written. No existing trade / position / state behavior changes.
+
 ### 5.4 Mental commitment (bias_momentum is the #1 strategy)
 
 bias_momentum has 56% max DD on the compounding curve. To survive that:

@@ -4078,13 +4078,65 @@ class BaseBot:
             risk_dollars, stop_ticks, strategy=_strat_obj
         )
 
-        # Phase 5: Position scaler — cap contracts by account equity and conditions
-        max_contracts = self.position_scaler.get_max_contracts(
-            account_equity=self.risk._risk_per_trade * 50,  # Approximate equity from risk setting
-            entry_score=signal.entry_score,
-            regime=regime,
-        )
-        contracts = min(contracts, max_contracts)
+        # ── F-001 sizing dispatcher (2026-05-20) ────────────────────
+        # When SIZING_MODE="tier_3000", route through core.tier_sizer for
+        # compounding contracts (1 per $3K equity, ATH scale-down, daily
+        # circuit breaker, 3-loss halving, per-strategy multipliers).
+        # Default "flat_1" preserves the legacy PositionScaler path so
+        # nothing changes for existing operators until they opt in.
+        try:
+            from config.settings import SIZING_MODE as _SIZING_MODE
+        except Exception:
+            _SIZING_MODE = "flat_1"
+
+        if _SIZING_MODE == "tier_3000":
+            try:
+                from core.tier_sizer import compute_contracts as _tier_compute
+                tier_contracts = _tier_compute(
+                    strategy=signal.strategy,
+                    score=signal.entry_score,
+                )
+            except Exception as _e:
+                logger.warning(
+                    f"[{tid}:TIER_SIZER] failed ({_e!r}) — falling back to flat_1"
+                )
+                tier_contracts = 1
+
+            # tier_compute returns 0 when the daily circuit breaker has
+            # tripped. Skip the entry outright in that case.
+            if tier_contracts <= 0:
+                logger.warning(
+                    f"[{tid}:TIER_SIZER] HALT — entry skipped "
+                    f"(daily circuit breaker tripped or 0 contracts)"
+                )
+                self.last_rejection = "tier_sizer halt (daily breaker)"
+                try:
+                    sig_dict = {"direction": signal.direction, "strategy": signal.strategy,
+                                "confidence": signal.confidence, "entry_score": signal.entry_score,
+                                "reason": signal.reason}
+                    self.history.log_near_miss(sig_dict, market, "tier_sizer_halt")
+                except Exception:
+                    pass
+                return
+
+            # Tier_3000 OWNS the contract count — clamp the risk-based
+            # sizing UP TO the tier ceiling. (We still keep the risk-based
+            # `contracts` as a floor so a wide-stop trade doesn't blow
+            # past the per-trade risk budget.)
+            logger.info(
+                f"[{tid}:TIER_SIZER] mode=tier_3000 strategy={signal.strategy} "
+                f"risk_sized={contracts} tier_sized={tier_contracts} -> using "
+                f"{min(contracts, tier_contracts) if contracts > 0 else tier_contracts}"
+            )
+            contracts = min(contracts, tier_contracts) if contracts > 0 else tier_contracts
+        else:
+            # Phase 5: Position scaler — cap contracts by account equity and conditions
+            max_contracts = self.position_scaler.get_max_contracts(
+                account_equity=self.risk._risk_per_trade * 50,  # Approximate equity from risk setting
+                entry_score=signal.entry_score,
+                regime=regime,
+            )
+            contracts = min(contracts, max_contracts)
 
         # Reject 0-contract entries — never send to bridge
         if contracts < 1:
@@ -5062,6 +5114,31 @@ class BaseBot:
             self.circuit_breakers.record_trade_outcome(trade.get("result", "UNKNOWN"))
         except Exception as e:
             logger.debug(f"[_on_trade_closed] record_trade_outcome error (non-blocking): {e}")
+
+        # F-001: feed equity tracker only when tier_3000 is active. The
+        # tracker mutates data/equity_state.json — keep it quiescent for
+        # flat_1 operators so nothing on disk changes for them.
+        try:
+            from config.settings import SIZING_MODE as _SIZING_MODE
+            if _SIZING_MODE == "tier_3000":
+                from core.tier_sizer import record_trade_close as _tier_record
+                _pnl = float(trade.get("pnl_dollars", 0.0) or 0.0)
+                _result = (trade.get("result") or "").upper()
+                _was_winner = None
+                if _result == "WIN":
+                    _was_winner = True
+                elif _result == "LOSS":
+                    _was_winner = False
+                _tier_record(
+                    pnl_dollars=_pnl,
+                    was_winner=_was_winner,
+                    strategy=trade.get("strategy"),
+                    trade_id=trade.get("trade_id"),
+                )
+        except Exception as e:
+            logger.warning(
+                f"[_on_trade_closed] tier_sizer.record_trade_close failed: {e!r}"
+            )
 
         # Chart overlay hook 4/4: trade closed. Writes X marker + P&L
         # annotation to NT8 PhoenixTradeOverlay indicator.
