@@ -100,6 +100,31 @@ class TestFlatStrategyRouting:
         # Top-level `orb` is distinct from opening_session.orb.
         assert get_account_for_signal("orb") == "SimStand alone ORB"
 
+    # ── 2026-05-20 SHIP AUDIT pt2 (B-012): per-strategy routing tests
+    #    for the 4 new Phase 13 winners. Without these, an account name
+    #    typo in STRATEGY_ACCOUNT_MAP would only be caught by the
+    #    aggregate count test (29) — but if one was wrong AND another
+    #    deduplicates with a typo, the count test still passes.
+    def test_raschke_baseline_routes_to_sim_raschke(self):
+        assert get_account_for_signal("raschke_baseline") == "Sim_Raschke"
+
+    def test_g_inside_bar_breakout_routes_to_sim_inside_bar(self):
+        assert get_account_for_signal("g_inside_bar_breakout") == "Sim_Inside_Bar"
+
+    def test_e_multi_day_breakout_routes_to_sim_multi_day(self):
+        # NB: lowercase 'm' in Sim_multi_Day is intentional (BYTE-EXACT
+        # match against operator's NT8 display name).
+        assert get_account_for_signal("e_multi_day_breakout") == "Sim_multi_Day"
+
+    def test_a_asian_continuation_routes_to_sim_asian(self):
+        assert get_account_for_signal("a_asian_continuation") == "Sim_Asian"
+
+    def test_vwap_band_reversion_routes_to_underscore_account(self):
+        # 2026-05-19 ship audit caught the bug: was "SimVwap Reversion"
+        # (space) but operator's actual account is "SimVwap_Reversion".
+        # Regression test to prevent reversion.
+        assert get_account_for_signal("vwap_band_reversion") == "SimVwap_Reversion"
+
 
 # ═══════════════════════════════════════════════════════════════════
 # Fallback + edge cases (4)

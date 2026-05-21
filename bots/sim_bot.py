@@ -837,6 +837,15 @@ def _split_key(key: str) -> tuple[str, str | None]:
 
 
 def main():
+    # 2026-05-20 PHASE 13 SHIP AUDIT pt2 (F-009): single-instance guard.
+    # Discovered TWO sim_bot.py processes running simultaneously since
+    # 2026-05-17 21:08:54, racing on every signal and only producing
+    # SimDom Pull Back trades while all 27 other dedicated NT8 accounts
+    # sat empty. acquire_or_exit() takes a file lock on run/sim.pid; a
+    # second invocation prints a clear error and exits with code 17.
+    from core.single_instance import acquire_or_exit
+    acquire_or_exit("sim")
+
     bot = SimBot()
     try:
         asyncio.run(bot.run())

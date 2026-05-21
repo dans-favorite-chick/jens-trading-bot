@@ -18,6 +18,139 @@ of them so that we don't forget."
 
 ### ~~B-001 — pandas 3.0 datetime precision idiom (HIGH)~~ → see B-CLOSED-005
 
+### B-008 — Phase 13 target overrides silently no-op for late-pricing strategies (HIGH)
+**Status:** FIXED in commit a03086e (deferred-recompute path), and again in
+F-005 of pt2 audit (LIMIT-fill anchor). See B-CLOSED-007 below.
+
+### B-009 — ChandelierPolicy + TimeExitPolicy never called per-bar (CRITICAL)
+**Status:** FIXED in commit a03086e (per-bar enforcement loop in base_bot
+`_on_bar()`). See B-CLOSED-008.
+
+### B-010 — TWO sim_bot.py processes running simultaneously (HIGH)
+**Discovered:** 2026-05-20 (ship audit pt2)
+**Symptom:** PIDs 76700 + 66988 both running sim_bot.py since 2026-05-17 21:08:54.
+Result: only `SimDom Pull Back` saw activity (~100 orders/day) — 27 other dedicated
+NT8 accounts sat empty because the two bots raced and one was stuck.
+**Fix:** Single-instance guard `core/single_instance.py` (F-009). Both
+sim_bot.py and prod_bot.py now call `acquire_or_exit(bot_name)` at startup;
+a duplicate prints a clear error + exits with code 17. Lives in commits
+landing this session.
+**Action needed (operator):** Kill BOTH existing sim_bot.py PIDs, then start
+one fresh `python bots/sim_bot.py`. Future duplicates blocked by the guard.
+
+### B-011 — DAILY_LOSS_LIMIT + PER_STRATEGY_DAILY_LOSS_CAP stuck at $1M sim values (HIGH)
+**Status:** FIXED in commit a03086e (restored to $200 production values).
+
+### B-012 — 8 strategies enabled=True that the plan kills or doesn't list (HIGH)
+**Status:** PARTIALLY FIXED. Commit a03086e set validated=False on all 8.
+F-004 (pt2) additionally set enabled=False on the 4 plan-killed ones:
+orb_fade, compression_breakout_v2, compression_breakout_micro, orb_v2.
+The 4 remaining (big_move_signal, dom_pullback, nq_lsr, footprint_cvd_reversal)
+are still enabled=True but validated=False; sim_bot may still load them for
+data collection until operator decides whether to enabled=False them too.
+
+### B-013 — skip_on_stop_clamp left at False on 3 strategies (MEDIUM)
+**Status:** FIXED in F-012 of pt2 audit. Restored to True on bias_momentum
++ vwap_pullback (disabled) + dom_pullback. The Phase 7 confirmation-stop
+fallback is now wired so the clamp-skip is safe.
+
+### B-014 — Universal lunch-hour skip filter never built (MEDIUM, +$5K/yr)
+**Status:** FIXED in F-010 of pt2 audit. SKIP_HOURS_CT = [10, 11, 12, 13]
+wired into base_bot._process_signal(). Strategies whose windows end before
+10am CT (opening_session, asian) aren't affected. Per-strategy opt-out
+via SKIP_HOURS_CT_EXEMPT in config/settings.py.
+
+### B-015 — Plan-parity drift can land silently (process bug, HIGH)
+**Status:** FIXED in F-011 of pt2 audit. `tests/test_plan_winners_parity.py`
+adds 7 CI guardrails that fail if validated=True flips on a non-plan
+strategy, if a plan winner is disabled, if a killed strategy is re-enabled,
+or if routing drifts. The exact pattern that caused 2026-05-20's incident
+will now fail in CI before commit.
+
+### B-016 — _apply_phase13_overrides swallows import errors silently (HIGH)
+**Status:** FIXED in B-005 of pt2 audit. Was `except Exception: return`
+masking ImportErrors that disabled ALL Phase 13 overrides. Now logs
+WARNING with exception detail.
+
+### B-017 — Per-bar Phase 13 enforcement loop debug-only error handler (HIGH)
+**Status:** FIXED in B-006 of pt2 audit. The per-bar loop that fires
+ChandelierPolicy/TimeExitPolicy for 5 Phase 13 strategies was logging
+errors at DEBUG; if the loop died the strategies silently fell back to
+wide-bracket placeholder targets. Promoted to WARNING. Same fix for
+legacy CHANDELIER (opening_session.orb) loop.
+
+### B-018 — _PolicyPosAdapter initial_stop falls back to wrong value (MEDIUM)
+**Status:** FIXED in B-008 of pt2 audit. `getattr(real_pos,
+"initial_stop_price", real_pos.stop_price)` always returned 0.0
+(dataclass default) instead of falling back to stop_price. Bug only
+materialized if a Position was reconstructed from disk without
+__post_init__ — but the fallback was the entire reason the code was
+written that way. Fixed with `or real_pos.stop_price`.
+
+### B-019 — Phase 13 wiring had ZERO test coverage (HIGH)
+**Status:** FIXED in B-007 of pt2 audit. New `tests/test_phase13_overrides.py`
+adds 16 tests covering `_apply_phase13_overrides`, `recompute_phase13_target`,
+`_PolicyPosAdapter`, `_PolicyBarAdapter`. The 1.5R-vs-3R silent-no-op
+bug fixed in commit a03086e would have been caught by these tests.
+
+### B-020 — vwap_band_reversion validated=True but lab-only per plan (HIGH)
+**Status:** FIXED in B-009 of pt2 audit. Demoted to validated=False.
+Plan §1.1 lists 11 winners — vwap_band_reversion is in §1.2 with
+`scale_out_1r + filter` exit, neither of which exist yet. Revert when
+F-002 (scale_out_1r policy class) + F-003 (combo_ema_vol filter) ship.
+
+### B-021 — MAX_ACTUAL_STOP_DOLLARS_PER_TRADE stuck at $100 sim value (HIGH)
+**Status:** FIXED in B-010 of pt2 audit. Restored $100 → $50 per file
+comment ("RESTORE before live").
+
+### B-022 — opening_session 3 non-winner subs firing despite not being in plan (MEDIUM)
+**Status:** FIXED in B-011 of pt2 audit. premarket_breakout,
+open_auction_in, open_auction_out — all gated OFF by default; operator
+can opt in via config "{sub}_enabled": True if they want them back.
+Plan §1.1 ships only .orb and .open_drive.
+
+### B-023 — Routing tests didn't cover the 4 new Phase 13 strategies (MEDIUM)
+**Status:** FIXED in B-012 of pt2 audit. Added per-strategy assertions
+for raschke_baseline, g_inside_bar_breakout, e_multi_day_breakout,
+a_asian_continuation, and a regression test for the
+vwap_band_reversion underscore-mismatch fix from 2026-05-19.
+
+### B-024 — circuit_breakers Telegram alert failures silenced at debug (HIGH)
+**Status:** FIXED in B-013 of pt2 audit. Two sites in
+core/circuit_breakers.py logged Telegram dispatch failures at DEBUG —
+including the HALT_BOT alert, which is the operator's last-resort
+notification. Promoted both to CRITICAL.
+
+### B-025 — vwap_pullback_v2 session-window SKIP logged at debug (MEDIUM)
+**Status:** FIXED in B-014 of pt2 audit. New J.2 17:00-04:59 CT gate
+(added 2026-05-20) was logging skips at DEBUG; operator running
+RTH-only days would see 0 signals with no surface explanation.
+Promoted to INFO.
+
+### B-026 — pandas datetime-precision test masked import failures (LOW)
+**Status:** FIXED in B-016 of pt2 audit. pytest.skip → pytest.fail
+for the import-time exception path. A pandas 3.0 upgrade introducing
+a new import error would have appeared as SKIPPED (green) in CI; now
+correctly fails.
+
+### B-027 — Universal 10-13:59 CT lunch-skip filter not implemented (MEDIUM, +$5K/yr)
+**Status:** FIXED in F-010 of pt2 audit. SKIP_HOURS_CT = [10, 11, 12, 13]
+added to config/settings.py; base_bot._process_signal() blocks all
+signals during those hours per PHASE_13_IMPLEMENTATION_PLAN §A.3
+"+$5K/year free". Per-strategy opt-out via SKIP_HOURS_CT_EXEMPT.
+
+### B-028 — recompute_phase13_target used market price not LIMIT fill price (LATENT, MED)
+**Status:** FIXED in F-005 of pt2 audit. The deferred-recompute was
+called with `price` (market tick) even for LIMIT-entry strategies
+where the fill is actually at `limit_price`. Added a second LIMIT-
+specific recompute after limit_price is computed; chandelier-policy
+strategies aren't affected today (10R wide bracket), but this paves
+the way for scale_out_1r/fixed_rr on LIMIT strategies.
+
+
+
+
+
 ### B-002 — orb_v2 strategy only ever produced 1 trade in 5y backtest (MEDIUM)
 **Discovered:** Section S validator output
 **Location:** `strategies/orb_v2.py` evaluate() — gates may be impossibly strict

@@ -1230,7 +1230,7 @@ def print_summary(df: pd.DataFrame) -> None:
             "wr%": f"{wr:.1f}",
             "total$": f"{total:+.0f}",
             "avg$": f"{avg:+.2f}",
-            "pf": f"{pf:.2f}" if pf != float("inf") else "∞",
+            "pf": f"{pf:.2f}" if pf != float("inf") else "inf",
             "max_dd$": f"{max_dd:.0f}",
             "yrs+/total": f"{years_pos}/{len(years_in)}",
         })

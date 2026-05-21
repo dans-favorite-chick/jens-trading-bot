@@ -120,7 +120,12 @@ class VWAPPullbackV2(BaseStrategy):
                 _in_window = True
                 break
         if not _in_window:
-            logger.debug(
+            # 2026-05-20 SHIP AUDIT pt2 (B-014): was logger.debug. Promoted
+            # to info because this gate (J.2 17:00-04:59 CT window) is the
+            # difference between "+$10K/5y" and "roughly flat". Operator
+            # running RTH-only days would otherwise see 0 signals without
+            # any explanation. INFO surfaces it without storming the log.
+            logger.info(
                 f"[EVAL] {self.name}: SKIP outside_session_window "
                 f"now={cur_hhmm} windows={sw}"
             )

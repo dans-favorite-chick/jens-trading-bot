@@ -27,9 +27,30 @@ TICK = 0.25
 
 # ─── Helpers ────────────────────────────────────────────────────────
 def make_strategy(**config_overrides) -> OpeningSessionStrategy:
+    """Build an OpeningSessionStrategy with all 4 normally-gated subs
+    enabled by default (test purposes). 2026-05-20 ship audit pt2
+    (B-011) gated premarket_breakout / open_auction_in / open_auction_out
+    OFF by default in production (per plan §1.1 — only orb + open_drive
+    are winners); tests that exercise those sub-evaluators need to opt
+    in. Pass an explicit `<sub>_enabled=False` if testing the gate."""
     config = dict(STRATEGIES["opening_session"])
+    # Enable all gated subs by default — tests are testing the sub
+    # EVALUATOR, not the parent's gate policy (which has its own
+    # regression test). Operator-controlled gate policy is verified
+    # in `test_<sub>_disabled_by_default` tests.
+    config.setdefault("open_test_drive_enabled", True)
+    config.setdefault("premarket_breakout_enabled", True)
+    config.setdefault("open_auction_in_enabled", True)
+    config.setdefault("open_auction_out_enabled", True)
     config.update(config_overrides)
     return OpeningSessionStrategy(config)
+
+
+def make_strategy_default_config() -> OpeningSessionStrategy:
+    """Build an OpeningSessionStrategy using the EXACT production
+    config (no test convenience overrides). Use this to verify
+    default-disabled behavior of gated subs."""
+    return OpeningSessionStrategy(dict(STRATEGIES["opening_session"]))
 
 
 def ct(hh: int, mm: int, ss: int = 0) -> datetime:
@@ -382,10 +403,27 @@ class TestOpenTestDrive:
 
     def test_open_test_drive_disabled_by_default(self):
         # Phase 13 ship audit: sub is KILLED by default. Verify the
-        # default config (no enable flag) returns None even with a
-        # valid OPEN_TEST_DRIVE setup.
-        s = make_strategy()  # no override - default-disabled
+        # production config (no test-helper overrides) returns None
+        # even with a valid OPEN_TEST_DRIVE setup.
+        s = make_strategy_default_config()  # production config — gated off
         assert s.evaluate(open_test_drive_market()) is None
+
+    def test_premarket_breakout_disabled_by_default(self):
+        # 2026-05-20 SHIP AUDIT pt2 (B-011): sub is not in plan §1.1.
+        # Default-disabled regression — flip premarket_breakout_enabled
+        # to True per-config if you want it back.
+        s = make_strategy_default_config()
+        assert s.evaluate(pm_market()) is None
+
+    def test_open_auction_in_disabled_by_default(self):
+        # 2026-05-20 SHIP AUDIT pt2 (B-011) — same as above.
+        s = make_strategy_default_config()
+        assert s.evaluate(auction_in_market()) is None
+
+    def test_open_auction_out_disabled_by_default(self):
+        # 2026-05-20 SHIP AUDIT pt2 (B-011) — same as above.
+        s = make_strategy_default_config()
+        assert s.evaluate(auction_out_market()) is None
 
 
 # ═══════════════════════════════════════════════════════════════════

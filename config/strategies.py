@@ -124,11 +124,14 @@ STRATEGIES = {
         # 2026-05-03: skip signals when natural ATR stop would exceed
         # max_stop_ticks (forced clamping). Forensic evidence: clamped stops
         # were 0W/5L. Vol regime mismatch — better to skip than clamp.
-        # 2026-05-17: SIM TESTING — flipped True->False. The V2 deployment
-        # raises max_stop_ticks to 200 (was 120) so clamps are far less
-        # frequent. Phase 7 will replace the rejection with a confirmation-
-        # bar fallback (stop_fallback_mode: "confirmation"). RESTORE before live.
-        "skip_on_stop_clamp": False,
+        # 2026-05-20 PHASE 13 SHIP AUDIT pt2 (F-012): restored True.
+        # 2026-05-17 V2 deployment had flipped this to False under
+        # "SIM TESTING — RESTORE before live" comment; never restored.
+        # The Phase 7 confirmation-bar fallback (stop_fallback_mode=
+        # "confirmation") IS now set on this strategy so the clamp-skip
+        # gate doesn't strand us — it's safe to restore.
+        # Original rationale: clamped stops were 0W/5L on this strategy.
+        "skip_on_stop_clamp": True,
         # 2026-05-03: convert RSI bearish-divergence "warning" into a hard
         # gate. Evidence: opposing-RSI-div appears in 6 losers / 0 winners.
         "rsi_div_hard_gate": True,
@@ -628,8 +631,16 @@ STRATEGIES = {
         # SKIPS on TREND days (price walks one band, reversion fails).
         # Per operator request; lab-only until 50+ trades validate.
         # See strategies/vwap_band_reversion.py docstring for research basis.
+        #
+        # 2026-05-20 PHASE 13 SHIP AUDIT pt2 (B-009): validated=False.
+        # Per plan §1.1: vwap_band_reversion is NOT in the 11-winner list.
+        # Plan §1.2 specs it with `scale_out_1r + filter` exit but neither
+        # the policy class NOR the combo_ema_vol filter exist yet (per
+        # F-002 + F-003 in OPERATOR_MORNING_BRIEF_PT2). The naked strategy
+        # is -$6,491 / 5y per backtest; with both deferred items shipped
+        # it becomes +$4,256. Demote until F-002 + F-003 land, then revert.
         "enabled": True,
-        "validated": True,    # 2026-05-17: was False — operator override (V2 deployment)
+        "validated": False,
         "sigma": 2.1,                    # entry-band sigma
         "outer_sigma": 2.5,              # stop is just beyond this
         "atr_stop_buffer": 0.5,          # multiplier on ATR added to outer band
@@ -737,11 +748,14 @@ STRATEGIES = {
     },
 
     "orb_fade": {
-        "enabled": True,
-        # 2026-05-20 PHASE 13 SHIP AUDIT: validated=False.
-        # PHASE_13_IMPLEMENTATION_PLAN §O explicitly KILLED this strategy
-        # (PF 0.34, -$255/5y, "anti-edge" verdict). Don't re-enable
-        # without a new backtest reversing the verdict.
+        # 2026-05-20 PHASE 13 SHIP AUDIT pt2: enabled=False (was True).
+        # F-004 in OPERATOR_MORNING_BRIEF.md (2nd audit). Just flipping
+        # validated=False wasn't enough — sim_bot still loaded + fired
+        # signals through it (only_validated=False). Disable entirely so
+        # the strategy doesn't burn compute or emit noisy log lines.
+        # PHASE_13_IMPLEMENTATION_PLAN §O explicitly KILLED this
+        # strategy (PF 0.34, -$255/5y, "anti-edge" verdict).
+        "enabled": False,
         "validated": False,
         "session_windows_ct": [("08:45", "12:00")],
         "max_trades_per_day": 2,
@@ -757,12 +771,11 @@ STRATEGIES = {
     },
 
     "orb_v2": {
-        "enabled": True,
-        # 2026-05-20 PHASE 13 SHIP AUDIT: validated=False. Plan ships
+        # 2026-05-20 PHASE 13 SHIP AUDIT pt2: enabled=False. F-004 in
+        # OPERATOR_MORNING_BRIEF.md (2nd audit). B-002 notes orb_v2
+        # produced only 1 trade in 5y backtest. Plan ships
         # opening_session.orb (managed-exit chandelier), NOT orb_v2.
-        # B-002 in BUGS_AND_TODOS.md notes orb_v2 only produced 1 trade
-        # in 5y backtest — gates may be impossibly strict. Disable until
-        # gates are re-tuned and re-backtested.
+        "enabled": False,
         "validated": False,
         "or_duration_minutes": 15,
         "min_or_size_points": 11,
@@ -780,12 +793,11 @@ STRATEGIES = {
     },
 
     "compression_breakout_v2": {
-        "enabled": True,
-        # 2026-05-20 PHASE 13 SHIP AUDIT: validated=False.
+        # 2026-05-20 PHASE 13 SHIP AUDIT pt2: enabled=False. F-004.
         # PHASE_13_IMPLEMENTATION_PLAN.md §A Bug B4 EXPLICITLY KILLED
         # this strategy: PF 0.61, MFE/MAE 0.19, "fundamentally anti-edge
         # for MNQ in current regime. No fix recommended -- just kill."
-        # Don't re-enable without a new backtest reversing the verdict.
+        "enabled": False,
         "validated": False,
         "max_trades_per_day": 3,
         "bb_period": 20,
@@ -808,12 +820,10 @@ STRATEGIES = {
     },
 
     "compression_breakout_micro": {
-        "enabled": True,
-        # 2026-05-20 PHASE 13 SHIP AUDIT: validated=False.
+        # 2026-05-20 PHASE 13 SHIP AUDIT pt2: enabled=False. F-004.
         # PHASE_13_IMPLEMENTATION_PLAN.md §A: -$48, PF 0.97 — marginal
-        # anti-edge variant of compression_breakout family. Sibling
-        # compression_breakout_v2 already on the kill list. Disable
-        # until a new backtest reverses the verdict.
+        # anti-edge variant of compression_breakout family.
+        "enabled": False,
         "validated": False,
         "max_trades_per_day": 5,
         "bb_period": 20,

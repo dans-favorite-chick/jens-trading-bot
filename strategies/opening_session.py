@@ -157,12 +157,19 @@ class OpeningSessionStrategy(BaseStrategy):
             return sig
 
         # 1. Premarket Breakout (any opening type)
-        if is_in_window(now_ct, "08:30", "08:45"):
+        # 2026-05-20 SHIP AUDIT pt2 (B-011): NOT in PHOENIX_BEST_PLAN §1.1
+        # winners list. Plan only ships .orb + .open_drive. This sub is
+        # neither a winner nor an explicit kill — but the operator's
+        # comment at config line 503-509 noted only "86 SKIPs" lifetime
+        # so it's been a near-no-op anyway. Gated off by default; re-
+        # enable per-config via "premarket_breakout_enabled": True.
+        if (is_in_window(now_ct, "08:30", "08:45")
+                and self.config.get("premarket_breakout_enabled", False)):
             out = _try(self._evaluate_premarket_breakout)
             if out is not None:
                 return out
 
-        # 2. Open Drive
+        # 2. Open Drive (Phase 13 §1.1 WINNER — leave enabled)
         if opening_type == "OPEN_DRIVE" and is_in_window(now_ct, "08:35", "09:00"):
             out = _try(self._evaluate_open_drive)
             if out is not None:
@@ -189,13 +196,20 @@ class OpeningSessionStrategy(BaseStrategy):
                 return out
 
         # 5. Open Auction Out
-        if opening_type == "OPEN_AUCTION_OUT" and is_in_window(now_ct, "08:45", "11:00"):
+        # 2026-05-20 SHIP AUDIT pt2 (B-011): NOT in plan §1.1 winners.
+        # Same pattern as premarket_breakout above.
+        if (opening_type == "OPEN_AUCTION_OUT"
+                and is_in_window(now_ct, "08:45", "11:00")
+                and self.config.get("open_auction_out_enabled", False)):
             out = _try(self._evaluate_open_auction_out)
             if out is not None:
                 return out
 
         # 6. Open Auction In
-        if opening_type == "OPEN_AUCTION_IN" and is_in_window(now_ct, "09:30", "12:30"):
+        # 2026-05-20 SHIP AUDIT pt2 (B-011): NOT in plan §1.1 winners.
+        if (opening_type == "OPEN_AUCTION_IN"
+                and is_in_window(now_ct, "09:30", "12:30")
+                and self.config.get("open_auction_in_enabled", False)):
             out = _try(self._evaluate_open_auction_in)
             if out is not None:
                 return out

@@ -109,10 +109,13 @@ def _load_confluence_module():
     mod = importlib.util.module_from_spec(spec)
     # The analyzer module may try to import heavy backtest deps at import-time.
     # Catch ImportError so this test still protects the load_5m_bars function.
+    # 2026-05-20 SHIP AUDIT pt2 (B-016): swapped pytest.skip → pytest.fail.
+    # An import-time failure is exactly the kind of pandas 3.0 regression
+    # this test exists to catch; SKIPPED-in-CI was masking it as green.
     try:
         spec.loader.exec_module(mod)
     except Exception as exc:
-        pytest.skip(f"confluence module failed to import: {exc!r}")
+        pytest.fail(f"confluence module failed to import: {exc!r}")
     return mod
 
 

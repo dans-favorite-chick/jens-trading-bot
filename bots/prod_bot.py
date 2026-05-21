@@ -72,6 +72,11 @@ class ProdBot(BaseBot):
 
 
 def main():
+    # 2026-05-20 PHASE 13 SHIP AUDIT pt2 (F-009): single-instance guard.
+    # See bots/sim_bot.py for full context. Same protection applied here.
+    from core.single_instance import acquire_or_exit
+    acquire_or_exit("prod")
+
     bot = ProdBot()
     try:
         asyncio.run(bot.run())

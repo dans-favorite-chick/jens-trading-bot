@@ -255,8 +255,18 @@ def _apply_phase13_overrides(signal) -> None:
             PHASE_13_ORDER_TYPES,
             get_policy,
         )
-    except Exception:
-        return  # exit_policies module not present yet; gracefully skip
+    except Exception as _e:
+        # 2026-05-20 SHIP AUDIT pt2 (B-005): was a silent return that
+        # masked import errors. If core.exit_policies fails to import,
+        # EVERY Phase 13 target override silently no-ops — strategies
+        # ship with legacy 1.5R/2R/target_rr targets and the operator
+        # has NO visibility. Promoting to WARNING.
+        logger.warning(
+            f"[Phase13 override] core.exit_policies import failed "
+            f"({_e!r}) — Phase 13 overrides DISABLED for this process. "
+            f"Strategies will use their Signal-emitted targets/order types."
+        )
+        return
 
     strat = getattr(signal, "strategy", None)
     if not strat:
@@ -364,8 +374,15 @@ class _PolicyPosAdapter:
         self._real = real_pos
         self.entry_price = float(real_pos.entry_price)
         # Position has `initial_stop_price` (frozen at open); policies want `initial_stop`.
-        self.initial_stop = float(getattr(real_pos, "initial_stop_price",
-                                          real_pos.stop_price))
+        # 2026-05-20 SHIP AUDIT pt2 (B-008): bare getattr always returns
+        # `initial_stop_price` (defined on the dataclass with default 0.0)
+        # so the fallback to `stop_price` never fires. If a Position was
+        # ever reconstructed from disk without __post_init__ running,
+        # initial_stop=0.0 → policy._stop_distance ≈ entry_price → trail
+        # never activates → strategy degrades to wide-bracket placeholder.
+        # Use `or` so 0.0 also falls through to stop_price.
+        _isp = getattr(real_pos, "initial_stop_price", 0.0) or real_pos.stop_price
+        self.initial_stop = float(_isp)
         self.direction = str(real_pos.direction)
         # Position has `entry_time` (epoch seconds); policies want `entry_ts`.
         # TimeExitPolicy accepts float directly via the isinstance check at line 320.
@@ -410,7 +427,29 @@ def recompute_phase13_target(strategy: str, direction: str,
     2026-05-20 ship-audit fix: pairs with the deferred-target tag set
     in `_apply_phase13_overrides` step 2. Fixes the silent no-op that
     caused spring_setup to ship 1.5R targets instead of 3R Phase 13.
+
+    2026-05-20 follow-up fix: import PHASE_13_EXIT_ASSIGNMENTS / get_policy
+    inside the function. The original a03086e shipped these unresolved at
+    module scope -> every call raised NameError at line 414 (BEFORE the
+    try-except), bricking the deferred-recompute path. The caller in
+    _process_signal catches the NameError and silently logs warning, so
+    every deferred-target strategy (spring_setup, bias_momentum,
+    vwap_pullback_v2, vwap_band_pullback, ib_breakout, a_asian,
+    e_multi_day, g_inside_bar, raschke_baseline, es_nq_confluence)
+    silently fell back to the legacy 1.5R target. Caught by phase-13
+    verification harness on 2026-05-20.
     """
+    try:
+        from core.exit_policies import (
+            PHASE_13_EXIT_ASSIGNMENTS,
+            get_policy,
+        )
+    except Exception as e:
+        logger.warning(
+            f"[Phase13 override] recompute_phase13_target import failed "
+            f"for {strategy}: {e!r}"
+        )
+        return None
     if strategy not in PHASE_13_EXIT_ASSIGNMENTS:
         return None
     pname, params = PHASE_13_EXIT_ASSIGNMENTS[strategy]
@@ -2468,7 +2507,11 @@ class BaseBot:
                                     await self._exit_trade(ws, price, "chandelier_trail_hit",
                                                            trade_id=_pos.trade_id)
                     except Exception as e:
-                        logger.debug(f"[CHANDELIER] update error (non-blocking): {e}")
+                        # 2026-05-20 SHIP AUDIT pt2 (B-006): was logger.debug.
+                        # Legacy chandelier (opening_session.orb) — failure
+                        # here means the strategy keeps holding past its
+                        # trail level. Operator must know.
+                        logger.warning(f"[CHANDELIER] update error: {e!r}")
 
                     # ── 2026-05-20 PHASE 13 SHIP-AUDIT FIX ──────────────────────
                     # Per-bar Phase 13 exit-policy enforcement. Without this,
@@ -2530,7 +2573,13 @@ class BaseBot:
                                         trade_id=_pos.trade_id,
                                     )
                     except Exception as e:
-                        logger.debug(f"[PHASE13_EXIT] per-bar enforcement error (non-blocking): {e}")
+                        # 2026-05-20 SHIP AUDIT pt2 (B-006): was logger.debug.
+                        # If the Phase 13 per-bar enforcement loop dies, the
+                        # 5 strategies that depend on it (g_inside_bar,
+                        # e_multi_day, es_nq_confluence, asian, raschke)
+                        # silently lose their entire exit edge. Promoted to
+                        # WARNING so operator sees the failure.
+                        logger.warning(f"[PHASE13_EXIT] per-bar enforcement error: {e!r}")
 
                     # Phase C: managed-exit hook per position — strategies with
                     # dynamic exits (Noise Area) get a chance to close their own
@@ -2617,6 +2666,35 @@ class BaseBot:
         Called inside asyncio.wait_for(timeout=15s) so it can never
         freeze the tick loop.
         """
+        # ── 2026-05-20 PHASE 13 SHIP AUDIT pt2 (F-010): lunch-skip ──
+        # PHOENIX_BEST_PLAN.md §D.2: skip all signals 10:00-13:59 CT
+        # ("lunch zone" — whippy + low edge, costs ~$5K/yr in 5y backtest).
+        # Strategies whose window ends before 10:00 CT (opening_session,
+        # a_asian_continuation) won't see this fire. Strategies that
+        # WANT lunch coverage can opt out via SKIP_HOURS_CT_EXEMPT.
+        try:
+            from config.settings import (
+                SKIP_HOURS_CT_ENABLED, SKIP_HOURS_CT, SKIP_HOURS_CT_EXEMPT
+            )
+            if SKIP_HOURS_CT_ENABLED:
+                _now_ct = self.session.now_ct() if hasattr(self.session, "now_ct") else None
+                if _now_ct is None:
+                    from zoneinfo import ZoneInfo
+                    _now_ct = datetime.now(ZoneInfo("America/Chicago"))
+                if (_now_ct.hour in SKIP_HOURS_CT
+                        and signal.strategy not in SKIP_HOURS_CT_EXEMPT):
+                    logger.info(
+                        f"[HOUR_SKIP] {signal.strategy} {signal.direction}: "
+                        f"skipped (now {_now_ct.strftime('%H:%M')} CT in "
+                        f"lunch-zone {SKIP_HOURS_CT}) per F-010 universal filter"
+                    )
+                    self.last_rejection = (
+                        f"Lunch-zone skip {_now_ct.strftime('%H:%M')} CT"
+                    )
+                    return
+        except Exception as _e:
+            logger.debug(f"[HOUR_SKIP] filter check error (non-blocking): {_e!r}")
+
         # ── PHASE 13 SECTION U: tick-validated per-strategy overrides ──
         # Apply per-strategy entry order_type AND exit policy from the
         # canonical assignments in core/exit_policies.py. Safe no-op if
@@ -4174,6 +4252,33 @@ class BaseBot:
                     target_price = round(limit_price + (_safety_ticks * TICK_SIZE), 2)
                 else:
                     target_price = round(limit_price - (_safety_ticks * TICK_SIZE), 2)
+
+            # 2026-05-20 SHIP-AUDIT pt2 (F-005): for LIMIT entries with a
+            # Phase 13 exit policy, re-anchor the Phase 13 target to the
+            # LIMIT FILL price instead of the market tick price the earlier
+            # deferred-recompute used. Without this, when scale_out_1r or
+            # fixed_rr eventually ships for g_inside_bar / e_multi_day,
+            # the target lands LIMIT_OFFSET_TICKS off from the fill →
+            # systematic R-distance error. Chandelier strategies don't
+            # care today (10R wide-bracket), but this paves the way.
+            if getattr(signal, "_phase13_target_deferred", False) and not _managed_exit_target:
+                try:
+                    _ph13_target = recompute_phase13_target(
+                        signal.strategy, signal.direction, limit_price, stop_price,
+                    )
+                    if _ph13_target is not None and _ph13_target != target_price:
+                        _old = target_price
+                        target_price = round(_ph13_target, 2)
+                        logger.info(
+                            f"[Phase13 override] {signal.strategy}: LIMIT-anchored "
+                            f"target {_old:.2f} -> {target_price:.2f} "
+                            f"(limit_fill={limit_price:.2f} stop={stop_price:.2f})"
+                        )
+                except Exception as _e:
+                    logger.warning(
+                        f"[Phase13 override] LIMIT-anchored recompute failed for "
+                        f"{signal.strategy}: {_e!r}"
+                    )
         elif signal_entry_type == "STOPMARKET":
             # Breakout entry: trigger when price crosses entry_price, fills at market.
             limit_price = round(sig_entry_price if sig_entry_price is not None else price, 2)

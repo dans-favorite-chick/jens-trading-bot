@@ -36,9 +36,13 @@ TICK_VALUE_PER_CONTRACT = 0.50    # MNQ: $0.50 per tick per 1 contract
 # Bandy / Tomasini-Jaekle principle: stops at signal invalidation,
 # position sizing controls $; when sizing is fixed at 1, skip-or-take
 # is the actual control.
-# 2026-05-17: SIM TESTING — raised from $50 to $100 to pair with new
-# max_stop_ticks: 200 — restore to $50 before live
-MAX_ACTUAL_STOP_DOLLARS_PER_TRADE = 100.0
+# 2026-05-20 PHASE 13 SHIP AUDIT pt2 (B-010): restored $100 → $50.
+# Was raised to $100 on 2026-05-17 for V2 deployment with max_stop_ticks=200,
+# under the "RESTORE before live" comment. The Phase 13 audit on 2026-05-20
+# restored DAILY_LOSS_LIMIT and PER_STRATEGY_DAILY_LOSS_CAP but missed this
+# one. With stop_clamp filters back on (F-012) the larger stop_ticks rarely
+# materialize into actual large stops, so the $50 cap is fine again.
+MAX_ACTUAL_STOP_DOLLARS_PER_TRADE = 50.0
 
 # ─── Network Ports ──────────────────────────────────────────────────
 NT8_WS_PORT = 8765       # Bridge listens, NT8 indicator connects as client
@@ -102,6 +106,25 @@ ATR_LOW = 100        # Target 1.5:1, time stop 15min, more trades
 ATR_NORMAL = 160     # Target 1.5:1, time stop 12min, standard
 ATR_HIGH = 200       # Target 1.75:1, time stop 10min, selective
 # Above 200: Target 2.0:1, time stop 8min, A++ only
+
+# ─── Universal time-of-day skip filter (F-010, 2026-05-20) ─────────
+# PHASE_13_IMPLEMENTATION_PLAN.md §A.3 / PHOENIX_BEST_PLAN.md §D.2:
+# applying a 10:00-13:59 CT skip to ALL strategies recovers ~$5K/yr in
+# the 5-year backtest. The CT "lunch zone" produces low-edge whippy
+# action that the gates don't filter on their own.
+#
+# Exemptions: strategies whose entire trading window is within the skip
+# hours should NOT be blocked (e.g. opening_session.* subs all end by
+# 09:30 anyway; a_asian_continuation ends 08:00). The skip is applied
+# at base_bot._handle_signal() — strategy can opt out by listing itself
+# in SKIP_HOURS_CT_EXEMPT below.
+SKIP_HOURS_CT_ENABLED = True
+SKIP_HOURS_CT = [10, 11, 12, 13]  # block any signal whose now_ct.hour is in this list
+SKIP_HOURS_CT_EXEMPT = (
+    # Strategies whose windows are intentionally inside the skip zone
+    # OR that have proven edge through lunch. Empty for Phase 13 ship;
+    # extend after live-data validation if specific strategies need it.
+)
 
 # ─── Session Windows (CST) ─────────────────────────────────────────
 SESSION_WINDOWS = {

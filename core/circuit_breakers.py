@@ -281,7 +281,11 @@ class CircuitBreakers:
                     f"{ev.breaker_type}: {ev.reason}",
                 ))
             except Exception as e:
-                logger.debug(f"[BREAKER TG] alert dispatch failed: {e}")
+                # 2026-05-20 SHIP AUDIT pt2 (B-013): was logger.debug.
+                # Promoted to CRITICAL — silent breaker-alert failure
+                # means the operator's safety-net signal can disappear
+                # without anyone knowing.
+                logger.critical(f"[BREAKER TG] alert dispatch failed: {e}")
 
     def _alert_halt_transition(self, events: list) -> None:
         """One-shot Telegram alert the moment we flip from running → halted."""
@@ -295,7 +299,9 @@ class CircuitBreakers:
                 f"circuit_breakers.acknowledge_halt() to resume.",
             ))
         except Exception as e:
-            logger.debug(f"[BREAKER TG] halt alert failed: {e}")
+            # B-013: HALT alert failure is the most severe possible
+            # silent-failure — bot is halted, operator unaware.
+            logger.critical(f"[BREAKER TG] halt alert failed: {e}")
 
     def acknowledge_halt(self) -> None:
         """User has reviewed and cleared the halt."""
