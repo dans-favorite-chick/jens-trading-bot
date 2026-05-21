@@ -263,10 +263,15 @@ STRATEGIES = {
         "max_hold_min": 30,
     },
     "dom_pullback": {
-        "enabled": True,
-        # 2026-05-20 PHASE 13 SHIP AUDIT: validated=False. Not in
-        # PHOENIX_BEST_PLAN.md §1.1 (11 winners). V2 operator override
-        # never went through the Phase 13 5-year backtest.
+        # 2026-05-21 PHASE 13 SHIP AUDIT pt3: enabled=False (was True).
+        # Operator confirmed 6/6 LOSSES in today's session on the dashboard
+        # ($-33 cumulative on SimDom Pull Back). Strategy is not in
+        # PHOENIX_BEST_PLAN §1.1 winners and has no Phase 13 backtest
+        # evidence. Demoted per F-004 reasoning: validated=False alone
+        # wasn't enough — sim_bot was still loading + firing it. Killed
+        # outright. Re-enable AFTER a clean 5y backtest reverses the
+        # verdict (and add to PHASE_13_WINNERS in test_plan_winners_parity).
+        "enabled": False,
         "validated": False,
         # Entry: pullback to EMA9 or VWAP + sell orders being pulled/absorbed by buyers
         # NQ-calibrated ATR-anchored stop (B14 2026-04-20). Replaces fixed 10t — too tight.
@@ -377,10 +382,12 @@ STRATEGIES = {
         # big_move_signal is NOT in PHOENIX_BEST_PLAN.md §1.1 (the 11
         # winners). The 2026-05-17 promotion was an operator override
         # outside the Phase 13 5-year backtest. Today 2026-05-20 it cost
-        # -$117.46 (3L / 1W) on prod_bot before this revert. Returning
-        # to validated=False until it goes through the Phase 13 backtest.
-        "enabled": True,
-        "validated": False,          # 2026-05-20 SHIP AUDIT: not on Phase 13 list
+        # -$117.46 (3L / 1W) on prod_bot before this revert.
+        # 2026-05-21 pt3: enabled=False (was True). Same reasoning as
+        # dom_pullback — validated=False didn't stop sim_bot from
+        # loading + firing it. Re-enable AFTER a clean 5y backtest.
+        "enabled": False,
+        "validated": False,
         # 2026-05-17: was 90 — at score=90 the all-flags-must-fire gate
         # produced < 1 signal/week. 70 catches strong 3-of-4 setups too.
         # The strategy reads "min_score" from config (see big_move_signal.py
@@ -668,13 +675,13 @@ STRATEGIES = {
     # ships the volumetric emitter on the NT8 side. Lab-only until
     # 50+ trades + PF > 1.3.
     "footprint_cvd_reversal": {
-        "enabled": True,
-        # 2026-05-20 PHASE 13 SHIP AUDIT: validated=False. Strategy is
-        # documented dormant pending volumetric NT8 feed (per docstring
-        # above) — operator override to validated=True was premature.
-        # Logs DATA_NOT_AVAILABLE 100% of the time anyway, but having
-        # validated=False prevents it firing if the feed lands without
-        # the n>=50 / PF>1.3 promotion check.
+        # 2026-05-21 PHASE 13 SHIP AUDIT pt3: enabled=False (was True).
+        # Strategy is dormant pending volumetric NT8 feed (per docstring
+        # above) — logs DATA_NOT_AVAILABLE 100% of the time. Was
+        # validated=False but still loaded by sim_bot every tick. Killed
+        # entirely to stop the log noise. Re-enable when the volumetric
+        # feed lands AND a 5y backtest justifies promotion.
+        "enabled": False,
         "validated": False,
         # HTF level confluence
         "level_buffer_ticks": 8,
@@ -723,10 +730,11 @@ STRATEGIES = {
     # See docs/CLAUDE_CODE_DEPLOYMENT_PROMPT.md (Phase 4) for full context.
 
     "nq_lsr": {
-        "enabled": True,
-        # 2026-05-20 PHASE 13 SHIP AUDIT: validated=False. Not in
-        # PHOENIX_BEST_PLAN.md §1.1 (11 winners). V2 operator override
-        # never went through the Phase 13 5-year backtest.
+        # 2026-05-21 PHASE 13 SHIP AUDIT pt3: enabled=False (was True).
+        # Same reasoning as dom_pullback / big_move_signal — not in plan
+        # §1.1, no Phase 13 backtest evidence, demote+kill rather than
+        # let sim_bot keep firing it. Re-enable after a clean backtest.
+        "enabled": False,
         "validated": False,
         "session_windows_ct": [("08:30", "11:00"), ("13:30", "15:00")],
         "max_trades_per_day": 4,
