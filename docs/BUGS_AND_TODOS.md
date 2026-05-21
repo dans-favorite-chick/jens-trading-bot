@@ -18,6 +18,33 @@ of them so that we don't forget."
 
 ### ~~B-001 — pandas 3.0 datetime precision idiom (HIGH)~~ → see B-CLOSED-005
 
+### B-030 — sim_bot ZERO_GATE override neutered every protective gate (CRITICAL)
+**Discovered:** 2026-05-21 by operator pushback ("there's no way today's bias_momentum
+losses are just noise — there's a bug").
+**Symptom:** bias_momentum live sim WR was **8.3% (1W/11L, -$330) today** vs 5y
+backtest WR 38.8% (+$308K, PF 1.45, 6/6 years positive).
+**Root cause:** `bots/sim_bot.py:156` defined `SIM_STRATEGY_OVERRIDES` that, on every
+strategy load, OVERWROTE production config with lab-harness values:
+- bias_momentum: `min_tf_votes: 1` (vs prod 2), `min_confluence: 0.0` (vs regime
+  5.0+), `min_momentum: 0` (vs regime 60), `max_ema_dist_ticks: 999`
+- Same pattern on vwap_pullback, high_precision_only, ib_breakout, spring_setup
+- Bot-wide `SIM_ZERO_GATE` set `risk_per_trade=$15`, `max_daily_loss=$10K`
+
+**The 5y backtest validated PRODUCTION gates; sim_bot fired on ZERO_GATE — every
+weak signal made it through.** Origin: commit `03687ef` (2026-04-21) — sim_bot was
+born as a paper-only lab harness with "Strategies still fire across all regimes for
+data collection". That design predates the Phase 13 ship plan.
+
+**Fix:** Emptied both override dicts. sim_bot now uses production config straight
+from `config/strategies.py`. Per-strategy account routing + StrategyRiskRegistry
+caps still provide isolation. Added `tests/test_sim_bot_no_zero_gate.py` (3 tests)
+to prevent regression.
+
+**Expected impact:** sim_bot's WR should climb from today's 8.3% back to the
+backtest's ~38-40% as the gates filter out weak signals.
+
+
+
 ### B-008 — Phase 13 target overrides silently no-op for late-pricing strategies (HIGH)
 **Status:** FIXED in commit a03086e (deferred-recompute path), and again in
 F-005 of pt2 audit (LIMIT-fill anchor). See B-CLOSED-007 below.

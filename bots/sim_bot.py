@@ -140,80 +140,49 @@ logger = logging.getLogger("SimBot")
 # the full spectrum of setups each strategy can see. Floor/halt + daily
 # cap (via StrategyRiskRegistry) are the real risk boundaries — the
 # lab-era single bot-wide max_daily_loss is no longer the control.
+# 2026-05-21 PHASE 13 SHIP AUDIT pt4 (B-030 — THE BUG OPERATOR
+# CAUGHT TODAY): sim_bot's ZERO_GATE harness was loosening every
+# protective gate on every strategy, designed for "data collection"
+# back when sim_bot was a paper-only lab (commit 03687ef, 2026-04-21).
+# That predates the Phase 13 ship plan.
+#
+# The cost of this design surfaced today (2026-05-21): bias_momentum
+# fired 12 trades with WR 8.3% (1W/11L, -$330 net) while the canonical
+# 5y backtest with PRODUCTION gates returns WR 38.8% / +$308K / 6-of-6
+# years positive. The 5y backtest uses min_tf_votes=2, min_confluence
+# ~5.0+, min_momentum=60. ZERO_GATE used min_tf_votes=1,
+# min_confluence=0.0, min_momentum=0 — every weak signal made it
+# through.
+#
+# Fix: SIM_STRATEGY_OVERRIDES is now EMPTY. sim_bot uses production
+# config straight from config/strategies.py — identical to what the
+# 5y backtest validates. This restores the assumption the operator
+# made when sim_bot was promoted to live-sim-mirror role: that sim
+# trades represent what prod would do.
+#
+# SIM_ZERO_GATE is also retired. Per-strategy daily cap ($200) via
+# StrategyRiskRegistry remains the real risk boundary. The bot-wide
+# max_daily_loss override was an artifact from the single-bot lab era.
 SIM_ZERO_GATE = {
-    "min_confluence": 0.0,
-    "min_momentum": 0,
-    "min_momentum_confidence": 0,
-    "min_precision": 0,
-    "risk_per_trade": 15.0,
-    # NOTE: the bot-wide max_daily_loss is intentionally wide — the real
-    # per-strategy cap ($200/day) lives in StrategyRiskRegistry. This
-    # prevents a single strategy's daily loss from halting the whole bot.
-    "max_daily_loss": 10000.0,
+    # 2026-05-21 B-030: zeroed-out. risk_per_trade is now read from
+    # config/settings.py per-tier sizing logic, not from a sim-bot
+    # override. max_daily_loss is enforced by StrategyRiskRegistry.
 }
 
-# Strategy overrides — same ZERO_GATE config as lab, preserved verbatim.
 SIM_STRATEGY_OVERRIDES = {
-    "bias_momentum": {
-        "min_confluence": 0.0,
-        "min_tf_votes": 1,
-        "min_momentum": 0,
-        "skip_regime_overrides": True,
-        "stop_ticks": 14,
-        "target_rr": 20.0,
-        "max_ema_dist_ticks": 999,
-    },
-    "spring_setup": {
-        "min_wick_ticks": 3,
-        "require_vwap_reclaim": False,
-        "require_delta_flip": False,
-        "require_tf_alignment": False,
-        "skip_regime_overrides": True,
-        "stop_multiplier": 1.5,
-        "target_rr": 5.0,
-        "atr_stop_multiplier": 1.1,
-        "max_stop_ticks": 120,
-        "min_stop_ticks": 40,
-    },
-    "vwap_pullback": {
-        "min_confluence": 0.0,
-        "min_tf_votes": 1,
-        "skip_regime_overrides": True,
-        "stop_ticks": 14,
-        "max_vwap_dist_ticks": 60,
-        "target_rr": 20.0,
-    },
-    "high_precision_only": {
-        "min_confluence": 0.0,
-        "min_tf_votes": 1,
-        "min_precision": 0,
-        "skip_regime_overrides": True,
-        "stop_ticks": 14,
-        "target_rr": 5.0,
-    },
-    "ib_breakout": {
-        "min_confluence": 0.0,
-        "min_tf_votes": 1,
-        "skip_regime_overrides": True,
-        "stop_ticks": 10,
-        "target_rr": 5.0,
-        "ib_minutes": 15,
-        "max_ib_width_atr_mult": 5.0,
-        "max_stop_ticks": 120,
-        "all_regimes": True,
-        "require_cvd_confirm": False,
-    },
-    # "dom_pullback" sim override deleted 2026-05-21 (strategy removed).
-    "vwap_band_pullback": {
-        "skip_regime_overrides": True,
-        "min_volume_ratio": 0.5,
-        "target_rr": 5.0,
-    },
-    "opening_session": {
-        # Thresholds are already tuned research values (Fix 6 stops,
-        # volume/wick ratios per paper). Empty override = use
-        # config/strategies.py values as-is.
-    },
+    # 2026-05-21 B-030: ALL overrides removed. sim_bot now uses
+    # production config straight from config/strategies.py. Per-
+    # strategy account routing + StrategyRiskRegistry per-strategy
+    # caps provide isolation; we don't need gate-loosening on top.
+    #
+    # Keep the dict for forward-compat (the iteration at line ~262
+    # `for k, v in SIM_STRATEGY_OVERRIDES[name].items()` still works
+    # with an empty dict — no signal-path change required).
+    #
+    # If you need to TEMPORARILY loosen gates for data collection
+    # on a specific strategy (e.g., asian_continuation needs 30+
+    # live samples), add an entry here with a CLEAR comment showing
+    # the start date and removal criteria. Default-OFF is safer.
 }
 
 
@@ -256,18 +225,26 @@ class SimBot(BaseBot):
         """Load all strategies with ZERO gates + report registry state."""
         super().load_strategies()
 
-        # Apply per-strategy zero-gate overrides
+        # 2026-05-21 B-030: apply any per-strategy overrides (empty by
+        # default — see SIM_STRATEGY_OVERRIDES comment for why). The
+        # iteration is a no-op when the dict is empty. Operator can
+        # temporarily loosen specific strategy gates by adding entries.
         for strat in self.strategies:
             if strat.name in SIM_STRATEGY_OVERRIDES:
                 for k, v in SIM_STRATEGY_OVERRIDES[strat.name].items():
                     strat.config[k] = v
-                logger.info(f"[SIM] ZERO GATE override: {strat.name}")
+                logger.info(f"[SIM] override applied: {strat.name}")
 
-        # Set zero-gate runtime params (bot-wide — for dashboard slider
-        # compatibility; the real per-strategy caps are in the registry).
-        self._runtime_params.update(SIM_ZERO_GATE)
-        self.risk.set_risk_per_trade(SIM_ZERO_GATE["risk_per_trade"])
-        self.risk.set_daily_limit(SIM_ZERO_GATE["max_daily_loss"])
+        # 2026-05-21 B-030: bot-wide risk-per-trade + max-daily-loss now
+        # use production defaults from config/settings.py (via base_bot's
+        # RiskManager init). Previously sim_bot overrode these to lab
+        # values ($15 risk, $10K max daily loss) which let single strategies
+        # run away — the real per-strategy cap from StrategyRiskRegistry
+        # was supposed to catch it, but combined with ZERO_GATE the signals
+        # were already garbage. With prod gates restored, prod risk values
+        # apply too. Per-strategy registry cap ($200) still the real boundary.
+        self._runtime_params.update(SIM_ZERO_GATE)  # empty; harmless
+        # max_trades stays uncapped on sim (per-strategy registry handles it)
         self.risk.set_max_trades(999)
 
         # Disable bot-wide cooloff — per-strategy cooloff lives in registry
