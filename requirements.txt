@@ -21,3 +21,10 @@ google-genai
 twilio>=9.0  # Added 2026-04-24 for WatcherAgent SMS alerts
 
 reportlab>=4.0   # Phoenix routines PDF assembly (post-2026-04-25 §3.6)
+
+# 2026-05-20 SHIP AUDIT pt2 (B-004): single-instance bot guard.
+# Without this, core/single_instance.py falls back to a racy PID-file
+# check that allowed 3 sim_bot.py processes to spawn simultaneously.
+# Verified incident: 2026-05-17 21:08 → 2 duplicates; 2026-05-20 23:30
+# → 3 duplicates (test of the falsely-confident fallback path).
+portalocker>=3.0  # OS-level file locks for run/<bot>.pid

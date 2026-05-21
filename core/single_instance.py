@@ -122,28 +122,67 @@ def acquire_or_exit(bot_name: str) -> None:
                 f"falling back to PID-file check"
             )
 
-    # ── Path 2: PID-file fallback (racy but functional) ────────────
-    # Read existing PID, check if alive. If alive, exit. If stale, take over.
-    if pid_path.exists():
+    # ── Path 2: PID-file fallback (atomic-create via O_EXCL) ───────
+    # 2026-05-20 SHIP AUDIT pt2 (revised): the original fallback was
+    # racy — 3 sim_bot processes spawned within 1s of each other ALL
+    # passed the existence check (none of them had written yet) and
+    # then all wrote their PID in sequence; last-writer-wins → no
+    # duplicate-error path triggered. Fixed with os.open(O_CREAT|O_EXCL)
+    # which is atomic across processes: only ONE process gets the file
+    # created; the rest fail with FileExistsError → take the
+    # "duplicate" branch. (portalocker remains the preferred path; this
+    # fallback exists for installs without it. Now requires portalocker
+    # in requirements.txt per 2026-05-20 fix.)
+    try:
+        # O_EXCL: fail if file already exists. Atomic across processes.
+        fd = os.open(str(pid_path),
+                      os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                      0o644)
+        try:
+            os.write(fd, str(my_pid).encode("ascii"))
+        finally:
+            os.close(fd)
+        logger.info(
+            f"[single_instance] {bot_name}: PID-file lock acquired "
+            f"(atomic O_EXCL, pid={my_pid}, file={pid_path})"
+        )
+        return
+    except FileExistsError:
+        # Another process created it first — OR it's a stale file from a
+        # crashed prior run. Check before exiting.
         try:
             existing_pid = int(pid_path.read_text(encoding="ascii").strip() or "0")
         except (ValueError, OSError):
             existing_pid = 0
         if existing_pid and existing_pid != my_pid and _pid_alive(existing_pid):
             _exit_with_duplicate_error(bot_name, pid_path)
-        # Stale PID file (process died without releasing): overwrite it.
+        # Stale PID file (process died without releasing).
+        # Delete + retry the atomic create. If two crashed-bot recoveries
+        # race here, only one wins the second O_EXCL — the other sees
+        # the just-created file and exits cleanly.
         logger.info(
             f"[single_instance] {bot_name}: found stale PID {existing_pid} "
-            f"(not alive); taking over"
+            f"(not alive); taking over via O_EXCL retry"
         )
-
-    # Write our PID.
-    try:
-        pid_path.write_text(str(my_pid), encoding="ascii")
-        logger.info(
-            f"[single_instance] {bot_name}: PID-file lock acquired "
-            f"(pid={my_pid}, file={pid_path})"
-        )
+        try:
+            pid_path.unlink()
+        except OSError:
+            pass
+        try:
+            fd = os.open(str(pid_path),
+                          os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                          0o644)
+            try:
+                os.write(fd, str(my_pid).encode("ascii"))
+            finally:
+                os.close(fd)
+            logger.info(
+                f"[single_instance] {bot_name}: PID-file lock acquired after "
+                f"stale-takeover (pid={my_pid}, file={pid_path})"
+            )
+        except FileExistsError:
+            # Lost the second race — another stale-takeover process won.
+            _exit_with_duplicate_error(bot_name, pid_path)
     except OSError as e:
         logger.error(
             f"[single_instance] {bot_name}: could not write PID file "
