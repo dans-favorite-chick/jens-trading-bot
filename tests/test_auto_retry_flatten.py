@@ -79,53 +79,73 @@ def _open_long_pending(pm, account="SimX", entry=27900.0, age_s=70.0):
 
 # ─── core retry behaviour ─────────────────────────────────────────────
 
-def test_short_stuck_triggers_buy_market_retry(fake_bot):
-    """A SHORT pending past timeout, with NT8 still showing SHORT, must
-    fire a BUY 1 MARKET cover order via write_oif."""
+def test_short_stuck_triggers_closeposition_retry(fake_bot):
+    """2026-05-21 SHIP AUDIT pt3: a SHORT pending past timeout with NT8
+    still showing SHORT must fire a CLOSEPOSITION via write_oif. Previously
+    this test pinned BUY 1 MARKET, but that path was REJECTED by NT8 sim
+    sub-accounts ("Exceeds account's maximum position quantity") because
+    NT8's pre-trade gross-exposure guard sees `SHORT 1 + BUY 1 working`
+    and refuses on a max-position-qty=1 account. CLOSEPOSITION bypasses
+    that guard."""
     from bots.base_bot import BaseBot
     _open_short_pending(fake_bot.positions, account="SimX")
     with patch("bridge.oif_writer.write_oif") as mock_write, \
          patch("core.startup_reconciliation._read_position_file",
                return_value=("SHORT", 1, 27900.0)):
+        mock_write.return_value = ["/tmp/dummy.txt"]  # CLOSEPOSITION succeeds
         BaseBot._resolve_exit_pending_positions(fake_bot)
     assert mock_write.called, "write_oif must be called on stuck retry"
     call_args = mock_write.call_args
-    # First positional arg is action, kwargs has account, qty, etc.
     action = call_args.args[0] if call_args.args else call_args.kwargs.get("action")
-    assert action == "BUY", f"SHORT cover must use BUY, got {action!r}"
+    assert action == "CLOSEPOSITION", (
+        f"primary cover path must be CLOSEPOSITION; got {action!r}"
+    )
     assert call_args.kwargs.get("qty") == 1
     assert call_args.kwargs.get("account") == "SimX"
-    assert call_args.kwargs.get("order_type") == "MARKET"
 
 
-def test_long_stuck_triggers_sell_market_retry(fake_bot):
-    """A LONG pending past timeout must fire a SELL 1 MARKET."""
+def test_long_stuck_triggers_closeposition_retry(fake_bot):
+    """LONG mirror of test_short_stuck_triggers_closeposition_retry."""
     from bots.base_bot import BaseBot
     _open_long_pending(fake_bot.positions, account="SimY")
     with patch("bridge.oif_writer.write_oif") as mock_write, \
          patch("core.startup_reconciliation._read_position_file",
                return_value=("LONG", 1, 27900.0)):
+        mock_write.return_value = ["/tmp/dummy.txt"]
         BaseBot._resolve_exit_pending_positions(fake_bot)
     assert mock_write.called
     action = mock_write.call_args.args[0] if mock_write.call_args.args \
              else mock_write.call_args.kwargs.get("action")
-    assert action == "SELL"
+    assert action == "CLOSEPOSITION"
     assert mock_write.call_args.kwargs.get("account") == "SimY"
 
 
-def test_retry_uses_market_not_closeposition(fake_bot):
-    """Critical: must NOT use CLOSEPOSITION (races with OCO stop fill).
-    Must use directional MARKET orders only."""
+def test_retry_falls_back_to_market_when_closeposition_fails(fake_bot):
+    """If CLOSEPOSITION write_oif returns no paths (filesystem error or
+    OIF writer refused), the directional MARKET fallback must fire so we
+    keep retrying SOMETHING. Verifies the try/except inside the EXIT_RETRY
+    block."""
     from bots.base_bot import BaseBot
     _open_short_pending(fake_bot.positions)
     with patch("bridge.oif_writer.write_oif") as mock_write, \
          patch("core.startup_reconciliation._read_position_file",
                return_value=("SHORT", 1, 27900.0)):
+        # CLOSEPOSITION call returns no paths → fallback fires
+        mock_write.return_value = []
         BaseBot._resolve_exit_pending_positions(fake_bot)
-    action = mock_write.call_args.args[0] if mock_write.call_args.args \
-             else mock_write.call_args.kwargs.get("action")
-    assert action not in ("CLOSEPOSITION", "EXIT", "EXIT_ALL", "CLOSE")
-    assert action in ("BUY", "SELL")
+    # Two write_oif calls: 1) CLOSEPOSITION returns [], 2) BUY MARKET fallback
+    assert mock_write.call_count == 2, (
+        f"expected CLOSEPOSITION + fallback; got {mock_write.call_count} calls"
+    )
+    # First call is CLOSEPOSITION
+    a0 = mock_write.call_args_list[0].args[0] if mock_write.call_args_list[0].args \
+         else mock_write.call_args_list[0].kwargs.get("action")
+    assert a0 == "CLOSEPOSITION"
+    # Second call is BUY MARKET (cover for SHORT)
+    a1 = mock_write.call_args_list[1].args[0] if mock_write.call_args_list[1].args \
+         else mock_write.call_args_list[1].kwargs.get("action")
+    assert a1 == "BUY"
+    assert mock_write.call_args_list[1].kwargs.get("order_type") == "MARKET"
 
 
 # ─── retries fire EVERY cycle, not once ───────────────────────────────
@@ -204,16 +224,16 @@ def test_halt_fires_after_escalation_window(fake_bot):
 
 # ─── direction is taken from NT8, NOT Python state (desync safety) ────
 
-def test_cover_action_uses_nt8_direction_when_python_says_long(fake_bot):
-    """REGRESSION: 2026-05-04 08:01 — Python pos.direction was LONG but
-    NT8 actually held SHORT 1 (phantom from CLOSEPOSITION-vs-OCO race).
-    Old code computed `cover = "SELL"` from pos.direction, which NT8
-    rejected (`Exceeds account's maximum position quantity` — SELL on
-    top of SHORT 1 would mean SHORT 2). New code uses NT8's reported
-    direction, so phantom SHORT → BUY 1 MARKET (correct cover)."""
+def test_closeposition_is_direction_independent_python_long_nt8_short(fake_bot):
+    """2026-05-21 SHIP AUDIT pt3: CLOSEPOSITION explicitly tells NT8
+    'flatten whatever you have' — it does NOT care about direction at
+    all. So even when Python state desyncs from NT8's reported direction
+    (e.g. phantom flip from a race), the cover write is the same
+    CLOSEPOSITION regardless. The original test (2026-05-04) pinned BUY
+    1 MARKET for the phantom-SHORT case; that path is now the FALLBACK
+    when CLOSEPOSITION fails. State-desync is still logged at WARNING."""
     from bots.base_bot import BaseBot
     pm = fake_bot.positions
-    # Python state says LONG (the ORIGINAL position before the race).
     pm.open_position(
         trade_id="desync1", direction="LONG", entry_price=27800.0,
         contracts=1, stop_price=27775.0, target_price=27825.0,
@@ -222,26 +242,25 @@ def test_cover_action_uses_nt8_direction_when_python_says_long(fake_bot):
     pm.mark_exit_pending("desync1", exit_price=27775.0, exit_reason="stop_loss")
     pm.get_position("desync1").exit_pending_since = time.time() - 70.0
 
-    # NT8 says SHORT (the phantom flip).
     with patch("bridge.oif_writer.write_oif") as mock_write, \
          patch("core.startup_reconciliation._read_position_file",
                return_value=("SHORT", 1, 27802.25)):
+        mock_write.return_value = ["/tmp/dummy.txt"]  # CLOSEPOSITION succeeds
         BaseBot._resolve_exit_pending_positions(fake_bot)
 
     assert mock_write.called
     action = mock_write.call_args.args[0] if mock_write.call_args.args \
              else mock_write.call_args.kwargs.get("action")
-    # Critical: must be BUY (covers SHORT), NOT SELL (which NT8 rejected)
-    assert action == "BUY", (
-        f"phantom SHORT must be covered with BUY, not {action!r} — "
-        f"sending SELL on top of SHORT 1 triggers NT8's max-position "
-        f"rejection (the exact bug seen in production at 08:01:06)"
+    assert action == "CLOSEPOSITION", (
+        f"CLOSEPOSITION handles direction desync without needing the "
+        f"BUY-vs-SELL decision; got {action!r}"
     )
     assert mock_write.call_args.kwargs.get("account") == "SimBias Momentum"
 
 
-def test_cover_action_uses_nt8_direction_when_python_says_short(fake_bot):
-    """Mirror case: Python SHORT, NT8 actually LONG → SELL 1 MARKET."""
+def test_closeposition_used_when_python_short_nt8_long(fake_bot):
+    """Mirror desync case: Python SHORT, NT8 actually LONG → still
+    CLOSEPOSITION (no direction-derivation needed)."""
     from bots.base_bot import BaseBot
     pm = fake_bot.positions
     pm.open_position(
@@ -255,11 +274,12 @@ def test_cover_action_uses_nt8_direction_when_python_says_short(fake_bot):
     with patch("bridge.oif_writer.write_oif") as mock_write, \
          patch("core.startup_reconciliation._read_position_file",
                return_value=("LONG", 1, 27802.25)):
+        mock_write.return_value = ["/tmp/dummy.txt"]
         BaseBot._resolve_exit_pending_positions(fake_bot)
 
     action = mock_write.call_args.args[0] if mock_write.call_args.args \
              else mock_write.call_args.kwargs.get("action")
-    assert action == "SELL"
+    assert action == "CLOSEPOSITION"
 
 
 def test_cover_qty_uses_nt8_qty_not_python_qty(fake_bot):

@@ -83,9 +83,8 @@ class TestFlatStrategyRouting:
         assert get_account_for_signal("vwap_pullback") == "SimVWapp Pullback"
         assert get_account_for_signal("vwap_band_pullback") == "SimVwap Band Pullback"
 
-    def test_dom_pullback_routes_to_correct_account(self):
-        assert get_account_for_signal("dom_pullback") == "SimDom Pull Back"
-
+    # 2026-05-21: dom_pullback deleted (0 trades / 5y backtest). Routing
+    # test removed; SimDom Pull Back account is orphaned in NT8 ATI.
     def test_ib_breakout_routes_to_correct_account(self):
         assert get_account_for_signal("ib_breakout") == "SimIB Breakout"
 
@@ -169,8 +168,12 @@ class TestFallbackAndEdges:
         # Also renamed: SimVwap Reversion → SimVwap_Reversion (underscore
         # matches what operator actually has in NT8; the old name silently
         # routed to Sim101 fallback). Net account count: 25 + 4 = 29.
+        #
+        # 2026-05-21: dom_pullback DELETED (0 trades / 5y backtest).
+        # SimDom Pull Back removed from STRATEGY_ACCOUNT_MAP. Account count
+        # back to 28 (29 - 1).
         accounts = validate_account_map()
-        assert len(accounts) == 29
+        assert len(accounts) == 28
         # Spot-check a few known members.
         assert "Sim101" in accounts
         assert "SimOpenDrive" in accounts

@@ -1341,45 +1341,73 @@ class BaseBot:
             age_s = now - pos.exit_pending_since
             from bridge.oif_writer import write_oif as _write_oif
             try:
-                # 2026-05-04 fix: cover action MUST be derived from NT8's
-                # ACTUAL direction (nt8_state[0]), NOT pos.direction.
-                # Forensic: at 08:01 today the bot kept submitting
-                # SELL 1 MARKET on SimBias Momentum because pos.direction
-                # said LONG, but NT8 actually held a phantom SHORT 1
-                # (CLOSEPOSITION-vs-OCO race had flipped the position).
-                # NT8 correctly rejected each SELL ("Exceeds account's
-                # maximum position quantity") because SELL on SHORT 1
-                # would mean SHORT 2. Trust NT8's reported state — it's
-                # the authoritative source for what we need to flatten.
+                # 2026-05-21 PHASE 13 SHIP AUDIT pt3 (Finding-3 from EXIT_RETRY
+                # deep-dig agent a6529f16): switched from PLACE...{cover_side}
+                # MARKET to CLOSEPOSITION. Forensic evidence: today (2026-05-20
+                # → 2026-05-21) the prior `PLACE...SELL 1 MARKET` retry on
+                # SimBias Momentum was REJECTED 22 times in a row by NT8 with
+                # "Exceeds account's maximum position quantity" because sim
+                # sub-accounts have max-position-qty=1 — NT8's pre-trade guard
+                # sees `LONG 1 + working SELL 1` as "could go SHORT" which
+                # exceeds the cap. CLOSEPOSITION bypasses this guard because
+                # it explicitly tells NT8 "flatten whatever you have" — NT8
+                # cancels the OCO bracket and submits an internal Order
+                # Name='Close' market that doesn't trip the pre-trade gross-
+                # exposure check. Verified empirically in NT8 log 2026-05-21
+                # 02:42:06 (trade 30787e00) where CLOSEPOSITION cleanly
+                # flattened a position after 2 PLACE...SELL retries were
+                # rejected. The directional-MARKET path is kept as a fallback
+                # in case CLOSEPOSITION ever fails to write (filesystem etc).
                 #
-                # nt8_state is (direction, qty, avg_price) — direction
-                # is "LONG" or "SHORT". Cover is the opposite side.
+                # Side note (preserving prior 2026-05-04 comment context):
+                # The previous code derived cover_action from NT8's reported
+                # direction (nt8_state[0]) rather than pos.direction to handle
+                # the phantom-reverse case. CLOSEPOSITION sidesteps that
+                # issue entirely — NT8 closes whatever it has, no direction
+                # logic needed in our code. We still log direction-desync for
+                # forensic visibility.
                 nt8_dir = nt8_state[0]
                 nt8_qty = int(nt8_state[1] or 1)
-                cover_action = "BUY" if nt8_dir == "SHORT" else "SELL"
-                _write_oif(
-                    cover_action,
-                    qty=nt8_qty,
-                    account=pos.account,
-                    order_type="MARKET",
-                    trade_id=f"{pos.trade_id}_retry{int(age_s)}",
-                )
-                # Log when Python and NT8 disagree on direction — that's a
-                # state-desync bug worth investigating, even though the
-                # retry now does the right thing regardless.
+                used_action = None
+                try:
+                    paths = _write_oif(
+                        "CLOSEPOSITION",
+                        qty=nt8_qty,
+                        account=pos.account,
+                        trade_id=f"{pos.trade_id}_retry{int(age_s)}",
+                    )
+                    used_action = "CLOSEPOSITION"
+                    if not paths:
+                        # OIF writer returned no paths — write didn't land.
+                        # Fall through to directional MARKET so we keep
+                        # retrying SOMETHING.
+                        raise RuntimeError("CLOSEPOSITION write returned no paths")
+                except Exception as _close_err:
+                    cover_action = "BUY" if nt8_dir == "SHORT" else "SELL"
+                    _write_oif(
+                        cover_action,
+                        qty=nt8_qty,
+                        account=pos.account,
+                        order_type="MARKET",
+                        trade_id=f"{pos.trade_id}_retry{int(age_s)}_fb",
+                    )
+                    used_action = f"{cover_action}_MARKET_FALLBACK"
+                    logger.warning(
+                        f"[EXIT_RETRY:{pos.trade_id}] CLOSEPOSITION failed "
+                        f"({_close_err!r}); used {used_action} fallback"
+                    )
                 if pos.direction != nt8_dir:
                     logger.warning(
                         f"[EXIT_RETRY:{pos.trade_id}] STATE DESYNC: "
                         f"Python pos.direction={pos.direction!r} but NT8 "
-                        f"shows {nt8_dir!r} — using NT8 direction for cover. "
-                        f"Likely CLOSEPOSITION-vs-OCO race created phantom "
-                        f"reverse position."
+                        f"shows {nt8_dir!r} — using {used_action} to flatten. "
+                        f"Likely an OCO-vs-other race created phantom reverse."
                     )
                 logger.warning(
                     f"[EXIT_RETRY:{pos.trade_id}] {pos.account} still "
                     f"{nt8_dir} {nt8_qty}@{nt8_state[2]} after "
-                    f"{age_s:.0f}s — sent {cover_action} {nt8_qty} MARKET to "
-                    f"flatten (attempt at age={age_s:.0f}s)"
+                    f"{age_s:.0f}s — sent {used_action} to flatten "
+                    f"(attempt at age={age_s:.0f}s)"
                 )
             except Exception as _e:
                 logger.error(
@@ -1476,7 +1504,9 @@ class BaseBot:
         from strategies.high_precision import HighPrecisionOnly
         from strategies.ib_breakout import IBBreakout
         from strategies.compression_breakout import CompressionBreakout
-        from strategies.dom_pullback import DOMPullback
+        # dom_pullback deleted 2026-05-21 (b9a3b2e+): 0 trades in 5y
+        # canonical backtest. Not a winning strategy. Class + config +
+        # registry entries all removed.
         from strategies.orb import OpeningRangeBreakout
         from strategies.noise_area import NoiseAreaMomentum
         from strategies.vwap_band_pullback import VwapBandPullback
@@ -1526,7 +1556,7 @@ class BaseBot:
             "high_precision_only": HighPrecisionOnly,
             "ib_breakout": IBBreakout,
             "compression_breakout": CompressionBreakout,
-            "dom_pullback": DOMPullback,
+            # dom_pullback removed 2026-05-21 (0 trades / 5y backtest).
             "orb": OpeningRangeBreakout,
             "noise_area": NoiseAreaMomentum,
             "opening_session": OpeningSessionStrategy,
@@ -3678,7 +3708,7 @@ class BaseBot:
                     #   - BE stop → stop_loss at breakeven (worst case: no loss)
                     # Goal: 20-50 pts on range/volatile days, 100+ on trend days.
                     # Not 3-point scalps that leave 100 points on the table.
-                    _RIDER_STRATEGIES = {"bias_momentum", "dom_pullback"}
+                    _RIDER_STRATEGIES = {"bias_momentum"}  # dom_pullback removed 2026-05-21
                     if (signal.strategy in _RIDER_STRATEGIES and
                             signal.target_rr < 20.0):
                         signal.target_rr = 20.0
@@ -4893,7 +4923,7 @@ class BaseBot:
         # + reversal exit (DOM + wick confirmed) are the exit mechanism.
         # Smart exit is disabled for these strategies on every day type.
         # Goal: hold for 20-50 pts on range days, 100+ on trend days.
-        _RIDER_STRATEGIES = {"bias_momentum", "dom_pullback"}
+        _RIDER_STRATEGIES = {"bias_momentum"}  # dom_pullback removed 2026-05-21
         if TREND_RIDER_ENABLED and signal.strategy in _RIDER_STRATEGIES:
             _pos = self.positions.position
             if _pos:

@@ -222,9 +222,11 @@ STRATEGIES = {
         "stop_fallback_ticks": 64,
         # 2026-05-13 (#8): skip when natural ATR stop > max_stop_ticks.
         # Same forensic logic as bias_momentum (0W/5L on clamped stops).
-        # 2026-05-17: SIM TESTING — flipped True->False for V2 overhaul.
-        # RESTORE before live.
-        "skip_on_stop_clamp": False,
+        # 2026-05-21 SHIP AUDIT pt3 (F-012 completion): restored True.
+        # vwap_pullback is enabled=False (superseded by vwap_pullback_v2)
+        # but the parity test asserts the flag is True regardless, since
+        # this is the canonical reference config for the V1 family.
+        "skip_on_stop_clamp": True,
         # Max distance from VWAP to qualify as "near VWAP" (replaces hardcoded 6).
         # 60t = 15pts — a true VWAP pullback can be further out than 6 ticks on NQ.
         "max_vwap_dist_ticks": 60,
@@ -262,43 +264,16 @@ STRATEGIES = {
         "min_precision": 65,
         "max_hold_min": 30,
     },
-    "dom_pullback": {
-        # 2026-05-21 PHASE 13 SHIP AUDIT pt3: enabled=False (was True).
-        # Operator confirmed 6/6 LOSSES in today's session on the dashboard
-        # ($-33 cumulative on SimDom Pull Back). Strategy is not in
-        # PHOENIX_BEST_PLAN §1.1 winners and has no Phase 13 backtest
-        # evidence. Demoted per F-004 reasoning: validated=False alone
-        # wasn't enough — sim_bot was still loading + firing it. Killed
-        # outright. Re-enable AFTER a clean 5y backtest reverses the
-        # verdict (and add to PHASE_13_WINNERS in test_plan_winners_parity).
-        "enabled": False,
-        "validated": False,
-        # Entry: pullback to EMA9 or VWAP + sell orders being pulled/absorbed by buyers
-        # NQ-calibrated ATR-anchored stop (B14 2026-04-20). Replaces fixed 10t — too tight.
-        "stop_method": "atr_anchored",
-        "stop_atr_mult": 2.0,
-        "min_stop_ticks": 40,
-        "max_stop_ticks": 200,  # 2026-05-17: was 120 — NQ vol regime fix (V2)
-        "stop_fallback_ticks": 64,
-        # 2026-05-13 (#8): skip when natural ATR stop > max_stop_ticks.
-        # Same forensic logic as bias_momentum (0W/5L on clamped stops).
-        # 2026-05-17: SIM TESTING — flipped True->False for V2 overhaul.
-        # RESTORE before live.
-        "skip_on_stop_clamp": False,
-        "target_rr": 2.5,     # 2.5:1 = 25t = 6.25pts minimum capture
-        # DOM absorption threshold — 0=any signal, 100=very strong only
-        # 35 is moderate: absorption is visible but not overwhelming
-        "min_dom_strength": 35,
-        # Pullback detection: how close to EMA9 / VWAP to qualify as "at the level"
-        # Data: P25 of EMA9 distance by regime = 26-40t. The P25 is the "normal close approach"
-        # zone — a bar in the bottom quartile of EMA9 distance is a genuine touch.
-        # 28t = 7pts — within 7 MNQ points of EMA9 qualifies as "at the level".
-        "max_ema_dist_ticks": 28,   # Widened from 12t → 28t (data-validated P25 zone)
-        "max_vwap_dist_ticks": 20,  # Widened from 10t → 20t (more realistic touch zone)
-        "max_hold_min": 20,
-        # 2026-05-17: Phase 6 V2-deployment addition.
-        "stop_fallback_mode": "confirmation",
-    },
+    # ─── dom_pullback DELETED 2026-05-21 ──────────────────────────
+    # Reason: 0 trades / 0 signals in 5-year canonical backtest
+    # (tools/phoenix_real_backtest.py with --strategies dom_pullback
+    # --start 2021-05-17 --end 2026-05-15). Strategy gates never
+    # produced an entry in 1.77M 1m-bar cycles. Live sim showed 6/6
+    # losses today (-$33 on SimDom Pull Back). Not in plan §1.1
+    # winners and zero Phase 13 backtest support. Class file deleted,
+    # all registry entries removed. The dedicated SimDom Pull Back
+    # NT8 account can be removed manually by operator when convenient.
+
     "ib_breakout": {
         # 2026-05-15 fix: same ET-midnight anchor bug as ORB had been
         # producing 3,472 `gate:ib_too_wide` rejections in 50MB of

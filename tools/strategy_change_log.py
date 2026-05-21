@@ -28,7 +28,7 @@ sys.path.insert(0, str(ROOT))
 
 _KNOWN_STRATEGIES = (
     "bias_momentum", "spring_setup", "vwap_pullback", "vwap_band_pullback",
-    "vwap_band_reversion", "dom_pullback", "ib_breakout",
+    "vwap_band_reversion", "ib_breakout",  # dom_pullback deleted 2026-05-21
     "compression_breakout", "high_precision_only", "noise_area",
     "orb", "opening_session", "footprint_cvd_reversal",
     # 2026-05-15: standalone entry on BigMoveDetector score >= 90.

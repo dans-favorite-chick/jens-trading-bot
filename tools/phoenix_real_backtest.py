@@ -32,9 +32,13 @@ Coverage matrix (which strategies can be tested vs need a stub):
      opening_session        — opening-type classifier simplified
 
   ❌ Cannot test (data not in CSVs):
-     dom_pullback           — needs DOM stream
      footprint_cvd_reversal — needs volumetric stream
      nq_lsr                 — needs liquidity_levels + TPO + volume_profile_lsr context
+
+  ❌ Deleted 2026-05-21:
+     dom_pullback           — 0 trades / 5y backtest (CSV-mode confirmed
+                               the strategy never produced a signal in 1.77M
+                               1m-bar cycles). Class + config deleted.
 
 ENRICHMENT NOTES
 ----------------
@@ -1011,7 +1015,8 @@ def simulate_trade(signal_strategy: str, signal_direction: str,
 # ════════════════════════════════════════════════════════════════════
 
 # Strategies we can ACTUALLY test in this pipeline. Stubbed/unsupported
-# strategies (dom_pullback, footprint_cvd_reversal, nq_lsr) are excluded.
+# strategies (footprint_cvd_reversal, nq_lsr) are excluded. dom_pullback
+# deleted 2026-05-21 (0 trades / 5y).
 #
 # 2026-05-20 SHIP AUDIT pt2 (Finding 5y backtest agent): added the 4
 # Phase 13 new winners so all 11 plan §1.1 strategies are reproducible

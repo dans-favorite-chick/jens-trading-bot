@@ -1,8 +1,10 @@
 """
 Phoenix Bot — NQ-calibrated ATR-anchored stop helper (B14 2026-04-20).
 
-Package-private helper used by vwap_pullback, bias_momentum, dom_pullback to
-compute a stop distance + absolute stop price. Mirrors spring_setup's pattern
+Package-private helper used by vwap_pullback + bias_momentum to compute a
+stop distance + absolute stop price. (dom_pullback was a former consumer,
+deleted 2026-05-21 after 0-trades-in-5y backtest confirmed no edge.)
+Mirrors spring_setup's pattern
 but with NQ-appropriate defaults:
   - 2.0× ATR_5m from last 5m bar wick
   - clamp [min_stop_ticks, max_stop_ticks] (default 40..120)

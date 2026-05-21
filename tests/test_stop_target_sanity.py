@@ -187,7 +187,7 @@ def test_managed_exit_none_target_passes():
     ("vwap_band_pullback",  "LONG",   60),
     ("compression_breakout","LONG",   50),
     ("noise_area",          "LONG",   40),
-    ("dom_pullback",        "LONG",   60),
+    # ("dom_pullback",      "LONG",   60),  # deleted 2026-05-21
     ("ib_breakout",         "LONG",   80),
     ("orb",                 "LONG",   40),
     ("opening_session",     "LONG",   50),

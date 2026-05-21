@@ -106,7 +106,7 @@ namespace NinjaTrader.NinjaScript.Indicators
             // overlays are still readable, but use muted Gray for plan-
             // killed ones so the operator can spot them at a glance.
             Map["big_move_signal"]            = Brushes.OrangeRed;
-            Map["dom_pullback"]               = Brushes.Firebrick;
+            // Map["dom_pullback"]            deleted 2026-05-21
             Map["nq_lsr"]                     = Brushes.Turquoise;
             Map["orb_fade"]                   = Brushes.Gray;       // killed
             Map["orb_v2"]                     = Brushes.SlateBlue;

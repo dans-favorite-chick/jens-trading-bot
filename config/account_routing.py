@@ -60,7 +60,8 @@ STRATEGY_ACCOUNT_MAP: Dict[str, Union[str, Dict[str, str]]] = {
     # not space). Earlier map had "SimVwap Reversion" which silently routed
     # every fill to Sim101 fallback. Caught during Phase 13 ship audit.
     "vwap_band_reversion":       "SimVwap_Reversion",
-    "dom_pullback":              "SimDom Pull Back",
+    # "dom_pullback": deleted 2026-05-21 (0 trades / 5y backtest).
+    # SimDom Pull Back account is orphaned in NT8 — safe to delete.
     "ib_breakout":               "SimIB Breakout",
     "compression_breakout_15m":  "SimCompression Breakout",
     "compression_breakout_30m":  "SimCompression Break out 30 MIN",

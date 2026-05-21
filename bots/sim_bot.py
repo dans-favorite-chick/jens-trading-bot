@@ -203,14 +203,7 @@ SIM_STRATEGY_OVERRIDES = {
         "all_regimes": True,
         "require_cvd_confirm": False,
     },
-    "dom_pullback": {
-        "min_dom_strength": 10,
-        "max_ema_dist_ticks": 28,
-        "max_vwap_dist_ticks": 20,
-        "skip_regime_overrides": True,
-        "stop_ticks": 10,
-        "target_rr": 20.0,
-    },
+    # "dom_pullback" sim override deleted 2026-05-21 (strategy removed).
     "vwap_band_pullback": {
         "skip_regime_overrides": True,
         "min_volume_ratio": 0.5,

@@ -25,8 +25,11 @@ sys.path.insert(0, str(ROOT))
 # 2026-05-17: SIM TESTING — flipped to False during V2 overhaul.
 # Phase 7 wires a confirmation-bar fallback instead. RESTORE this skip
 # before going live (or migrate test to assert stop_fallback_mode logic).
-@pytest.mark.skip(reason="2026-05-17 SIM TESTING — skip_on_stop_clamp flipped to False for V2 overhaul; restore before live")
-@pytest.mark.parametrize("name", ["vwap_pullback", "dom_pullback", "bias_momentum"])
+# 2026-05-21: dom_pullback removed from list (strategy deleted —
+# 0 trades in 5y backtest). Test still pins vwap_pullback + bias_momentum.
+# F-012 (commit 0708a07) restored skip_on_stop_clamp=True, so the
+# original SIM TESTING skip is no longer needed.
+@pytest.mark.parametrize("name", ["vwap_pullback", "bias_momentum"])
 def test_strategy_carries_skip_on_stop_clamp(name):
     from config.strategies import STRATEGIES
     cfg = STRATEGIES[name]
@@ -41,7 +44,7 @@ def test_strategy_carries_skip_on_stop_clamp(name):
 
 @pytest.mark.parametrize("path", [
     "strategies/vwap_pullback.py",
-    "strategies/dom_pullback.py",
+    # 2026-05-21: dom_pullback removed (strategy deleted)
 ])
 def test_strategy_source_uses_compute_natural_stop_ticks(path):
     """A config flag without the wiring would silently do nothing.

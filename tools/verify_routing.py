@@ -10,7 +10,7 @@ Usage:
     python -m tools.verify_routing
 
 Expected output on success:
-    *** ALL GOOD - 29 unique accounts, zero unintended Sim101 fallbacks ***
+    *** ALL GOOD - 28 unique accounts, zero unintended Sim101 fallbacks ***
 
 History
 -------
@@ -51,7 +51,7 @@ CHECKS = [
     ('vwap_pullback', None),
     ('vwap_band_pullback', None),
     ('vwap_band_reversion', None),
-    ('dom_pullback', None),
+    # ('dom_pullback', None),  # deleted 2026-05-21 (0 trades / 5y)
     ('ib_breakout', None),
     ('compression_breakout_15m', None),
     ('compression_breakout_30m', None),
@@ -79,11 +79,9 @@ INTENTIONAL_SIM101 = {
     'es_nq_confluence',    # Phase 12C — dormant until MES feed wired
 }
 
-# 29 dedicated accounts + Sim101 (default) = 29 unique values in the map
-# because Sim101 is itself the value for both _default AND the two
-# intentional fallbacks above. validate_account_map() returns the unique
-# set, which is 29 (28 dedicated + Sim101).
-EXPECTED_ACCOUNT_COUNT = 29
+# 28 unique account names total (27 dedicated + Sim101). Was 29 until
+# 2026-05-21 when dom_pullback was deleted (SimDom Pull Back removed).
+EXPECTED_ACCOUNT_COUNT = 28
 
 def main() -> int:
     print('=== ROUTING SANITY CHECK ===')

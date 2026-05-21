@@ -51,7 +51,7 @@ STRATEGY_KEYS: list[str] = [
     "vwap_pullback",
     "vwap_band_pullback",
     "vwap_band_reversion",
-    "dom_pullback",
+    # "dom_pullback" deleted 2026-05-21 (0 trades / 5y).
     "ib_breakout",
     "compression_breakout",
     "compression_breakout_15m",

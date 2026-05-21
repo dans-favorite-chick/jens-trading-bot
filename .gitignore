@@ -174,3 +174,16 @@ data/historical/phase12_validation.csv
 # they document what the regenerable binaries should look like.
 data/historical/databento_tbbo/*.dbn.zst
 data/historical/databento_tbbo/*.csv
+
+# === 2026-05-20 — single-instance PID lock files (B-004) ===
+# run/<bot>.pid files are runtime state from core/single_instance.py;
+# they reflect the live PID holding the lock and are recreated on bot
+# start. Tracking them would cause merge conflicts every restart.
+run/
+
+# === 2026-05-21 — tier_3000 equity state ===
+# data/equity_state.json tracks live equity, ATH, consecutive losses,
+# and session-start equity for the tier_3000 compounding sizer. Per-
+# operator runtime state, not source.
+data/equity_state.json
+_commit_msg.tmp

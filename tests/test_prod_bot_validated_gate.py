@@ -84,7 +84,9 @@ def test_prod_loads_same_strategies_as_sim():
     )
     # Specifically: previously-blocked unvalidated strategies must now
     # be loaded.
-    for must_be_loaded in ("vwap_pullback", "dom_pullback", "noise_area",
+    # 2026-05-21: dom_pullback removed from list (strategy deleted —
+    # 0 trades / 5y backtest).
+    for must_be_loaded in ("vwap_pullback", "noise_area",
                             "compression_breakout", "orb"):
         if STRATEGIES.get(must_be_loaded, {}).get("enabled", True):
             assert must_be_loaded in loaded, (
