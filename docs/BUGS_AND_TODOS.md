@@ -147,6 +147,54 @@ specific recompute after limit_price is computed; chandelier-policy
 strategies aren't affected today (10R wide bracket), but this paves
 the way for scale_out_1r/fixed_rr on LIMIT strategies.
 
+### B-029 — opening_session.open_drive Phase 13 override is DEAD CODE (HIGH)
+**Status:** FIXED in Finding-2-fix of pt2 audit (after 5y backtest agent).
+**Discovered:** 2026-05-20 5y backtest verification agent (aaef89ad).
+**Symptom:** `PHASE_13_EXIT_ASSIGNMENTS["opening_session.open_drive"] =
+("fixed_rr", {"rr": 3.0})` never matched at runtime. Signal emits
+`signal.strategy="opening_session"` (parent), with sub identifier in
+`signal.metadata["sub_strategy"]`. The override dispatcher did lookup
+on `signal.strategy` alone — never appended `.{sub_strategy}`.
+**Empirical evidence:** All 267 open_drive trades in the 5y
+`opening_session_sub_breakdown.csv` shipped at RR=2.0 (strategy's
+internal default `target_distance = 2.0 * one_r` post-B2 fix), NOT
+the plan §1.2's specified 3R.
+**Fix:** Added `_resolve_key()` helper in `_apply_phase13_overrides`
+and `sub_strategy` param to `recompute_phase13_target()`. Now looks
+up dotted form first (e.g. `opening_session.open_drive`), falls back
+to bare strategy name. Applied to all 4 call sites:
+- `_apply_phase13_overrides` step 1 (PHASE_13_ORDER_TYPES)
+- `_apply_phase13_overrides` step 2 (PHASE_13_EXIT_ASSIGNMENTS)
+- `recompute_phase13_target` deferred path (market-price + LIMIT-anchored)
+- Per-bar enforcement loop (uses Position.sub_strategy field)
+3 new regression tests in `test_phase13_overrides.py`.
+
+### W-008 — bias_momentum 5y baseline stale by ~$130K after F-012 (DOCUMENTATION)
+**Discovered:** 2026-05-20 5y backtest agent (aaef89ad).
+**Status:** WATCH — not a bug, but plan baseline needs updating.
+**Symptom:** PHOENIX_BEST_PLAN.md §1.1 shows bias_momentum at
+$178,379 / 5y / PF 1.33 / 13,790 trades. Fresh 5y rerun today
+returns $308,381 / PF 1.45 / 36,559 trades (+73% improvement).
+**Root cause:** F-012 (in commit 0708a07 today) restored
+`skip_on_stop_clamp=True` on bias_momentum. With matched-by-design
+`stop_fallback_mode="confirmation"` (Phase 7 CODE PATCH 3), this
+swaps clamped 200t ATR stops for structurally-anchored ~8-40t
+confirmation stops. Tighter, more-honest stops → higher turnover +
+better win-rate-per-trade economics.
+**Action needed:** Update PHOENIX_BEST_PLAN.md §1.1 bias_momentum
+row with new baseline + cite F-012 as the cause. Verify same hasn't
+happened to other strategies whose stop configs changed today.
+
+### I-005 — Backtest engine is provably deterministic
+**Documented:** 2026-05-20 5y backtest agent ran 3x identical runs.
+**Evidence:** 1y window 6 strategies × 3 runs = identical to the
+dollar; 5y bias_momentum × 2 runs = $308,381 both times. The earlier
+`UnicodeEncodeError` in `print_summary()` was a cp1252 console issue
+(∞ char) fixed in commit 0708a07.
+**Implication:** Test-fixture leakage is the only known source of
+backtest non-determinism. With B-CLOSED-006 + B-007 (test coverage)
+shipped, we have high confidence in run-to-run reproducibility.
+
 
 
 

@@ -272,6 +272,24 @@ def _apply_phase13_overrides(signal) -> None:
     if not strat:
         return
 
+    # 2026-05-20 SHIP AUDIT pt2 (Finding 2 / 5y backtest spawn):
+    # Sub-strategy routing. opening_session emits Signal(strategy=
+    # "opening_session") with the sub identifier in signal.metadata
+    # ["sub_strategy"]. PHASE_13_EXIT_ASSIGNMENTS uses dot-notation
+    # keys like "opening_session.open_drive". Without this lookup, the
+    # plan's "open_drive → fixed_rr(rr=3.0)" override is dead code —
+    # every open_drive trade ships at 2R (strategy's internal default).
+    # Empirically verified by the 5y backtest agent: 267 open_drive
+    # trades all shipped at RR=2.0, not the plan's 3.0.
+    _sub = (getattr(signal, "metadata", {}) or {}).get("sub_strategy")
+    _dotted = f"{strat}.{_sub}" if _sub else None
+
+    # Resolve the highest-specificity key that exists in each registry.
+    def _resolve_key(registry: dict) -> str:
+        if _dotted and _dotted in registry:
+            return _dotted
+        return strat
+
     # 0) Entry mode override (Section V.1: pilot RETEST for 4 strategies)
     # For now, log the intent only. Full retest-wait implementation
     # deferred to next sprint (requires per-strategy tick buffer).
@@ -290,9 +308,10 @@ def _apply_phase13_overrides(signal) -> None:
     except Exception:
         pass  # entry_modes module not present, default behavior
 
-    # 1) Order type override
-    if strat in PHASE_13_ORDER_TYPES:
-        order_type = PHASE_13_ORDER_TYPES[strat]
+    # 1) Order type override (uses sub-strategy dotted key when applicable)
+    _order_key = _resolve_key(PHASE_13_ORDER_TYPES)
+    if _order_key in PHASE_13_ORDER_TYPES:
+        order_type = PHASE_13_ORDER_TYPES[_order_key]
         if order_type == "limit_5s":
             # Map to Phoenix's LIMIT entry type. NT8 OIF + bracket logic
             # will use the signal.entry_price as the limit price. The
@@ -325,8 +344,9 @@ def _apply_phase13_overrides(signal) -> None:
     # re-application is the only path actually working. The actual
     # re-apply happens via `recompute_phase13_target()` below, called
     # from the trade execution path after stop/entry are finalized.
-    if strat in PHASE_13_EXIT_ASSIGNMENTS:
-        pname, params = PHASE_13_EXIT_ASSIGNMENTS[strat]
+    _exit_key = _resolve_key(PHASE_13_EXIT_ASSIGNMENTS)
+    if _exit_key in PHASE_13_EXIT_ASSIGNMENTS:
+        pname, params = PHASE_13_EXIT_ASSIGNMENTS[_exit_key]
         try:
             policy = get_policy(pname, params)
             initial_stop = getattr(signal, "stop_price", None)
@@ -416,13 +436,21 @@ class _PolicyBarAdapter:
 
 
 def recompute_phase13_target(strategy: str, direction: str,
-                              entry_price: float, stop_price: float) -> float | None:
+                              entry_price: float, stop_price: float,
+                              sub_strategy: str | None = None) -> float | None:
     """Re-apply the Phase 13 exit policy now that entry+stop are finalized.
 
     Called from the trade execution path AFTER `stop_price` and `entry_price`
     are computed locally (not from the Signal). Returns the new target
     price, or None if no override should be applied (managed_existing
     policy, or strategy not in PHASE_13_EXIT_ASSIGNMENTS).
+
+    2026-05-20 SHIP AUDIT pt2 (Finding 2): added sub_strategy parameter.
+    PHASE_13_EXIT_ASSIGNMENTS uses dot-keys like "opening_session.open_drive";
+    look up the dotted form first, fall back to the bare strategy name.
+    Without this, opening_session.open_drive's plan-specified 3R override
+    was silently dead code — all 267 open_drive trades in the 5y backtest
+    shipped at 2R (strategy's internal default).
 
     2026-05-20 ship-audit fix: pairs with the deferred-target tag set
     in `_apply_phase13_overrides` step 2. Fixes the silent no-op that
@@ -450,9 +478,15 @@ def recompute_phase13_target(strategy: str, direction: str,
             f"for {strategy}: {e!r}"
         )
         return None
-    if strategy not in PHASE_13_EXIT_ASSIGNMENTS:
+    # Sub-strategy-aware lookup (Finding 2 fix).
+    _dotted = f"{strategy}.{sub_strategy}" if sub_strategy else None
+    if _dotted and _dotted in PHASE_13_EXIT_ASSIGNMENTS:
+        lookup_key = _dotted
+    elif strategy in PHASE_13_EXIT_ASSIGNMENTS:
+        lookup_key = strategy
+    else:
         return None
-    pname, params = PHASE_13_EXIT_ASSIGNMENTS[strategy]
+    pname, params = PHASE_13_EXIT_ASSIGNMENTS[lookup_key]
     try:
         policy = get_policy(pname, params)
         new_target = policy.compute_initial_target(
@@ -462,7 +496,7 @@ def recompute_phase13_target(strategy: str, direction: str,
     except Exception as e:
         logger.warning(
             f"[Phase13 override] recompute_phase13_target error for "
-            f"{strategy}: {e!r}"
+            f"{lookup_key}: {e!r}"
         )
         return None
 
@@ -2535,9 +2569,19 @@ class BaseBot:
                             _last_bar = _bars_phase13[-1]
                             for _pos in list(self.positions.active_positions):
                                 _strat = getattr(_pos, "strategy", None)
-                                if _strat not in _PH13_EXITS:
+                                # Finding 2 fix: sub-strategy aware lookup.
+                                # Position carries sub_strategy on
+                                # opening_session.* positions.
+                                _pos_sub = getattr(_pos, "sub_strategy", None)
+                                _dotted_key = (f"{_strat}.{_pos_sub}"
+                                               if _pos_sub else None)
+                                if _dotted_key and _dotted_key in _PH13_EXITS:
+                                    _lookup_key = _dotted_key
+                                elif _strat in _PH13_EXITS:
+                                    _lookup_key = _strat
+                                else:
                                     continue
-                                _pname, _params = _PH13_EXITS[_strat]
+                                _pname, _params = _PH13_EXITS[_lookup_key]
                                 # Only enforce the policies that have per-bar
                                 # should_exit logic. fixed_rr + managed_existing
                                 # are handled by the OCO bracket / strategy.
@@ -2563,7 +2607,7 @@ class BaseBot:
                                 _decision = _pos._phase13_policy.should_exit(_adapter, _bar_adapter)
                                 if _decision is not None:
                                     logger.info(
-                                        f"[PHASE13_EXIT:{_pos.trade_id}] {_strat} "
+                                        f"[PHASE13_EXIT:{_pos.trade_id}] {_lookup_key} "
                                         f"policy={_pname} fired exit_reason="
                                         f"{_decision.exit_reason} at price={_decision.exit_price:.2f}"
                                     )
@@ -4104,14 +4148,22 @@ class BaseBot:
         # consume it here and override.
         if getattr(signal, "_phase13_target_deferred", False) and not _managed_exit_target:
             try:
+                # Finding 2 fix: pass sub_strategy so opening_session.open_drive
+                # → fixed_rr(rr=3.0) actually fires (was dead code before).
+                _sub_for_recompute = (
+                    (getattr(signal, "metadata", {}) or {}).get("sub_strategy")
+                )
                 _new_target = recompute_phase13_target(
                     signal.strategy, signal.direction, price, stop_price,
+                    sub_strategy=_sub_for_recompute,
                 )
                 if _new_target is not None and _new_target != target_price:
                     _old = target_price
                     target_price = _new_target
+                    _key_str = (f"{signal.strategy}.{_sub_for_recompute}"
+                                if _sub_for_recompute else signal.strategy)
                     logger.info(
-                        f"[Phase13 override] {signal.strategy}: target_price "
+                        f"[Phase13 override] {_key_str}: target_price "
                         f"{_old:.2f} -> {target_price:.2f} (deferred recompute, "
                         f"entry={price:.2f} stop={stop_price:.2f})"
                     )
@@ -4263,14 +4315,21 @@ class BaseBot:
             # care today (10R wide-bracket), but this paves the way.
             if getattr(signal, "_phase13_target_deferred", False) and not _managed_exit_target:
                 try:
+                    # Finding 2 fix: sub-strategy aware lookup.
+                    _sub_for_recompute = (
+                        (getattr(signal, "metadata", {}) or {}).get("sub_strategy")
+                    )
                     _ph13_target = recompute_phase13_target(
                         signal.strategy, signal.direction, limit_price, stop_price,
+                        sub_strategy=_sub_for_recompute,
                     )
                     if _ph13_target is not None and _ph13_target != target_price:
                         _old = target_price
                         target_price = round(_ph13_target, 2)
+                        _key_str = (f"{signal.strategy}.{_sub_for_recompute}"
+                                    if _sub_for_recompute else signal.strategy)
                         logger.info(
-                            f"[Phase13 override] {signal.strategy}: LIMIT-anchored "
+                            f"[Phase13 override] {_key_str}: LIMIT-anchored "
                             f"target {_old:.2f} -> {target_price:.2f} "
                             f"(limit_fill={limit_price:.2f} stop={stop_price:.2f})"
                         )

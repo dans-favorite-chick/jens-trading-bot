@@ -156,6 +156,49 @@ def test_recompute_chandelier_returns_wide_placeholder():
     assert new_target == 24060.0
 
 
+# ─── Sub-strategy routing (Finding 2 fix, 2026-05-20 pt2) ──────────
+
+
+def test_recompute_uses_dotted_key_for_opening_session_open_drive():
+    """opening_session.open_drive → fixed_rr(rr=3.0) per plan §1.2.
+    Before the Finding 2 fix, recompute looked up `signal.strategy` alone
+    ("opening_session" — not in PHASE_13_EXIT_ASSIGNMENTS), so the
+    override was silently dead code. All 267 open_drive trades in the
+    5y backtest shipped at 2R (strategy's internal default). Now the
+    dotted key "opening_session.open_drive" gets looked up first."""
+    new_target = recompute_phase13_target(
+        "opening_session", "LONG",
+        entry_price=25025.0, stop_price=25009.0,
+        sub_strategy="open_drive",
+    )
+    # stop_dist = 16, 3R = 48, target = 25025 + 48 = 25073
+    assert new_target == 25073.0
+
+
+def test_recompute_falls_back_to_bare_strategy_when_no_sub():
+    """If sub_strategy isn't provided, use the bare strategy name."""
+    new_target = recompute_phase13_target(
+        "spring_setup", "LONG",
+        entry_price=24000.0, stop_price=23990.0,
+        sub_strategy=None,
+    )
+    # spring_setup → fixed_rr(rr=3.0) → target = 24030
+    assert new_target == 24030.0
+
+
+def test_recompute_falls_back_when_dotted_key_not_registered():
+    """If the dotted key isn't in PHASE_13_EXIT_ASSIGNMENTS, fall back
+    to the bare strategy name. (Defensive — handles future sub-strategies
+    that don't have explicit overrides.)"""
+    new_target = recompute_phase13_target(
+        "spring_setup", "LONG",
+        entry_price=24000.0, stop_price=23990.0,
+        sub_strategy="nonexistent_sub",
+    )
+    # spring_setup.nonexistent_sub doesn't exist, falls back to spring_setup
+    assert new_target == 24030.0
+
+
 # ─── _PolicyPosAdapter ────────────────────────────────────────────
 
 

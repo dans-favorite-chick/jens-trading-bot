@@ -1012,6 +1012,17 @@ def simulate_trade(signal_strategy: str, signal_direction: str,
 
 # Strategies we can ACTUALLY test in this pipeline. Stubbed/unsupported
 # strategies (dom_pullback, footprint_cvd_reversal, nq_lsr) are excluded.
+#
+# 2026-05-20 SHIP AUDIT pt2 (Finding 5y backtest agent): added the 4
+# Phase 13 new winners so all 11 plan §1.1 strategies are reproducible
+# via this one canonical tool. Previously raschke_baseline +
+# g_inside_bar_breakout + e_multi_day_breakout + a_asian_continuation
+# only lived in `tools/phoenix_new_strategy_lab.py` and
+# `tools/phoenix_trend_pullback_lab.py` (separate hardcoded labs with
+# different CLIs). Including them here lets the 3x validation loop and
+# operator's run command (`python tools/phoenix_real_backtest.py
+# --strategies all --start 2021-05-17 --end 2026-05-15`) actually
+# exercise the full plan winner set.
 TESTABLE_STRATEGIES = [
     "es_nq_confluence",
     "compression_breakout_v2",
@@ -1027,6 +1038,11 @@ TESTABLE_STRATEGIES = [
     "big_move_signal",
     "bias_momentum",
     "opening_session",
+    # ── 2026-05-20 Phase 13 ship audit pt2: 4 new plan winners ──
+    "raschke_baseline",
+    "g_inside_bar_breakout",
+    "e_multi_day_breakout",
+    "a_asian_continuation",
 ]
 
 
