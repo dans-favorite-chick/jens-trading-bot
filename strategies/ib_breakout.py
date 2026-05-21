@@ -238,8 +238,16 @@ class IBBreakout(BaseStrategy):
                 logger.debug(f"[EVAL] {self.name}: BLOCKED gate:cvd_not_confirming_short")
                 return None  # Price broke IB low but sellers are not in control — buyers absorbing
 
-        # Mark direction as traded for today
-        self._traded_today[direction] = True
+        # 2026-05-21 SHIP AUDIT pt4 (Bug 2): DO NOT set _traded_today
+        # here. The original code set it BEFORE the max_stop check below;
+        # if that check rejected with stop_too_wide, the flag stayed True
+        # → ALL subsequent breakouts that day were silently blocked
+        # ("not _traded_today[direction]" was False → fall to no_break
+        # branch). Today (2026-05-21) wide-IB days masked this since every
+        # eval failed the same check, but on borderline days where stop
+        # varies (125t reject → 115t qualify later), the second
+        # legitimate breakout would never fire. Fix: move the flag-set
+        # to AFTER the stop_ticks validation succeeds.
 
         # ── Step 3: Calculate stop and target ───────────────────────
         ib_mid = (self._ib_high + self._ib_low) / 2.0
@@ -270,6 +278,11 @@ class IBBreakout(BaseStrategy):
                 f"— IB too wide for current risk tier"
             )
             return None
+
+        # Mark direction as traded for today — AFTER stop validation
+        # passes (Bug 2 fix 2026-05-21). Setting this earlier permanently
+        # blocked legitimate subsequent breakouts on borderline-stop days.
+        self._traded_today[direction] = True
 
         target_distance = abs(target_price - price)
         target_rr = target_distance / stop_distance if stop_distance > 0 else 1.5

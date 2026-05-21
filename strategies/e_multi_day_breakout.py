@@ -85,6 +85,105 @@ class MultiDayBreakout(BaseStrategy):
         self._cur_rth_high: Optional[float] = None
         self._cur_rth_low: Optional[float] = None
 
+        # 2026-05-21 SHIP AUDIT pt4 (Bug 1): cold-start backfill.
+        # Without this, the strategy's `lookback_days` warmup gate
+        # (`if len(_rth_highs) < lookback_days: SKIP warmup`) means
+        # the strategy CANNOT FIRE for 2-3 sessions after every bot
+        # restart. Today's full RTH was silent for this reason.
+        # Load prior days from history JSONL files at construction time.
+        self._backfill_from_history()
+
+    def _backfill_from_history(self) -> None:
+        """Read the last `lookback_days + 2` history files and seed
+        `_rth_highs`/`_rth_lows` so the strategy can fire on first eval
+        post-restart.
+
+        Reads `logs/history/<date>_<bot>.jsonl` style files. Each line
+        is a JSON event; we scan for BAR events with `rth=True` (or
+        equivalent) and aggregate H/L per date. Falls back gracefully
+        if files don't exist or schema differs."""
+        import json as _json
+        import os as _os
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+        _hist_dir = _os.path.join(
+            _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+            "logs", "history",
+        )
+        if not _os.path.isdir(_hist_dir):
+            return  # no history dir — strategy will warm naturally
+        # Walk back from yesterday up to lookback_days + 2 calendar days
+        # (extra cushion in case some days don't have RTH data).
+        scanned = 0
+        today_ct = _dt.now(_CT).strftime("%Y-%m-%d")
+        d = _dt.now(_CT).date() - _td(days=1)
+        per_day_hl: dict[str, tuple[float, float]] = {}
+        max_days_back = self._lookback_days + 4
+        while scanned < max_days_back and len(per_day_hl) < self._lookback_days:
+            date_str = d.strftime("%Y-%m-%d")
+            scanned += 1
+            d -= _td(days=1)
+            # Try common history filename patterns
+            candidates = [
+                _os.path.join(_hist_dir, f"{date_str}_sim.jsonl"),
+                _os.path.join(_hist_dir, f"{date_str}_prod.jsonl"),
+                _os.path.join(_hist_dir, f"{date_str}.jsonl"),
+            ]
+            hi: Optional[float] = None
+            lo: Optional[float] = None
+            for path in candidates:
+                if not _os.path.exists(path):
+                    continue
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                rec = _json.loads(line)
+                            except Exception:
+                                continue
+                            # Look for bar-level price events. Schema may vary
+                            # bot-to-bot; try a few common keys.
+                            h_val = rec.get("rth_high") or rec.get("high")
+                            l_val = rec.get("rth_low") or rec.get("low")
+                            ts_s = rec.get("ts") or rec.get("now_ct")
+                            # Filter to RTH hours (08:30-15:00 CT)
+                            if ts_s:
+                                try:
+                                    t = _dt.fromisoformat(str(ts_s).replace("Z", "+00:00"))
+                                    t_ct = t.astimezone(_CT)
+                                    if not (8 <= t_ct.hour < 15 or
+                                            (t_ct.hour == 8 and t_ct.minute >= 30)):
+                                        continue
+                                except Exception:
+                                    pass
+                            if isinstance(h_val, (int, float)) and h_val > 0:
+                                hi = max(hi, float(h_val)) if hi is not None else float(h_val)
+                            if isinstance(l_val, (int, float)) and l_val > 0:
+                                lo = min(lo, float(l_val)) if lo is not None else float(l_val)
+                except Exception:
+                    continue
+                if hi is not None and lo is not None:
+                    break  # got data from this file; don't double-process
+            if hi is not None and lo is not None:
+                per_day_hl[date_str] = (hi, lo)
+        # Insert oldest first so list order = chronological
+        for date_str in sorted(per_day_hl.keys()):
+            hi, lo = per_day_hl[date_str]
+            self._rth_highs.append((date_str, hi))
+            self._rth_lows.append((date_str, lo))
+        if self._rth_highs:
+            logger.info(
+                f"[{self.name}] backfilled {len(self._rth_highs)} prior RTH "
+                f"days from history (warmup complete)"
+            )
+        else:
+            logger.warning(
+                f"[{self.name}] history backfill found 0 prior RTH days — "
+                f"strategy will be in warmup for {self._lookback_days} sessions"
+            )
+
     # ── RTH range maintenance (per-evaluate, idempotent) ───────────
 
     def _update_rth_history(self, bars_1m: list, now_ct: datetime) -> None:

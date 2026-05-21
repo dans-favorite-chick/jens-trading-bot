@@ -126,6 +126,15 @@ SKIP_HOURS_CT_EXEMPT = (
     # extend after live-data validation if specific strategies need it.
 )
 
+# ─── Playbook strategy overrides (S-001, 2026-05-21) ───────────────
+# core/regime_playbooks.py PLAYBOOKS dict can override strategy gates
+# based on HMM regime (e.g., loosen min_confluence on TRENDING days).
+# Default DISABLED: the playbook values were never validated against
+# the 5y backtest that production gates passed — same hidden-override
+# pattern that caused the B-030 sim_bot bug. Flip to True only after
+# each PLAYBOOKS entry is research-validated.
+PLAYBOOK_ENABLED = False
+
 # ─── Session Windows (CST) ─────────────────────────────────────────
 SESSION_WINDOWS = {
     "OVERNIGHT_RANGE":  {"start": "22:00", "end": "07:00"},

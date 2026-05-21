@@ -3630,14 +3630,37 @@ class BaseBot:
         except Exception as e:
             logger.debug(f"[STRUCTURAL BIAS] compute error (non-blocking): {e}")
 
-        # Phase 8: Apply playbook strategy overrides based on HMM regime
+        # 2026-05-21 SHIP AUDIT pt4 (S-001 — B-030 CLONE FIX):
+        # core/regime_playbooks.py PLAYBOOKS dict was silently overriding
+        # production strategy gates with HMM-regime-conditioned values
+        # using the EXACT same pattern as the sim_bot ZERO_GATE bug we
+        # just fixed in B-030. For bias_momentum TRENDING regime, PLAYBOOKS
+        # loosens min_confluence 5.5 → 1.5 (73% looser), min_momentum
+        # 80 → 25 (69% looser). Same hidden-lab-era values.
+        #
+        # Currently MASKED on prod_bot because FORCE_ACCOUNT="Sim101" =
+        # paper. But the moment prod_bot.FORCE_ACCOUNT changes or
+        # LIVE_TRADING=True, this lands B-030 on real money. Sim_bot
+        # already overrides _evaluate_strategies and doesn't call super,
+        # so this block has NEVER run on sim — only prod (paper).
+        #
+        # Gate behind PLAYBOOK_ENABLED. Default False until each playbook
+        # entry is validated against the same 5y backtest that production
+        # gates passed. Backtest tool (tools/phoenix_real_backtest.py:1104)
+        # uses STRATEGIES directly — does NOT apply playbooks — so PLAYBOOKS
+        # values are unvalidated.
         try:
-            for strat in self.strategies:
-                pb_overrides = self.playbook_mgr.get_strategy_overrides(strat.name)
-                for k, v in pb_overrides.items():
-                    strat.config[k] = v
-        except Exception:
-            pass
+            from config.settings import PLAYBOOK_ENABLED
+        except ImportError:
+            PLAYBOOK_ENABLED = False
+        if PLAYBOOK_ENABLED:
+            try:
+                for strat in self.strategies:
+                    pb_overrides = self.playbook_mgr.get_strategy_overrides(strat.name)
+                    for k, v in pb_overrides.items():
+                        strat.config[k] = v
+            except Exception:
+                pass
 
         # ── Day-type strategy suppression ─────────────────────────────
         # On RANGE days bias_momentum underperforms; on VOLATILE days breakouts fail.

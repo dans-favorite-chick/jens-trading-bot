@@ -259,12 +259,13 @@ class TestRiskManagerLossOnly:
         allowed, _ = rm.can_trade()
         assert allowed is True
 
-    @pytest.mark.skip(reason="V2 deployment override 2026-05-17 — restore at Phase 10")
     def test_loss_day_blocks(self):
-        # 2026-05-17: Phase 0 set DAILY_LOSS_LIMIT=1_000_000 for sim testing.
-        # Same restore-at-Phase-10 as test_risk_manager equivalent.
+        # 2026-05-21 S-006 unskip: DAILY_LOSS_LIMIT restored to $200
+        # in commit a03086e. Original test asserted $45 (pre-V2). Now
+        # reads the live constant.
+        from config.settings import DAILY_LOSS_LIMIT
         rm = RiskManager()
-        rm.state.daily_pnl = -46.0  # Over $45 limit
+        rm.state.daily_pnl = -(DAILY_LOSS_LIMIT + 1.0)  # 1¢ over cap
         allowed, reason = rm.can_trade()
         assert allowed is False
         assert "Daily loss" in reason
