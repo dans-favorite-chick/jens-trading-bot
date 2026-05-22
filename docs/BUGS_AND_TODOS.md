@@ -67,25 +67,36 @@ microstructure confluence" PR).
 
 
 
-### B-032 — Volumetric (TBBO tick) recorder broken — 1 file / 648 bytes in 2 months (HIGH)
+### B-032 — Volumetric snapshot recorder broken (PARTIAL FIX, HIGH)
 **Discovered:** 2026-05-22 by live-data confluence agent attempting to read the
-2-month TBBO live capture to cross-check the 5y voter findings.
-**Symptom:** `data/historical/databento_tbbo/` (or wherever the live volumetric
-recorder writes) contains exactly **1 file, 648 bytes total** across the last 2
-months. Compare: the 5y backtest TBBO replay file is **44M ticks / ~1GB**. The
-live recorder is silently dropping every tick.
-**Suspected root cause:** likely the recorder's writer was killed by a startup race
-or the file path got broken in a refactor. Phoenix's "fail silently" pattern bit us
-again — the bridge stays alive, dashboards stay green, but nothing is being recorded.
-**Why this matters:** without live TBBO capture we can't:
-  - Validate that 5y backtest voter findings hold up in 2026's microstructure
-  - Detect regime shifts in DOM/footprint behavior
-  - Train any future microstructure model on recent live data
-**Action:** find the volumetric recorder process (likely `tools/volumetric_recorder.py`
-or similar), check its log, fix the silent failure, add a heartbeat that alarms if
-no tick has been written in 60s during RTH.
-**Priority:** HIGH (data loss is permanent — every day we don't fix this is another
-day of training-data gap).
+live volumetric capture to cross-check the 5y voter findings.
+**Symptom:** `data/historical/volumetric/` contained exactly **1 file (648B) from
+2026-05-18** — the recorder dropped every snapshot for 4 days straight.
+
+**Root cause (Python side) — FIXED 2026-05-22 00:05 CT:**
+The `PhoenixVolumetricRecorder` scheduled task was firing every 10 min with
+`Execute = "python"` (no path). The Trading PC scheduled-task user has no
+`python` in PATH → `LastTaskResult: 2147942402` (ERROR_FILE_NOT_FOUND) on
+every fire since 2026-05-18.
+Fix: `Set-ScheduledTask` updated `Execute` to the absolute interpreter path
+`C:\Users\Trading PC\AppData\Local\Python\pythoncore-3.14-64\python.exe`.
+Manual trigger immediately wrote `2026-05-22.jsonl` (success). Next auto-fire
+at every :03, :13, :23 ... etc.
+
+**Root cause (NT8 side) — STILL OPEN:**
+`data/volumetric_latest.json` itself is **stale since 2026-05-19 23:03** — the
+TickStreamer.cs indicator stopped writing volumetric snapshots 3 days ago.
+The recorder is now dedup-skipping the same stale ts on every fire.
+**Operator action required:** reload the TickStreamer indicator on the MNQM6
+chart in NinjaTrader (right-click → Indicators → Phoenix TickStreamer → Apply
+again, or remove + re-add). The writer should resume on next bar close.
+After that, every 10 min the recorder will append a new snapshot line to
+`data/historical/volumetric/YYYY-MM-DD.jsonl`.
+
+**Hardening (not yet done):** add a heartbeat alert that fires if no new
+TickStreamer ts has been seen in 30 min during RTH. Currently the failure is
+silent — no log message, no Telegram alert.
+**Priority:** HIGH on the NT8-side fix (every day is permanent data-loss).
 
 
 
