@@ -558,10 +558,16 @@ STRATEGIES = {
         "premarket_breakout_time_exit_ct": "10:30",
 
         # ORB — 2026-05-17 V2 PATCH 2: range floor/cap in points + CVD-aligned
+        # 2026-05-22 ship pt5 (operator decision): orb_max_range_pts 80 -> 110.
+        # Per silent-strategy diagnosis a481d78c, today's OR was 96.2pt and
+        # the 80pt cap rejected ALL 414 in-window evals. 110pt gives
+        # comfortable cushion for normal-vol opening days while still
+        # rejecting true gap days (>4× ATR per orb_max_range_pct=0.008).
+        # ATR-adaptive max width is already in place via orb_max_range_pct.
         "orb_window_min": 15,
         "orb_max_range_pct": 0.008,
         "orb_min_range_pts": 11,
-        "orb_max_range_pts": 80,
+        "orb_max_range_pts": 110,
         "orb_require_cvd_aligned": True,
         "orb_cvd_lookback_bars": 5,
         "orb_target_pct_of_or": 0.50,
