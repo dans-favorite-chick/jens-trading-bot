@@ -1,3 +1,5 @@
 2026-05-18 18:18:22,828 [INFO] captured snapshot ts=2026-05-18T18:18:00.0000000 delta=-134 poc=29151 cvd_session=1475
 2026-05-18 18:18:28,445 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-18T18:18:00.0000000
 2026-05-22 00:05:31,966 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-22 00:13:01,852 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-22 00:23:01,926 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243

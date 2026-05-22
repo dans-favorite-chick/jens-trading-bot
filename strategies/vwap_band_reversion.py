@@ -76,6 +76,7 @@ from typing import List, Optional
 from zoneinfo import ZoneInfo
 
 from strategies.base_strategy import BaseStrategy, Signal
+from core.confluence_gates import regime_veto
 
 logger = logging.getLogger(__name__)
 
@@ -129,9 +130,28 @@ class VwapBandReversion(BaseStrategy):
             logger.debug(f"[EVAL] {self.name}: BLOCKED gate:trend_day_skip")
             return None
 
+        # 2026-05-22 pt8 (per agent a9e3773f Agent B): OPEN_MOMENTUM is
+        # fatal for mean-reversion (vwap_band_pullback shows -$35.95/trade
+        # drag — most extreme regime drag of any strategy in the a16cf0ef
+        # research). The 08:30-09:30 block_windows below only partially
+        # covers OPEN_MOMENTUM (which sometimes runs past 09:30); the
+        # regime classifier is the authoritative source.
+        _passed, _ = regime_veto(
+            market, ("OPEN_MOMENTUM",),
+            strategy_name=self.name, config=self.config, logger=logger,
+            config_key="veto_open_momentum",
+        )
+        if not _passed:
+            return None
+
         # Filter 2: time-of-day block (08:30-09:30 CT default — open volatility)
+        # 2026-05-22 pt8 (per agent a9e3773f): was `datetime.now(_CT)` — a
+        # wallclock read that's backtest-unsafe (B3-class bug pattern,
+        # see orb_fade's 2026-05-21 fix). Prefer market["now_ct"] which
+        # is bar-time in both live and replay; only fall back to wallclock
+        # when the snapshot field is absent.
         if block_windows:
-            now_ct = datetime.now(_CT)
+            now_ct = market.get("now_ct") or datetime.now(_CT)
             hhmm = now_ct.strftime("%H:%M")
             for start, end in block_windows:
                 if start <= hhmm <= end:

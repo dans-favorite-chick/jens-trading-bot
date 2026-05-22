@@ -404,33 +404,31 @@ class BiasMomentumFollow(BaseStrategy):
             momentum_score += 15
             confluences.append(f"EXPLOSIVE BAR: VCR={_vcr:.1f}x, delta={_bar_delta:+.0f}, close@{_close_pos5:.0%} — bypass active")
 
-        # Price vs VWAP (already used as gate on non-TREND days, now score the quality)
+        # Price vs VWAP — DEMOTED to confluence label only (2026-05-22 pt8).
+        # Per CONFLUENCE_VOTER_RESEARCH_2026-05-21.md, VWAP_relation has
+        # IC -0.04 (-$1.06/trade). Adding +20 to momentum_score for "price
+        # already above VWAP" was rewarding chase entries (price has
+        # already moved off VWAP support — the entry edge has been spent).
+        # Keep the confluence text for log readability; remove the score
+        # weight so it stops biasing the min_momentum gate.
         if direction == "LONG" and price > vwap and vwap > 0:
-            momentum_score += 20
-            confluences.append("Price above VWAP")
+            confluences.append("Price above VWAP (informational, no score impact per B-033)")
         elif direction == "SHORT" and price < vwap and vwap > 0:
-            momentum_score += 20
-            confluences.append("Price below VWAP")
+            confluences.append("Price below VWAP (informational, no score impact per B-033)")
 
-        # CVD and bar_delta confirmation.
-        # IMPORTANT: Session CVD (cumulative) can stay negative all day even on
-        # strong bullish days if the open had heavy selling. Do NOT use session
-        # CVD sign for direction — only for a small momentum bonus/penalty.
-        # bar_delta (current bar only) is more reliable as a real-time signal.
-        #
-        # Session CVD: small bonus/penalty (+10/-5) — directional hint only
+        # Session CVD — DEMOTED to label only (2026-05-22 pt8).
+        # Per voter research, session cvd_sign IC = 0.003 (-$0.14/trade).
+        # That's pure noise — the old ±10/-5 score weight was just
+        # confluence inflation. Per-bar `bar_delta` (below) carries real
+        # signal and stays scored.
         if direction == "LONG" and cvd > 0:
-            momentum_score += 10
-            confluences.append("CVD positive")
+            confluences.append("CVD positive (informational, no score impact per B-033)")
         elif direction == "LONG" and cvd < 0:
-            momentum_score -= 5   # Small penalty — session sold more, but not a blocker
-            confluences.append(f"CVD net bearish (session sold heavy)")
+            confluences.append("CVD net bearish (informational, no score impact)")
         elif direction == "SHORT" and cvd < 0:
-            momentum_score += 10
-            confluences.append("CVD negative")
+            confluences.append("CVD negative (informational, no score impact per B-033)")
         elif direction == "SHORT" and cvd > 0:
-            momentum_score -= 5
-            confluences.append(f"CVD net bullish (session bought heavy)")
+            confluences.append("CVD net bullish (informational, no score impact)")
 
         # bar_delta (current bar): stronger real-time signal (+15/-10)
         if direction == "LONG" and bar_delta > 0:

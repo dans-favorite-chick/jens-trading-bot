@@ -45,25 +45,41 @@ backtest's ~38-40% as the gates filter out weak signals.
 
 
 
-### B-031 — msu_score (microstructure score) is ANTI-predictive — IC -0.152 (HIGH)
+### B-031 — msu_score (microstructure score) is ANTI-predictive — IC -0.152 (PARTIAL FIX, HIGH)
 **Discovered:** 2026-05-22 by per-strategy confluence-voter agent a16cf0ef during
 the 5y backtest of every voter on 6 RTH directional strategies.
-**Symptom:** the `msu_score` field (computed in core/microstructure.py and surfaced
-in market snapshots) has an Information Coefficient of **-0.152** across 12,000+
-trades — i.e. HIGHER msu_score → LOWER win rate, statistically significant.
-**Suspected root cause:** the score weights "absorption + delta divergence + spread
-expansion" as bullish/bearish microstructure flags, but the live formula appears
-to be inverted vs. what the voter research expects. Possibly an adverse-selection
-trap (the score lights up at the worst entry moments — late chase / blow-off / fade
-opportunities).
-**Status:** ⚪ INFORMATIONAL — msu_score is **advisory-only** in the bot (no
-strategy uses it as a hard gate), so no live $ damage. But if anyone ever wires
-it into a gate they will systematically lose money. Audit the formula:
-  1. Grep for `msu_score` callers and confirm none gate on it (only log/observe)
-  2. Open core/microstructure.py — check sign of the absorption + delta-divergence terms
-  3. Re-run the IC test after any formula change
-**Priority:** MEDIUM (no live damage today, but a footgun for any future "add a
-microstructure confluence" PR).
+**Symptom:** the `msu_score` field had Information Coefficient of **-0.152**
+across 12,000+ trades — HIGHER score → LOWER WR, statistically significant.
+
+**Forensic (2026-05-22 pt8, agent ab84603a):** All 5 deduction blocks in
+`core/microstructure_filter.py:36-177` were rewarding adverse-selection
+conditions. Blocks 2-5 — DOM-supporting-direction, CVD-confirming-direction,
+price-moving-with-signal, and DOM-signal-alignment — each lights up
+*exactly* when informed money is offloading into retail chase. The IC
+magnitude across 12k trades (z ≈ 16+) is too large/consistent to be
+random; the formula measures real microstructure but with inverted sign.
+
+**Fix shipped pt8 (commit pending):** introduced `INVERT_PER_B031 = True`
+module-level flag at `core/microstructure_filter.py:38`. When True:
+  - Block 1 (spread) — UNCHANGED. Wide spreads are real slippage cost.
+  - Block 2 (DOM persistence) — INVERTED. DOM supporting your side now
+    penalizes (adverse-selection trap); DOM opposing rewards (absorbers).
+  - Block 3 (delta confirms) — INVERTED. Confirming CVD now penalizes
+    (retail chase); divergent CVD rewards (informed accumulation).
+  - Block 4 (recent price) — INVERTED. Price chasing into signal penalizes;
+    price retracing against signal rewards (the dip you wanted).
+  - Block 5 (DOM signal) — INVERTED. Aligned DOM analyzer score penalizes
+    (informed footprint absorbing); opposing DOM rewards.
+Set `INVERT_PER_B031 = False` to revert for A/B comparison.
+
+**Status:** Still **advisory-only** (no strategy gates on it). Watch
+`[MICRO] score=...` log lines over the next 1,000 trades and re-compute
+IC; expect a flip to ~+0.15 (mirror image). If IC stays negative or goes
+to ~0, the inversion is wrong and we revert.
+
+**Future hardening:** the inverted score can be wired as a SOFT confluence
+input (not a hard gate) only after the live A/B confirms positive IC.
+**Priority:** WATCH (live A/B for 1,000 trades).
 
 
 

@@ -149,7 +149,14 @@ namespace NinjaTrader.NinjaScript.Indicators
         private long         sessionCvd          = 0;     // cumulative session delta
         private DateTime     sessionCvdResetDate = DateTime.MinValue;
         private int          lastEmittedVolBar   = -1;    // dedupe guard
-        private bool         volumetricWarned    = false; // log "not volumetric" once
+        // 2026-05-22 pt8 (B-032 hardening): was `bool volumetricWarned` —
+        // a one-shot flag that silently no-op'd forever after the first
+        // warning. Caused the 2026-05-19 23:03 CT cliff to go unnoticed
+        // for 4 days. Replaced with a 5-minute rate-limited timestamp
+        // so the operator's NT8 Output window keeps re-displaying the
+        // "chart is NOT a Volumetric bars series" message until they
+        // fix the chart configuration. See feedback_silent_failures.md.
+        private DateTime     volumetricWarnedAt  = DateTime.MinValue;
 
         // ── AUX INSTRUMENT THROTTLING ─────────────────────────────────────
         // VIX/VXN don't need every tick — throttle to ~2/sec to reduce load.
@@ -573,13 +580,16 @@ namespace NinjaTrader.NinjaScript.Indicators
                 NinjaTrader.NinjaScript.BarsTypes.VolumetricBarsType;
             if (volumetricBarsType == null)
             {
-                if (!volumetricWarned)
+                // 2026-05-22 pt8 (B-032): rate-limited 5-min re-emit so silent
+                // failures stay LOUD until operator fixes the chart configuration.
+                if ((DateTime.Now - volumetricWarnedAt).TotalMinutes >= 5.0)
                 {
                     Print("TickStreamer: chart is NOT a Volumetric bars series — " +
-                          "footprint_cvd_reversal strategy will stay dormant. " +
+                          "footprint_cvd_reversal strategy will stay dormant AND " +
+                          "data/volumetric_latest.json will go stale. " +
                           "Configure chart per Sprint H v3 spec (1,500-tick " +
                           "Volumetric, BidAsk delta, ticks_per_level=1).");
-                    volumetricWarned = true;
+                    volumetricWarnedAt = DateTime.Now;
                 }
                 return;
             }

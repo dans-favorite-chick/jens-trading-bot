@@ -46,6 +46,7 @@ from zoneinfo import ZoneInfo
 
 from strategies.base_strategy import BaseStrategy, Signal
 from config.settings import TICK_SIZE
+from core.confluence_gates import tf5m_es_gate
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +170,21 @@ class InsideBarBreakout(BaseStrategy):
             stop_dist = stop - price
         else:
             logger.debug(f"[EVAL] {self.name}: NO_SIGNAL no_break")
+            return None
+
+        # 2026-05-22 pt8 (per agent a9e3773f Agent B recommendation):
+        # Mirror e_multi_day_breakout — same structure (5m close beyond
+        # prior extreme), same 08:45-14:00 CT window. The tf5m+ES gate
+        # is the universal-alpha breakout gate that lifted
+        # e_multi_day_breakout from 77.8% → 95.97% WR. No reason to
+        # believe g_inside_bar_breakout's edge differs structurally;
+        # this gate cannot hurt and may lift the already-70% baseline.
+        # Behind require_tf5m_es_gate (default True) per pt6 convention.
+        _passed, _ = tf5m_es_gate(
+            market, direction,
+            strategy_name=self.name, config=self.config, logger=logger,
+        )
+        if not _passed:
             return None
 
         if stop_dist < self._min_stop_ticks * _TICK or \

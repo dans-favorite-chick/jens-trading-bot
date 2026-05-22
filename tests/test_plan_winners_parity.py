@@ -66,8 +66,17 @@ WINNERS_BEYOND_PLAN = (
 # (only the sub-evaluator inside opening_session is intended to fire).
 # It's allowed to exist as long as it's NOT validated=True.
 ALLOWED_DISABLED_LEGACIES = (
-    "orb", "vwap_pullback", "compression_breakout", "noise_area",
-    "high_precision_only",
+    "orb",                # superseded by opening_session.orb sub-evaluator
+    "vwap_pullback",      # superseded by vwap_pullback_v2 (Phase 5, 2026-05-17)
+    "compression_breakout",  # superseded by compression_breakout_v2 (which was then KILLED)
+    "noise_area",         # retired 2026-05-15 (target=entry bug + anti-edge)
+    "high_precision_only", # retired 2026-05-13 (557 trades / 29% WR / -$1,082)
+    # 2026-05-22 pt8 (per agent ac705046): cover all the disabled legacies
+    # so a "promote-by-vibes" PR can't silently flip enabled=True without
+    # tripping CI. Each of these has empirical evidence supporting the
+    # disabled state — see docs/PHASE_13_IMPLEMENTATION_PLAN.md §A.
+    "big_move_signal",    # demoted 2026-05-21 (not in plan §1.1, no backtest)
+    "nq_lsr",             # demoted 2026-05-21 (not in plan §1.1)
 )
 
 
@@ -191,6 +200,33 @@ def test_every_plan_winner_has_per_strategy_risk_key():
                 f"Plan §1.1 winner '{name}' missing from STRATEGY_KEYS in "
                 f"core/strategy_risk_registry.py."
             )
+
+
+def test_allowed_legacies_stay_disabled():
+    """2026-05-22 pt8 (agent ac705046 audit gap): assert that every
+    ALLOWED_DISABLED_LEGACIES entry actually IS disabled today. The
+    list exists to grant amnesty to legacy files that still live in
+    the repo + import paths but must never fire. Without this test,
+    a casual `enabled=True` flip on any legacy slips through CI.
+
+    To re-promote a legacy: remove it from ALLOWED_DISABLED_LEGACIES
+    AND add it to WINNERS_PHASE13 (or BEYOND_PLAN) with a backtest
+    citation. Both edits required — by design.
+    """
+    from config.strategies import STRATEGIES
+    for name in ALLOWED_DISABLED_LEGACIES:
+        cfg = STRATEGIES.get(name)
+        if cfg is None:
+            # Strategy entirely removed from config = fine; the legacy
+            # tuple is for files in the repo, not for config presence.
+            continue
+        assert cfg.get("enabled") is False, (
+            f"Legacy strategy '{name}' has enabled={cfg.get('enabled')}, "
+            f"but it's listed in ALLOWED_DISABLED_LEGACIES. Either:\n"
+            f"  (a) revert the enabled flag, or\n"
+            f"  (b) promote it: remove from ALLOWED_DISABLED_LEGACIES, "
+            f"add to WINNERS_PHASE13/BEYOND_PLAN with backtest evidence."
+        )
 
 
 def test_no_killed_strategies_are_enabled():

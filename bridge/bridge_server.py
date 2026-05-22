@@ -77,6 +77,21 @@ trade_log.addHandler(_th)
 # leave it at the project root.
 _VOLUMETRIC_ROOT = Path(__file__).resolve().parent.parent
 
+# 2026-05-22 pt8 (B-032 hardening): track the last volumetric write so
+# dashboard / bridge health endpoint can surface "minutes since last
+# volumetric bar" — silent failures like the 2026-05-19 → 2026-05-22
+# cliff become loud.
+_LAST_VOLUMETRIC_EMIT_TS: float = 0.0
+
+
+def get_last_volumetric_emit_ts() -> float:
+    """Unix epoch seconds of the most recent successful volumetric write.
+
+    0.0 if the bridge has never received one. Used by the bridge health
+    endpoint (:8767) and the dashboard to alarm on stale volumetric data.
+    """
+    return _LAST_VOLUMETRIC_EMIT_TS
+
 # Required keys on a "volumetric_bar" message (a malformed message —
 # missing any of these — gets dropped without corrupting the latest
 # file). Schema matches strategies/footprint_cvd_reversal.py reader.
@@ -115,10 +130,22 @@ async def _handle_volumetric_bar(msg: dict, root: Path | None = None) -> None:
 
     base = Path(root) if root is not None else _VOLUMETRIC_ROOT
 
+    # 2026-05-22 pt8 (B-032 hardening): stamp a `writer` field so future
+    # forensics can answer "who wrote this and when" from the file alone.
+    # Don't mutate `msg` (callers may reuse it); shallow-copy + add.
+    import os
+    import socket
+    stamped = dict(msg)
+    stamped.setdefault(
+        "writer",
+        f"bridge_server@{socket.gethostname()}/pid{os.getpid()}",
+    )
+    stamped.setdefault("received_at", time.time())
+
     latest = base / "data" / "volumetric_latest.json"
     latest.parent.mkdir(parents=True, exist_ok=True)
     tmp = latest.with_suffix(".tmp")
-    payload = json.dumps(msg)
+    payload = json.dumps(stamped)
     tmp.write_text(payload, encoding="utf-8")
     tmp.replace(latest)
 
@@ -126,6 +153,10 @@ async def _handle_volumetric_bar(msg: dict, root: Path | None = None) -> None:
     history.parent.mkdir(parents=True, exist_ok=True)
     with history.open("a", encoding="utf-8") as f:
         f.write(payload + "\n")
+
+    # Heartbeat — see get_last_volumetric_emit_ts() docstring.
+    global _LAST_VOLUMETRIC_EMIT_TS
+    _LAST_VOLUMETRIC_EMIT_TS = time.time()
 
 
 class BridgeServer:
