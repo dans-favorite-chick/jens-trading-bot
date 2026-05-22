@@ -90,6 +90,20 @@ class SpringSetup(BaseStrategy):
             logger.debug(f"[EVAL] {self.name}: NO_SIGNAL no_spring_wick")
             return None
 
+        # ── 2026-05-22 ship pt6 (per-strategy confluence research a16cf0ef) ──
+        # Universal tf_60m + es_correlation gate. Per 5y backtest of 20,762
+        # spring_setup trades: baseline WR 41.4%, with this gate alone WR
+        # lifts to 54.6% (n=7,655). 2-combo `tf_60m + es_correlation` reaches
+        # WR 57.7% and total $109,704 from 22% of trades (~$22K/yr).
+        from core.confluence_gates import tf60m_es_gate
+        _passed, _reason = tf60m_es_gate(
+            market, direction,
+            strategy_name=self.name, config=self.config, logger=logger,
+        )
+        if not _passed:
+            self._last_reject = _reason
+            return None
+
         # ── TREND Day Direction Gate ─────────────────────────────────
         # On TREND days, springs fire WITH the trend only — not against it.
         # A bearish wick on a High-Conviction Bullish TREND day is NOT a

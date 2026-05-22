@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 from strategies.base_strategy import BaseStrategy, Signal
 from core.candlestick_patterns import CandlestickAnalyzer, get_pattern_confluence
+from core.confluence_gates import regime_veto, tf60m_es_gate
 
 logger = logging.getLogger(__name__)
 
@@ -72,16 +73,15 @@ class BiasMomentumFollow(BaseStrategy):
         # bias_momentum WR drops to 36.0% (vs baseline 38.8%) and
         # avg P&L drag of -$2.55/trade in this regime — 7,380 historical
         # trades cumulatively cost -$18,847. Removing them removes drag
-        # AND reduces drawdown exposure (yesterday's ZERO_GATE losses
-        # were predominantly OVERNIGHT_RANGE trades).
-        if self.config.get("veto_overnight_range", True) and regime == "OVERNIGHT_RANGE":
-            self._last_reject = (
-                f"REGIME_VETO: OVERNIGHT_RANGE (5y backtest shows "
-                f"-$2.55/trade drag — see CONFLUENCE_VOTER_RESEARCH)"
-            )
-            logger.info(
-                f"[EVAL] {self.name}: NO_SIGNAL regime_veto=OVERNIGHT_RANGE"
-            )
+        # AND reduces drawdown exposure.
+        # 2026-05-22 ship pt6: refactored to use shared helper.
+        _passed, _reason = regime_veto(
+            market, ("OVERNIGHT_RANGE",),
+            strategy_name=self.name, config=self.config, logger=logger,
+            config_key="veto_overnight_range",
+        )
+        if not _passed:
+            self._last_reject = _reason or "REGIME_VETO: OVERNIGHT_RANGE"
             return None
 
 
@@ -768,60 +768,18 @@ class BiasMomentumFollow(BaseStrategy):
         # this combo lifts WR from 38.8% to 51.6% (12,039 trades — 33%
         # of total — produce 83% of total 5y P&L = +$257K).
         #
-        # tf_60m: market["tf_bias_60m"] or market["tf_bias"]["60m"] —
-        #   "BULL" / "BEAR" / "NEUTRAL". Must match trade direction.
-        # es_correlation: from intermarket_engine — sign of NQ/ES
-        #   relative-strength must match trade direction. Field name
-        #   varies; try a few common spellings, default to no-veto if
-        #   ES data not available (graceful degrade — sim_bot with MES
-        #   feed dormant won't get blocked).
-        if self.config.get("require_tf60m_es_gate", True) and not trend_day:
-            # tf_60m check
-            tf_60m_bias = None
-            tf_bias_obj = market.get("tf_bias")
-            if isinstance(tf_bias_obj, dict):
-                tf_60m_bias = tf_bias_obj.get("60m")
-            if tf_60m_bias is None:
-                tf_60m_bias = market.get("tf_bias_60m")
-            if tf_60m_bias is None:
-                # Field not populated — graceful degrade (sim may not
-                # have built up 60m bars yet on cold start)
-                pass
-            else:
-                tf_60m_dir = "LONG" if tf_60m_bias == "BULL" else "SHORT" if tf_60m_bias == "BEAR" else None
-                if tf_60m_dir is not None and tf_60m_dir != direction:
-                    self._last_reject = (
-                        f"TF60M_GATE: tf_bias_60m={tf_60m_bias} disagrees with {direction} "
-                        f"(per voter research +$8.03/trade edge when agrees)"
-                    )
-                    logger.info(
-                        f"[EVAL] {self.name}: NO_SIGNAL tf60m_disagree "
-                        f"({direction} vs {tf_60m_bias}, score={momentum_score})"
-                    )
-                    return None
-
-            # ES correlation check (NQ vs ES relative strength)
-            # Field name varies; intermarket_engine emits these:
-            es_relstrength = market.get("es_nq_rs")
-            if es_relstrength is None:
-                _im = market.get("intermarket") or {}
-                if isinstance(_im, dict):
-                    es_relstrength = _im.get("nq_es_relative_strength")
-            if isinstance(es_relstrength, (int, float)):
-                # Positive = NQ outperforming ES = bullish bias
-                es_dir = "LONG" if es_relstrength > 0 else "SHORT" if es_relstrength < 0 else None
-                if es_dir is not None and es_dir != direction:
-                    self._last_reject = (
-                        f"ES_GATE: ES_NQ_RS={es_relstrength:+.4f} disagrees with {direction} "
-                        f"(per voter research +$5.19/trade edge when agrees)"
-                    )
-                    logger.info(
-                        f"[EVAL] {self.name}: NO_SIGNAL es_disagree "
-                        f"({direction} vs RS={es_relstrength:+.4f})"
-                    )
-                    return None
-            # If ES data unavailable (no MES feed yet), graceful degrade
-            # — fall through. Same behavior as today.
+        # 2026-05-22 ship pt6: refactored to use shared helper at
+        # core/confluence_gates.py so every strategy applies the exact
+        # same gate logic. trend_day bypass preserved — on confirmed
+        # TREND days the multi-TF voter ensemble has already decided.
+        if not trend_day:
+            _passed, _reason = tf60m_es_gate(
+                market, direction,
+                strategy_name=self.name, config=self.config, logger=logger,
+            )
+            if not _passed:
+                self._last_reject = _reason or "TF60M_ES_GATE: disagree"
+                return None
 
 
         if not trend_day:

@@ -45,6 +45,124 @@ backtest's ~38-40% as the gates filter out weak signals.
 
 
 
+### B-031 — msu_score (microstructure score) is ANTI-predictive — IC -0.152 (HIGH)
+**Discovered:** 2026-05-22 by per-strategy confluence-voter agent a16cf0ef during
+the 5y backtest of every voter on 6 RTH directional strategies.
+**Symptom:** the `msu_score` field (computed in core/microstructure.py and surfaced
+in market snapshots) has an Information Coefficient of **-0.152** across 12,000+
+trades — i.e. HIGHER msu_score → LOWER win rate, statistically significant.
+**Suspected root cause:** the score weights "absorption + delta divergence + spread
+expansion" as bullish/bearish microstructure flags, but the live formula appears
+to be inverted vs. what the voter research expects. Possibly an adverse-selection
+trap (the score lights up at the worst entry moments — late chase / blow-off / fade
+opportunities).
+**Status:** ⚪ INFORMATIONAL — msu_score is **advisory-only** in the bot (no
+strategy uses it as a hard gate), so no live $ damage. But if anyone ever wires
+it into a gate they will systematically lose money. Audit the formula:
+  1. Grep for `msu_score` callers and confirm none gate on it (only log/observe)
+  2. Open core/microstructure.py — check sign of the absorption + delta-divergence terms
+  3. Re-run the IC test after any formula change
+**Priority:** MEDIUM (no live damage today, but a footgun for any future "add a
+microstructure confluence" PR).
+
+
+
+### B-032 — Volumetric (TBBO tick) recorder broken — 1 file / 648 bytes in 2 months (HIGH)
+**Discovered:** 2026-05-22 by live-data confluence agent attempting to read the
+2-month TBBO live capture to cross-check the 5y voter findings.
+**Symptom:** `data/historical/databento_tbbo/` (or wherever the live volumetric
+recorder writes) contains exactly **1 file, 648 bytes total** across the last 2
+months. Compare: the 5y backtest TBBO replay file is **44M ticks / ~1GB**. The
+live recorder is silently dropping every tick.
+**Suspected root cause:** likely the recorder's writer was killed by a startup race
+or the file path got broken in a refactor. Phoenix's "fail silently" pattern bit us
+again — the bridge stays alive, dashboards stay green, but nothing is being recorded.
+**Why this matters:** without live TBBO capture we can't:
+  - Validate that 5y backtest voter findings hold up in 2026's microstructure
+  - Detect regime shifts in DOM/footprint behavior
+  - Train any future microstructure model on recent live data
+**Action:** find the volumetric recorder process (likely `tools/volumetric_recorder.py`
+or similar), check its log, fix the silent failure, add a heartbeat that alarms if
+no tick has been written in 60s during RTH.
+**Priority:** HIGH (data loss is permanent — every day we don't fix this is another
+day of training-data gap).
+
+
+
+### B-033 — tf_1m + orb_direction in min_confluence is noise, not signal (LOW)
+**Discovered:** 2026-05-22 by per-strategy confluence agent a16cf0ef.
+**Symptom:** several strategies include `tf_1m` and `orb_direction` in their
+min_confluence vote tally. Per-voter IC tests show both are essentially **random**:
+  - tf_1m: IC -0.012 (noise; 1m bias flips every 2-3 bars in MNQ)
+  - orb_direction: IC +0.018 (noise; the 15m OR break direction doesn't predict
+    further continuation once the actual breakout has triggered the strategy)
+**Action:** remove both voters from every strategy's confluence tally. Lowers
+min_confluence threshold marginally but removes false-positive votes that mask
+when the GOOD voters (tf_60m, tf_5m, es_correlation, vwap_relation) disagree.
+**Strategies affected:** bias_momentum, vwap_pullback_v2, high_precision_only,
+ib_breakout (any that compute votes = sum of TF biases).
+**Priority:** LOW (no $ damage, just confluence-score noise).
+
+
+
+### B-034 — high_precision_only needs tick_rate_60s ≥ 600 gate (MEDIUM)
+**Discovered:** 2026-05-22 by per-strategy confluence agent a16cf0ef.
+**Symptom:** high_precision_only fires in low-tick-rate periods (overnight,
+lunch) where its microstructure pattern detection is unreliable. Voter research
+shows WR lifts from 47% → 62% on the 35% of historical trades where
+`tick_rate_60s ≥ 600` (rough proxy: active RTH with real flow).
+**Action:** add a hard gate at the top of high_precision_only.evaluate():
+```python
+if (market.get("tick_rate_60s") or 0) < 600:
+    return None
+```
+Plus the standard `require_tick_rate_gate` config flag for back-out.
+**Priority:** MEDIUM (improves WR by 15pp on a strategy that's already in the
+plan winners list).
+
+
+
+### B-035 — spring_setup uses dom_imbalance but the live signal is INVERTED (MEDIUM)
+**Discovered:** 2026-05-22 by per-strategy confluence agent a16cf0ef when
+cross-checking 5y findings against the 2-month live capture (where it exists).
+**Symptom:** spring_setup's dom_imbalance "votes" appear to use the wrong sign —
+when the live DOM shows heavy bid stacking (which the strategy reads as bullish
+support for a LONG spring), the trade actually performs WORSE. Suspect cause:
+DOM aggregation reads ask-side liquidity for the "bullish" calc and bid-side
+for "bearish" (inverted from intent).
+**Action:** trace `dom_imbalance` from feeder → strategy. Confirm sign with 2-week
+live A/B (gate ON vs OFF). If the bug is confirmed, either flip the sign or rip
+out the voter entirely.
+**Priority:** MEDIUM (spring_setup is a plan winner; getting this right adds
+~$3-5K/yr per the 5y bias estimate).
+
+
+
+### B-036 — ib_breakout + es_nq_confluence small-n; defer hard gates (DEFERRED)
+**Discovered:** 2026-05-22 by per-strategy confluence agent a16cf0ef.
+**Symptom:** voter research wanted to recommend gates on ib_breakout and
+es_nq_confluence, but both strategies have **<100 trades / 5y** in the
+backtest. Wilson 95% CI on any per-voter delta is too wide to make a
+statistically defensible call.
+**Decision:** intentionally **DEFER** any new gates on these two until they
+accumulate ≥100 trades. Track via `tools/validation_tracker.py` weekly.
+**Priority:** ⚪ INFORMATIONAL — capture the deferral so a future "add gates
+everywhere" PR doesn't re-do this work and ship a hot opinion on n=43.
+
+
+
+### B-037 — opening_session.open_drive Bug B2 fix needs cross-verification (LOW)
+**Discovered:** 2026-05-22 while applying tf60m+ES gate to .open_drive.
+**Symptom:** the Bug B2 fix (target = entry ± 2R instead of pivot_pp) is in
+place and looks correct, but no end-to-end live trade has hit T1 yet to confirm
+the new target math under live commissions/slippage. Want a paper sample of at
+least 5 LONG + 5 SHORT live signals before declaring B2 fully closed.
+**Action:** none required — the new tf60m+ES gate may slow down signal volume,
+so widen the watch period from 1 week → 4 weeks.
+**Priority:** ⚪ INFORMATIONAL.
+
+
+
 ### B-008 — Phase 13 target overrides silently no-op for late-pricing strategies (HIGH)
 **Status:** FIXED in commit a03086e (deferred-recompute path), and again in
 F-005 of pt2 audit (LIMIT-fill anchor). See B-CLOSED-007 below.

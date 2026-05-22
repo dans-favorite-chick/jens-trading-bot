@@ -53,6 +53,7 @@ from zoneinfo import ZoneInfo
 
 from strategies.base_strategy import BaseStrategy, Signal
 from config.settings import TICK_SIZE
+from core.confluence_gates import regime_veto, tf60m_es_gate
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +169,16 @@ class RaschkeBaseline(BaseStrategy):
                  session_info: dict) -> Optional[Signal]:
         logger.debug(f"[EVAL] {self.name}: entered evaluate()")
 
+        # Per a16cf0ef research: OPEN_MOMENTUM regime drags -$7.43/trade
+        # on raschke_baseline (pullback strategy struggles when market
+        # is in straight-up/down momentum mode with no retracements).
+        _passed, _ = regime_veto(
+            market, ("OPEN_MOMENTUM",),
+            strategy_name=self.name, config=self.config, logger=logger,
+        )
+        if not _passed:
+            return None
+
         # Keep EMA state warm on every eval cycle (uses 5m bar end_time
         # dedup to avoid double-updating on the same bar).
         if bars_5m:
@@ -214,6 +225,16 @@ class RaschkeBaseline(BaseStrategy):
         direction = self._trend_direction(atr)
         if direction is None:
             logger.debug(f"[EVAL] {self.name}: NO_SIGNAL no_trend")
+            return None
+
+        # Universal confluence gate: tf_60m + es_correlation must agree.
+        # Per a16cf0ef research: WR lifts from baseline to ~54% on
+        # raschke_baseline when both voters align with trend direction.
+        _passed, _ = tf60m_es_gate(
+            market, direction,
+            strategy_name=self.name, config=self.config, logger=logger,
+        )
+        if not _passed:
             return None
 
         ema_ref = self._ema.get(self._ema_ref_period)

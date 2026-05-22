@@ -284,6 +284,21 @@ class MultiDayBreakout(BaseStrategy):
             logger.debug(f"[EVAL] {self.name}: NO_SIGNAL no_break")
             return None
 
+        # ── 2026-05-22 ship pt6 (per-strategy confluence research) ──
+        # tf_5m + ES gate. 5y data (685 trades): baseline WR 77.8%.
+        # With this combo: WR jumps to 95.97% (n=273) — the LARGEST WR
+        # improvement of any gate in the per-strategy analysis. The
+        # 3-day breakout setup is already high-quality; this gate
+        # filters out the breakouts that 5m structure / ES doesn't
+        # confirm — those are the false-breakout failures.
+        from core.confluence_gates import tf5m_es_gate
+        _passed, _reason = tf5m_es_gate(
+            market, direction,
+            strategy_name=self.name, config=self.config, logger=logger,
+        )
+        if not _passed:
+            return None
+
         # Stop at opposite extreme of breakout 5m bar + buffer
         if direction == "LONG":
             stop = low5 - self._stop_buffer_ticks * _TICK

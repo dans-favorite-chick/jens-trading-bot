@@ -96,6 +96,20 @@ class VwapBandPullback(BaseStrategy):
         bars_1m: list,
         session_info: dict,
     ) -> Optional[Signal]:
+        # ── 2026-05-22 ship pt6 (per-strategy confluence research) ──
+        # OPEN_MOMENTUM regime VETO. Per 5y data (324 trades): the
+        # opening-hour regime had WR 32.5% / -$35.95/trade — the MOST
+        # extreme negative-edge regime of any per-strategy finding.
+        # Mean-reversion strategies die in the opening hour where
+        # trend dominates. Veto is FREE money.
+        from core.confluence_gates import regime_veto
+        _passed, _ = regime_veto(
+            market, ("OPEN_MOMENTUM",),
+            strategy_name=self.name, config=self.config, logger=logger,
+        )
+        if not _passed:
+            return None
+
         mtf = self._derive_mtf_trend_from_market(market)
 
         min_bars            = self.config.get("min_bars", 50)

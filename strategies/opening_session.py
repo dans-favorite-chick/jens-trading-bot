@@ -37,6 +37,7 @@ from datetime import datetime, time as dtime, timedelta
 from typing import Any, Optional
 
 from config.settings import TICK_SIZE
+from core.confluence_gates import regime_veto, tf60m_es_gate
 from core.session_levels import (
     classify_opening_type,
     is_in_window,
@@ -367,6 +368,18 @@ class OpeningSessionStrategy(BaseStrategy):
             return None
 
         direction = "LONG" if c5 > rth_open else "SHORT"
+
+        # Per a16cf0ef research: tf_60m + es_correlation gate lifts WR on
+        # opening_session.open_drive from baseline to ~55%. Open drive
+        # continuation needs higher-TF and broad-market alignment.
+        _passed, _ = tf60m_es_gate(
+            market, direction,
+            strategy_name=f"{self.name}.{sub}",
+            config=self.config, logger=logger,
+        )
+        if not _passed:
+            self._log_eval(f"NO_SIGNAL {sub} tf60m_es_gate_reject")
+            return None
 
         entry_vol_ratio = float(self.config.get("open_drive_entry_volume_ratio", 1.2))
         if avg_v1 <= 0 or v1 < entry_vol_ratio * avg_v1:
@@ -851,6 +864,30 @@ class OpeningSessionStrategy(BaseStrategy):
         # One-trade-per-day: reject if first break was the opposite direction.
         if first_break is not None and first_break != direction:
             self._log_eval(f"NO_SIGNAL {sub} opposite_of_first_break")
+            return None
+
+        # Per a16cf0ef research: AFTERNOON_CHOP drag -$9.40/trade and
+        # LATE_AFTERNOON drag -$3.04/trade on opening_session.orb.
+        # Veto those regimes before going further.
+        _passed, _ = regime_veto(
+            market, ("AFTERNOON_CHOP", "LATE_AFTERNOON"),
+            strategy_name=f"{self.name}.{sub}",
+            config=self.config, logger=logger,
+            config_key="orb_regime_veto_enabled",
+        )
+        if not _passed:
+            self._log_eval(f"NO_SIGNAL {sub} regime_veto")
+            return None
+
+        # Per a16cf0ef research: tf_60m + es_correlation lifts ORB WR
+        # from baseline to ~55%. Big single edge — apply before CVD.
+        _passed, _ = tf60m_es_gate(
+            market, direction,
+            strategy_name=f"{self.name}.{sub}",
+            config=self.config, logger=logger,
+        )
+        if not _passed:
+            self._log_eval(f"NO_SIGNAL {sub} tf60m_es_gate_reject")
             return None
 
         # 2026-05-17: Phase 7 CODE PATCH 4 — CVD alignment gate.

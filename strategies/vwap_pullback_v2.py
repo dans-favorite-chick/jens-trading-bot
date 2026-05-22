@@ -210,6 +210,19 @@ class VWAPPullbackV2(BaseStrategy):
             logger.debug(f"[EVAL] {self.name}: NO_SIGNAL no_pullback_pattern")
             return None
 
+        # ── 2026-05-22 ship pt6 (per-strategy confluence research) ──
+        # tf_60m + ES gate. 5y data (5,437 trades): WR 39% → 54% with
+        # tf_60m alone (n=1,924), edge +$16/trade. 2-combo brings it
+        # to 58.8% on 826 trades. Captures 331% of baseline P&L from
+        # 35% of trades.
+        from core.confluence_gates import tf60m_es_gate
+        _passed, _reason = tf60m_es_gate(
+            market, direction,
+            strategy_name=self.name, config=self.config, logger=logger,
+        )
+        if not _passed:
+            return None
+
         confluences.append(f"Near VWAP ({vwap_dist_ticks:.0f}t away)")
 
         # ── EMA structure check ────────────────────────────────────
