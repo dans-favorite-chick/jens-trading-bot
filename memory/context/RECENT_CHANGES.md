@@ -5,6 +5,31 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+### 2026-05-24 12:05 Central Daylight Time — Session changes: 39 files modified
+
+**Files changed:**
+- `.gitignore`
+- `AI Trading Analysis System Research.md`
+- `BUILD_MAP.md`
+- `Epic Update v1 Prompt.md`
+- `OPERATOR_TODO.md`
+- `PHOENIX_PROJECT_PROMPT.md`
+- `PHOENIX_ROADMAP_v4.md`
+- `PROJECT_EXPORT_PROMPT.md`
+- `README.md`
+- `REBUILD_PLAN.md`
+- `SCRATCH_DIRS.md`
+- `STRATEGY_KNOWLEDGE_INJECTION_PROMPT.md`
+- `audit_report.md`
+- `bots/prod_bot.py`
+- `bots/sim_bot.py`
+- `config/settings.py`
+- `config/strategies.py`
+- `data/historical/volumetric/2026-05-22.jsonl`
+- `data/historical/volumetric/_recorder.log`
+- `docs/ACTION_PLAN_V2_1_DELTAS.md`
+
+---
 ### 2026-05-24 11:59 Central Daylight Time — Session changes: 38 files modified
 
 **Files changed:**
