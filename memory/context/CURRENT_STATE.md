@@ -1,6 +1,6 @@
 # Phoenix Bot — Current State
 
-_Last updated: **2026-05-18 09:55 CT** (Phase 13 strategy research + 7-strategy lab + compounding backtest)_
+_Last updated: 2026-05-24 09:47 Central Daylight Time_
 
 **Quick refs:**
 - **[RECENT_CHANGES.md](RECENT_CHANGES.md)** — running dated log of every change, newest first

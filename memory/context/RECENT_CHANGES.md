@@ -5,6 +5,13 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+### 2026-05-24 09:47 Central Daylight Time — Session changes: 2 files modified
+
+**Files changed:**
+- `data/historical/volumetric/2026-05-22.jsonl`
+- `data/historical/volumetric/_recorder.log`
+
+---
 ### 2026-05-18 07:00-09:55 CT — Phase 13 research sprint: 7 new strategies tested + 2 bugs root-caused + compounding backtest (PRODUCTION CODE UNTOUCHED)
 
 Operator: "test all the strategies you suggested ... a-g. fix bugs so we can test the opening strategies. keep a log of everything that we're planning on implimenting, but don't change it yet. let's do it all together." Then: "back test the strategies starting with just 1 mnq contract at a time. but as we increase in profit, increase in contracts bought. ... how long until we can start buying 2, 3, 4, 5 etc."
