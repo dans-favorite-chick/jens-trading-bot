@@ -1,6 +1,6 @@
 # Phoenix Bot — Current State
 
-_Last updated: 2026-05-24 13:42 Central Daylight Time_
+_Last updated: 2026-05-25 08:38 Central Daylight Time_
 
 **Quick refs:**
 - **[RECENT_CHANGES.md](RECENT_CHANGES.md)** — running dated log of every change, newest first
@@ -550,7 +550,7 @@ Six items shipped behind off-by-default flags:
    `agents/sentiment_flow_agent.py`. **Real INT8 ONNX model now installed
    under `models/finbert_onnx_int8/`** (downloaded via optimum-cli;
    gitignored). Council voter wired at `DEFAULT_WEIGHT = 0.0`.
-4. **Chicago VPS migration plan** — `docs/chicago_vps_migration_plan.md`
+4. **Chicago VPS migration plan** — `docs/archive/chicago_vps_migration_plan.md`
    + `tools/verify_jsonl_continuity.py`. **STRICKEN per Jennifer
    2026-04-25** — Phoenix stays on the Trading PC. Doc preserved for
    reference; no infra moves planned.
