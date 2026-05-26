@@ -5,6 +5,98 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+### 2026-05-25 22:34 Central Daylight Time — Session changes: 90 files modified
+
+**Files changed:**
+- `.gitignore`
+- `AI Trading Analysis System Research.md`
+- `BUILD_MAP.md`
+- `Epic Update v1 Prompt.md`
+- `OPERATOR_TODO.md`
+- `PHOENIX_PROJECT_PROMPT.md`
+- `PHOENIX_ROADMAP_v4.md`
+- `PROJECT_EXPORT_PROMPT.md`
+- `README.md`
+- `REBUILD_PLAN.md`
+- `SCRATCH_DIRS.md`
+- `STRATEGY_KNOWLEDGE_INJECTION_PROMPT.md`
+- `archived/menthorq_2026-05-05/menthorq/gamma/2026-04-20_blind.txt`
+- `archived/menthorq_2026-05-05/menthorq/gamma/2026-04-20_levels.txt`
+- `archived/menthorq_2026-05-05/menthorq/gamma/2026-04-21_blind.txt`
+- `archived/menthorq_2026-05-05/menthorq/gamma/2026-04-21_levels.txt`
+- `archived/menthorq_2026-05-05/menthorq/gamma/README.md`
+- `archived/menthorq_2026-05-05/menthorq_daily.json`
+- `audit_report.md`
+- `bots/base_bot.py`
+
+---
+### 2026-05-25 — F-26 / F-12 / F-25 closure + B2-3 silent-failure audit + P1-8 verified
+
+Three SYNTHESIS_2026-05-24 findings closed and three latent silent-failure
+bugs killed in one session. See
+[`docs/incidents.md`](../../docs/incidents.md) 2026-05-25 entry for the
+full narrative + file:line cross-references.
+
+**Findings closed:**
+
+- **F-26** — Bug B2 `open_drive` target FULL fix (R1/S1 continuation).
+  LONG = `2·PP − PD_L`, SHORT = `2·PP − PD_H`, with 1.5R-min fallback to
+  2R fixed. File: `strategies/opening_session.py:408-446`. 3 new tests in
+  `tests/test_opening_session.py`. (Operator chose continuation over
+  reversion-PP; was instant-loser on strong drives.)
+- **F-12 (PARTIAL)** — `dom_pullback` restored from
+  `git show b35f6c7^:strategies/dom_pullback.py` and re-enabled in sim
+  heavy-test (`enabled=True, validated=False`). Live safety intact:
+  `LIVE_STRATEGY_ALLOWLIST` excludes it, `prod_bot.only_validated` gate
+  blocks it, `walk_forward_gate=informational`. Per operator directive:
+  accumulate live-paper data, decide later.
+- **F-25** — Per-strategy `walk_forward_gate` field added to 8 strategies
+  and wired into `tools/validation_tracker.py --check-promotion`.
+  `bias_momentum=hard_block` (REFUSES promotion without PASS report);
+  other 7 = `informational`. Verified `bias_momentum` is now BLOCKED from
+  staying `validated=True` until the harness runs.
+
+**Latent bugs killed (B2-3 silent-failure audit):**
+
+- **CR assessment dead since 2026-05-06.** `_mq_snap` NameError in
+  `bots/_strategy_dispatch.py:356`. CR verdict stuck on "UNKNOWN" every
+  bar for 19 days; day-classifier downstream degraded. Fix: pass `None`;
+  `core.continuation_reversal.assess()` now documents `mq_snap` as
+  deprecated.
+- **Big-Move exhaustion exit never fired since 2026-05-15.** `market`
+  NameError in `bots/_ws_dispatcher.py:441` swallowed at `logger.debug`.
+  Fix: use `bot.aggregator.snapshot()`. Log upgraded to `warning` per
+  B-006 silent-failure policy.
+- **Chandelier trail broken (pre-decomposition).** `market` NameError in
+  `bots/_ws_dispatcher.py:551` swallowed at `logger.warning` — B-006 had
+  upgraded the log level on 2026-05-20, so the error had been firing into
+  the void. Fix: hoist `_market = bot.aggregator.snapshot()`.
+
+All three are textbook `feedback_silent_failures.md` cases.
+
+**P1-8 verification:** 2026-05-25 09:22:07 — `SimIB Breakout` stop placed
+→ working → filled → execution captured → position updated. Full Phoenix
+→ NT8 → ATI → fill → position pipeline confirmed live. NT8 ATI settings
+audited (Settings → Automated trading interface → "Submit as is" for both
+order types under the TradeStation email interface, which is disabled
+so the setting is irrelevant). **No order-type conversion happening.**
+
+**New issues spawned to separate tasks (not fixed this session):**
+
+- `bridge/oif_writer.py` `.tmp` staging — NT8 Log tab flooded with
+  "Unknown OIF file type" because NT8 reads the `.tmp` Phoenix creates
+  during atomic writes. Pipeline works; logs are ~50% noise.
+- `tools/clean_nt8_outgoing.py` janitor — NT8 `outgoing/` has hundreds
+  of stale UUID order-ack files.
+
+**Test suite:** 2489 passed, 14 skipped, 0 failed.
+
+**Phase / Findings:** Phase = post-Phase-13 synthesis sprint. Findings
+closed against `docs/audits/SYNTHESIS_2026-05-24.md`: F-26, F-12 (partial),
+F-25.
+
+---
+
 ### 2026-05-25 09:32 Central Daylight Time — Session changes: 83 files modified
 
 **Files changed:**
@@ -814,7 +906,7 @@ Killed PID 24568 at 14:30; watchdog respawned as PID 32024 at 14:32:54
 on the latest code. sim PID 27244 had already auto-restarted overnight
 (02:01) so sim was fine.
 
-Memory entry added: [code_changes_dont_auto_deploy.md](../../../Users/Trading%20PC/.claude/projects/C--Trading-Project/memory/code_changes_dont_auto_deploy.md) —
+Memory entry added: `code_changes_dont_auto_deploy.md` in user-memory (`~/.claude/projects/C--Trading-Project/memory/`) <!-- LINK BROKEN 2026-05-25: was ../../../Users/Trading%20PC/.claude/projects/C--Trading-Project/memory/code_changes_dont_auto_deploy.md (path outside repo) --> —
 flag "prod needs restart" after any behavior-affecting commit.
 
 **2. Dashboard calendar-day boundary fix (commit `71fc5af`):** operator

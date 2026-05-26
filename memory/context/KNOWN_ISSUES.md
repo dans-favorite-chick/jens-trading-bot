@@ -2,7 +2,33 @@
 
 _Open issues that haven't been resolved yet. Resolved issues moved to semantic/lessons_learned.md._
 
-_Last refreshed: 2026-05-18 01:25 CT (Phase 12C MES feed dependency added)._
+_Last refreshed: 2026-05-25 (F-26 / F-25 / B2-3 silent-failure audit closures; 2 spawned tasks added)._
+
+## 🟡 OPEN (2026-05-25) — NT8 Log tab flooded with "Unknown OIF file type" errors
+
+Phoenix's atomic OIF writes stage the file as `.tmp` inside `incoming/` then
+rename. NT8's FileSystemWatcher reads the `.tmp` first, rejects it, and logs
+"Unknown OIF file type." The rename outpaces the reject-and-delete so the
+trade pipeline still works end-to-end (verified P1-8 today at 09:22:07), but
+the Log tab is ~50% noise from this race.
+
+**Fix (spawned as separate task):** stage the `.tmp` outside `incoming/`
+(e.g. sibling `incoming_staging/` dir) and rename across directories into
+`incoming/` only when complete. File: [`bridge/oif_writer.py`](../../bridge/oif_writer.py).
+
+---
+
+## 🟡 OPEN (2026-05-25) — NT8 `outgoing/` folder has hundreds of stale UUID order-ack files
+
+Discovered during P1-8 verification. NT8 writes one ack file per order ID
+into `outgoing/`; nothing reaps them. Hundreds accumulated. Not blocking,
+but the dir is harder to scan during incidents.
+
+**Fix (spawned as separate task):** build `tools/clean_nt8_outgoing.py`
+janitor. Likely time-based (e.g. drop anything > 7 days old) with optional
+`--dry-run`.
+
+---
 
 ## 🚧 OPEN (2026-05-18, blocks Phase 12C live firing) — no live MES feed
 
@@ -253,6 +279,41 @@ deferred.
 **Not a blocker** — trades execute correctly, just a display issue.
 
 ## ✅ RECENTLY RESOLVED
+
+### F-26 — `open_drive` target FULL fix (R1/S1 continuation) — 2026-05-25
+
+Bug B2 closed. Continuation R1/S1 targets shipped: LONG → `R1 = 2·PP − PD_L`,
+SHORT → `S1 = 2·PP − PD_H`, with 1.5R-min fallback to 2R fixed. File:
+`strategies/opening_session.py:408-446`. 3 new tests in
+`tests/test_opening_session.py`.
+
+### F-25 — Per-strategy walk_forward_gate field + validation_tracker wiring — 2026-05-25
+
+8 strategies tagged. `bias_momentum` = `hard_block` (REFUSES promotion
+without a PASS walk-forward report); other 7 = `informational`.
+`tools/validation_tracker.py --check-promotion` now enforces. Verified:
+`bias_momentum` currently BLOCKED from staying `validated=True` until the
+harness runs.
+
+### CR assessment dead since 2026-05-06 — 2026-05-25
+
+`_mq_snap` NameError in `bots/_strategy_dispatch.py:356`. CR verdict was
+stuck on "UNKNOWN" every bar for 19 days; day-classifier downstream
+degraded. Fix: pass `None`; `core.continuation_reversal.assess()` documents
+`mq_snap` as deprecated.
+
+### Big-Move exhaustion exit never fired since 2026-05-15 — 2026-05-25
+
+`market` NameError in `bots/_ws_dispatcher.py:441` swallowed at
+`logger.debug`. Fix: use `bot.aggregator.snapshot()`. Log upgraded to
+`warning` per B-006 silent-failure policy.
+
+### Chandelier trail broken (pre-decomposition) — 2026-05-25
+
+`market` NameError in `bots/_ws_dispatcher.py:551` swallowed at
+`logger.warning` (B-006 had upgraded the level on 2026-05-20 — the error
+had been firing into the void). Fix: hoist
+`_market = bot.aggregator.snapshot()`.
 
 ### NT8 multi-stream issue — RECURRING (closed again 2026-04-25, root cause documented)
 
