@@ -49,23 +49,24 @@ class TestBaseBotShutdownHandler(unittest.TestCase):
     """The bot must recognize {"type": "shutdown"} and exit cleanly."""
 
     def test_handle_dashboard_command_has_shutdown_branch(self):
-        m = re.search(
-            r"def _handle_dashboard_command\(self, cmd: dict\).*?(?=\n    (?:async )?def |\Z)",
-            BASE_BOT_SRC, re.DOTALL,
-        )
-        self.assertIsNotNone(m, "could not locate _handle_dashboard_command")
-        body = m.group(0)
+        # 2026-05-24 P4-1 Stage 2: _handle_dashboard_command body extracted
+        # to bots/_dashboard_commands.py::DashboardCommandDispatcher.handle().
+        # base_bot.py keeps a thin 1-line delegation; the "shutdown" branch
+        # logic now lives in the dispatcher module.
+        DISPATCHER_SRC = (
+            Path(__file__).parent.parent / "bots" / "_dashboard_commands.py"
+        ).read_text(encoding="utf-8")
         self.assertIn(
-            'elif cmd_type == "shutdown":', body,
-            "_handle_dashboard_command missing 'shutdown' branch",
+            'elif cmd_type == "shutdown":', DISPATCHER_SRC,
+            "DashboardCommandDispatcher missing 'shutdown' branch",
         )
         self.assertIn(
-            "self._shutdown_requested = True", body,
-            "shutdown branch must set _shutdown_requested = True",
+            "self.bot._shutdown_requested = True", DISPATCHER_SRC,
+            "shutdown branch must set _shutdown_requested = True (on the bot)",
         )
         # WS close keeps the inner async-for from blocking forever.
         self.assertIn(
-            "self._ws.close()", body,
+            "self.bot._ws.close()", DISPATCHER_SRC,
             "shutdown branch must close the WS so async-for unblocks",
         )
 

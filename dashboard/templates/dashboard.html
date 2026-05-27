@@ -89,6 +89,12 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
 .slider-row label { min-width:180px; font-size:12px; color:var(--text-dim); }
 .slider-row input[type=range] { flex:1; accent-color:var(--blue); }
 .slider-row .slider-val { min-width:50px; font-family:var(--mono); font-size:13px; text-align:right; }
+/* P3-1: live "currently in force" pill next to each runtime slider.
+   Pulled from /api/status → bot.risk dict so the operator sees the
+   RiskManager's effective value, not just the slider position. */
+.slider-row .slider-live { min-width:80px; font-family:var(--mono); font-size:11px; color:var(--text-dim); padding:2px 6px; border-radius:3px; background:#0d2818; }
+.slider-row .slider-live.applied { background:var(--green); color:#000; transition:background 0.4s ease-out, color 0.4s ease-out; }
+.slider-row .slider-live.mismatch { background:#2d1f00; color:var(--yellow); }
 .toggle-row { display:flex; align-items:center; gap:10px; padding:6px 0; }
 .toggle-row label { font-size:13px; }
 .toggle { width:36px; height:20px; border-radius:10px; background:var(--border); position:relative; cursor:pointer; border:none; }
@@ -420,17 +426,43 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
     <input type="range" min="40" max="90" step="5" value="60" id="sl-momentum" oninput="updateSlider(this)">
     <span class="slider-val" id="sv-momentum">60</span>
   </div>
+  <!-- P3-1 (2026-05-24): 3C tuning sliders. Wire is:
+       slider → POST /api/runtime-controls/params → per-bot command queue
+       → DashboardPusher → DashboardCommandDispatcher.handle("update_params")
+       → BaseBot.update_runtime_params() → RiskManager.set_*().
+       The "live" pill next to each slider reflects the RiskManager's
+       current effective value (polled via /api/status → bot.risk dict)
+       so the operator sees the value actually in force, not just the
+       slider position. -->
   <div class="slider-row">
     <label>Risk Per Trade ($)</label>
     <input type="range" min="5" max="20" step="1" value="15" id="sl-risk" oninput="updateSlider(this)">
     <span class="slider-val" id="sv-risk">$15</span>
+    <span class="slider-live" id="sl-live-risk" title="Currently in force in RiskManager">live: --</span>
   </div>
   <div class="slider-row">
     <label>Max Daily Loss ($)</label>
     <input type="range" min="20" max="60" step="5" value="45" id="sl-dailyloss" oninput="updateSlider(this)">
     <span class="slider-val" id="sv-dailyloss">$45</span>
+    <span class="slider-live" id="sl-live-dailyloss" title="Currently in force in RiskManager">live: --</span>
   </div>
-  <button onclick="saveParams()" style="margin-top:8px; padding:6px 16px; background:var(--blue); color:#000; border:none; border-radius:4px; cursor:pointer; font-weight:600;">Apply Changes</button>
+  <div class="slider-row">
+    <label>Min Trade Spacing (min)</label>
+    <input type="range" min="5" max="30" step="1" value="15" id="sl-spacing" oninput="updateSlider(this)">
+    <span class="slider-val" id="sv-spacing">15</span>
+    <span class="slider-live" id="sl-live-spacing" title="Currently in force in RiskManager">live: --</span>
+  </div>
+  <div class="slider-row">
+    <label>Max Trades / Session</label>
+    <input type="range" min="1" max="20" step="1" value="10" id="sl-maxtrades" oninput="updateSlider(this)">
+    <span class="slider-val" id="sv-maxtrades">10</span>
+    <span class="slider-live" id="sl-live-maxtrades" title="Not surfaced by RiskManager.to_dict yet — slider value only">live: --</span>
+  </div>
+  <div style="margin-top:8px; display:flex; gap:8px; align-items:center;">
+    <button id="btn-apply-params" onclick="saveParams()" style="padding:6px 16px; background:var(--blue); color:#000; border:none; border-radius:4px; cursor:pointer; font-weight:600;">Apply Changes</button>
+    <button id="btn-save-config" onclick="saveConfigPersistent()" style="padding:6px 16px; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px; cursor:pointer; font-weight:600;" title="Persist current runtime params to config/strategies.py (defers to operator review)">Save to Config</button>
+    <span id="sl-feedback" style="font-size:11px; color:var(--text-dim); font-family:var(--mono);"></span>
+  </div>
 </div>
 
 <!-- ===== SECTION: Daily Stats ===== -->
@@ -968,6 +1000,10 @@ function renderStats(risk) {
   const meter = el('st-meter');
   meter.style.width = Math.min(100, used) + '%';
   meter.className = 'meter-fill ' + (used < 50 ? 'safe' : used < 80 ? 'warn' : 'danger');
+  // P3-1: keep the runtime-slider "live" pills in sync with what's
+  // actually loaded in RiskManager. Done here (not in a separate poll)
+  // because renderStats fires on every /api/status tick already.
+  renderSliderLiveValues(risk);
 }
 
 // ── Market ─────────────────────────────────────────────────────────
@@ -1239,14 +1275,92 @@ function updateSlider(input) {
   document.getElementById(id).textContent = prefix + input.value;
 }
 
+// P3-1: post all 4 tuning sliders to /api/runtime-controls/params.
+// Flow: enqueue per-bot → DashboardPusher polls /api/commands → bot's
+// DashboardCommandDispatcher.handle("update_params") → BaseBot.update_
+// runtime_params(params) → RiskManager.set_risk_per_trade / set_daily_
+// limit. NB: as of 2026-05-24 base_bot.update_runtime_params only wires
+// risk_per_trade + max_daily_loss into RiskManager — min_trade_spacing
+// and max_trades_per_session are stored in _runtime_params but not
+// forwarded to RiskManager.set_*. The patch to base_bot is tracked
+// separately (see P3-1 summary); slider POSTs them today so the wire is
+// ready the moment that hook lands.
 function saveParams() {
   const params = {
     min_confluence: parseFloat(el('sl-confluence').value),
     min_momentum_confidence: parseInt(el('sl-momentum').value),
     risk_per_trade: parseFloat(el('sl-risk').value),
     max_daily_loss: parseFloat(el('sl-dailyloss').value),
+    min_trade_spacing: parseInt(el('sl-spacing').value),
+    max_trades_per_session: parseInt(el('sl-maxtrades').value),
   };
-  fetch('/api/runtime-controls/params', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(params)});
+  fetch('/api/runtime-controls/params', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(params),
+  }).then(r => r.json()).then(_ => {
+    flashFeedback('Sent — bots pick up within 2s (poll interval).');
+    // Pulse the live pills so the operator sees the slider "fire".
+    ['risk','dailyloss','spacing','maxtrades'].forEach(k => {
+      const pill = el('sl-live-' + k);
+      if (pill) {
+        pill.classList.add('applied');
+        setTimeout(() => pill.classList.remove('applied'), 800);
+      }
+    });
+  }).catch(e => flashFeedback('Apply failed: ' + e, true));
+}
+
+// P3-1: "Save to Config" — persist current runtime params to
+// config/strategies.py. Backend handler is the existing
+// /api/runtime-controls/save stub (TODO in dashboard/server.py:984).
+// Until the file-write lands, this just notifies the operator that the
+// save endpoint is stubbed.
+function saveConfigPersistent() {
+  fetch('/api/runtime-controls/save', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({}),
+  }).then(r => r.json()).then(j => {
+    flashFeedback(j.message || (j.ok ? 'Saved.' : 'Save failed'), !j.ok);
+  }).catch(e => flashFeedback('Save failed: ' + e, true));
+}
+
+function flashFeedback(msg, isError) {
+  const fb = el('sl-feedback');
+  if (!fb) return;
+  fb.textContent = msg;
+  fb.style.color = isError ? 'var(--red)' : 'var(--green)';
+  setTimeout(() => { fb.textContent = ''; }, 4000);
+}
+
+// P3-1: refresh the "live" pills from the RiskManager snapshot pushed
+// in /api/status → bot.risk. Called from renderStats(risk) since that
+// already gets the freshest risk dict on every poll. Pill turns yellow
+// when the slider position diverges from the value actually in force
+// (e.g. operator moved the slider but hasn't clicked Apply yet).
+function renderSliderLiveValues(risk) {
+  if (!risk) return;
+  const setPill = (pillId, sliderId, liveVal, fmt) => {
+    const pill = el(pillId);
+    const slider = el(sliderId);
+    if (!pill || liveVal === undefined || liveVal === null) return;
+    pill.textContent = 'live: ' + fmt(liveVal);
+    if (slider) {
+      const sliderVal = parseFloat(slider.value);
+      pill.classList.toggle('mismatch', Math.abs(sliderVal - liveVal) > 0.01);
+    }
+  };
+  // risk_per_trade is not exposed in risk.to_dict (only daily_limit /
+  // spacing_min are). Falls back to slider value so the pill is non-empty.
+  if (risk.risk_per_trade !== undefined) {
+    setPill('sl-live-risk', 'sl-risk', risk.risk_per_trade, v => '$' + v.toFixed(0));
+  }
+  setPill('sl-live-dailyloss', 'sl-dailyloss', risk.daily_limit, v => '$' + v.toFixed(0));
+  setPill('sl-live-spacing', 'sl-spacing', risk.spacing_min, v => v.toFixed(0) + 'm');
+  if (risk.max_trades !== undefined) {
+    setPill('sl-live-maxtrades', 'sl-maxtrades', risk.max_trades, v => v.toFixed(0));
+  }
 }
 
 // ── AI Insights ───────────────────────────────────────────────────

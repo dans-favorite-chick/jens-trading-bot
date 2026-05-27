@@ -37,18 +37,19 @@ logger = logging.getLogger("ProdBot")
 class ProdBot(BaseBot):
     bot_name = "prod"
 
-    # Sprint H (2026-05-04): only_validated=False — prod loads every
-    # enabled strategy regardless of `validated` flag. Pre-Sprint-H,
-    # prod ran only validated=True strategies (2 of 10), making the
-    # paper-trading harness nearly silent. Operator opened it up so
-    # all 10 strategies emit signals through the Sim101 tester for
-    # behavioral debug visibility.
+    # 2026-05-24 (operator directive): only_validated is now live-conditional.
+    # In live mode (LIVE_TRADING=True) the bot MUST only load validated
+    # strategies — that's table stakes for any real-money entry. In sim/paper
+    # mode (LIVE_TRADING=False) prod stays open so the paper-trading harness
+    # can observe every enabled strategy's behavior on Sim101.
     #
-    # If/when prod is ever pointed at a real-money account (e.g. via a
-    # different FORCE_ACCOUNT below), revisit this gate first — either
-    # set `only_validated = True` or use a conditional pattern like
-    # `@property def only_validated(self): return LIVE_TRADING`.
-    only_validated = False
+    # This is layer-1 of the live canary; layer-2 is core/live_canary_gate.py
+    # which additionally filters by LIVE_STRATEGY_ALLOWLIST. Both fire in
+    # live mode; only this one matters when LIVE_TRADING=False.
+    @property
+    def only_validated(self) -> bool:
+        from config.settings import LIVE_TRADING
+        return bool(LIVE_TRADING)
 
     # B57 (2026-04-22) — restored 2026-05-03 after operator clarified:
     # prod_bot IS the paper-trading tester. Every signal is pinned to
@@ -76,6 +77,19 @@ def main():
     # See bots/sim_bot.py for full context. Same protection applied here.
     from core.single_instance import acquire_or_exit
     acquire_or_exit("prod")
+
+    # 2026-05-24 P0-2 (synthesis F-08, F-09): sim-overrides opt-in channel.
+    # Applies config/sim_overrides.py iff PHOENIX_SIM_OVERRIDES=1. Refuses
+    # to start if PHOENIX_SIM_OVERRIDES=1 + LIVE_TRADING=True. Critical-level
+    # log line names every applied override.
+    from core.sim_overrides_loader import load_and_apply_sim_overrides
+    load_and_apply_sim_overrides()
+
+    # 2026-05-24 LIVE CANARY: validate live-mode constraints BEFORE bot
+    # instantiation. No-op in sim mode. Raises LiveCanaryViolation and
+    # refuses to start if LIVE_TRADING=True and any constraint fails.
+    from core.live_canary_gate import validate_live_config
+    validate_live_config()
 
     bot = ProdBot()
     try:

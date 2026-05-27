@@ -21,7 +21,9 @@ import time
 
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from config.settings import OIF_INCOMING, OIF_OUTGOING, ACCOUNT, INSTRUMENT
+from config.settings import (
+    OIF_INCOMING, OIF_OUTGOING, OIF_STAGING, ACCOUNT, INSTRUMENT,
+)
 
 logger = logging.getLogger("OIF")
 
@@ -379,25 +381,48 @@ def cancel_single_order_line(order_id: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Atomic file staging: write to .tmp, rename to .txt
+# Atomic file staging: write to staging/*.tmp, os.replace into incoming/*.txt
 # ═══════════════════════════════════════════════════════════════════════
+#
+# 2026-05-25 (this revision): NT8's ATI watches the `incoming/` folder for
+# ALL file extensions — not just `.txt`. The B45 rev3 direct-write pattern
+# (write straight to `incoming/<file>.txt`) was atomic enough for the
+# parser-correctness concern (~100-byte file, sub-ms partial-write window),
+# but a parallel issue surfaced: any pattern that placed even a transient
+# `.tmp` file in `incoming/` made NT8's Log tab roar with orange
+# "Unknown OIF file type ...txt.tmp" entries which NT8 then deleted.
+# On 2026-05-25 09:07:03-09:07:12 NT8 logged 5 such pairs (orange .tmp
+# rejection + white Order Working) within a single bracket. The pipeline
+# still worked because the .tmp → .txt rename outpaced NT8's reader most
+# of the time, but the 50% Log-tab noise was a real ops-readability cost
+# and the residual race window was a theoretical risk.
+#
+# Fix: stage `.tmp` files in `OIF_STAGING` (a sibling folder of
+# `incoming/` OUTSIDE NT8's watch tree) and `os.replace()` into
+# `incoming/<file>.txt`. On Windows + POSIX, `os.replace` is atomic for
+# same-volume renames (NTFS MoveFileEx with MOVEFILE_REPLACE_EXISTING) —
+# NT8's FileSystemWatcher sees a CREATE event for the final .txt with
+# the file already fully-written. NT8 never sees a `.tmp`. Earlier
+# concerns (recorded in the deleted B45 rev3 note) about cross-folder
+# `os.replace` not firing NT8's CREATE event are not borne out by the
+# Windows MSDN spec — MoveFileEx fires a standard FILE_ACTION_ADDED
+# notification in the destination directory regardless of source.
 
 def _stage_oif(cmd: str, trade_id: str, suffix: str = "") -> tuple[str, str]:
     """
-    Write cmd directly to incoming/*.txt.
+    Stage cmd as `OIF_STAGING/<file>.txt.tmp`. Returns (staging_tmp_path,
+    final_incoming_path). The actual atomic move into `incoming/<file>.txt`
+    happens in `_commit_staged` via `os.replace`.
 
-    B45 (rev 3): Earlier attempts at cross-directory staging (.tmp and .stage)
-    both broke NT8's FileSystemWatcher — either producing read-error warnings
-    or failing to trigger ATI consumption at all (os.replace from a sibling
-    directory doesn't fire NT8's CREATE event reliably). NT8's Log-tab noise
-    from the "Could not find file ...tmp" messages was cosmetic; ATI was
-    still processing the .txt files correctly. Direct write wins: the
-    partial-write window on a ~100-byte file is sub-millisecond and NT8
-    reads the file only after its watcher sees a complete write event.
+    See module-level 2026-05-25 note for why we no longer write straight
+    into `incoming/`.
     """
     global _oif_counter
     _oif_counter += 1
     os.makedirs(OIF_INCOMING, exist_ok=True)
+    # Auto-create staging on first use. The folder may not exist on a
+    # fresh install or after the operator nukes it manually.
+    os.makedirs(OIF_STAGING, exist_ok=True)
     tag = f"_{trade_id}" if trade_id else ""
     sfx = f"_{suffix}" if suffix else ""
     # Filename MUST start with `oif` — NT8 ATI classifies files by prefix
@@ -419,25 +444,35 @@ def _stage_oif(cmd: str, trade_id: str, suffix: str = "") -> tuple[str, str]:
         sfx = "_op"  # "operator/orphan" — always-trailing token, regex-safe
     fname = f"oif{_oif_counter}_phoenix_{_PHOENIX_PID}{tag}{sfx}.txt"
     final_path = os.path.join(OIF_INCOMING, fname)
-    # Return same path for both — _commit_staged becomes a no-op for the
-    # "rename" step; file is already at its final location.
-    with open(final_path, "w") as f:
+    staging_tmp = os.path.join(OIF_STAGING, fname + ".tmp")
+    # Write content to staging FIRST so NT8 never sees a transient file
+    # in incoming/. Caller commits via _commit_staged (os.replace).
+    with open(staging_tmp, "w") as f:
         f.write(cmd + "\n")
-    return final_path, final_path
+    return staging_tmp, final_path
 
 
 def _commit_staged(staged: list[tuple[str, str]], trade_id: str) -> list[str]:
-    """Rename all staged .tmp → .txt in order. Returns list of committed paths."""
+    """Atomically move every staging .tmp into incoming/<file>.txt in order.
+
+    Uses os.replace (NOT os.rename) so the destination is overwritten if it
+    somehow exists — same-volume requirement holds because OIF_STAGING is a
+    sibling of OIF_INCOMING under NT8_DATA_ROOT.
+
+    On any failure, cleans up the remaining un-committed .tmp files from
+    OIF_STAGING and returns what was committed so far.
+    """
     written = []
     for tmp, final in staged:
         try:
-            if tmp != final:
-                os.replace(tmp, final)  # legacy path
+            # os.replace: atomic same-volume rename on both Windows + POSIX.
+            # MOVEFILE_REPLACE_EXISTING on Windows; rename(2) on POSIX.
+            os.replace(tmp, final)
             written.append(final)
             logger.info(f"[OIF:{trade_id or 'N/A'}] committed {os.path.basename(final)}")
         except OSError as e:
             logger.error(f"[OIF:{trade_id}] commit failed {tmp}: {e}")
-            # Best-effort cleanup of uncommitted .tmp files
+            # Best-effort cleanup of uncommitted .tmp files in staging
             for remaining_tmp, _ in staged:
                 if os.path.exists(remaining_tmp):
                     try:
@@ -449,7 +484,7 @@ def _commit_staged(staged: list[tuple[str, str]], trade_id: str) -> list[str]:
 
 
 def _rollback_staged(staged: list[tuple[str, str]], trade_id: str):
-    """Delete all uncommitted .tmp files."""
+    """Delete all uncommitted .tmp files from OIF_STAGING."""
     for tmp, _ in staged:
         if os.path.exists(tmp):
             try:
@@ -457,6 +492,47 @@ def _rollback_staged(staged: list[tuple[str, str]], trade_id: str):
                 logger.info(f"[OIF:{trade_id}] rolled back {os.path.basename(tmp)}")
             except OSError as e:
                 logger.error(f"[OIF:{trade_id}] rollback failed {tmp}: {e}")
+
+
+def cleanup_stale_staging_tmp_files(max_age_s: float = 60.0) -> int:
+    """Paranoia: sweep stale `.tmp` files out of OIF_STAGING.
+
+    Run on bot startup and after any bracket failure. A .tmp file lingering
+    in staging/ is harmless to NT8 (NT8 doesn't watch staging/), but it
+    indicates a crash mid-write — log it loudly so the operator notices.
+
+    Returns count of files removed.
+    """
+    if not os.path.isdir(OIF_STAGING):
+        return 0
+    removed = 0
+    now = time.time()
+    try:
+        names = os.listdir(OIF_STAGING)
+    except OSError as e:
+        logger.warning(f"[OIF_STAGING_CLEANUP] could not list {OIF_STAGING}: {e}")
+        return 0
+    for n in names:
+        if not n.endswith(".tmp"):
+            continue
+        p = os.path.join(OIF_STAGING, n)
+        try:
+            age = now - os.path.getmtime(p)
+        except OSError:
+            continue
+        if age < max_age_s:
+            # In flight — leave alone.
+            continue
+        try:
+            os.remove(p)
+            removed += 1
+            logger.warning(
+                f"[OIF_STAGING_CLEANUP] removed stale {n} (age {age:.0f}s) — "
+                f"residue from a crash mid-write or an aborted bracket"
+            )
+        except OSError as e:
+            logger.warning(f"[OIF_STAGING_CLEANUP] could not remove {p}: {e}")
+    return removed
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -620,6 +696,17 @@ def write_bracket_order(
                     _ids["target"] = _toid
             if _ids:
                 _recent_order_ids[trade_id] = _ids
+            # P1-8 (2026-05-24): persist the stop_order_id to data/active_stops.json
+            # so a bot restart can recover the mapping for later stop-moves.
+            # Wrapped so a save failure NEVER aborts the OIF write.
+            if _ids.get("stop") and trade_id:
+                try:
+                    from core.nt8_order_id_capture import save_stop_id
+                    save_stop_id(trade_id, _ids["stop"])
+                except Exception as _save_e:
+                    logger.debug(
+                        f"[OIF:{trade_id}] P1-8 save_stop_id failed (non-fatal): {_save_e}"
+                    )
     except Exception as _e:
         logger.debug(f"[OIF:{trade_id}] B76 order_id capture skipped: {_e}")
 
@@ -1029,6 +1116,17 @@ def write_protection_oco(direction: str, qty: int, stop_price: float,
                 _ids["target"] = _toid
             if _ids:
                 _recent_order_ids[trade_id] = _ids
+            # P1-8 (2026-05-24): persist the stop_order_id so a bot restart
+            # can recover for later stop-moves. Try/except so a save failure
+            # NEVER aborts the OIF write.
+            if _ids.get("stop") and trade_id:
+                try:
+                    from core.nt8_order_id_capture import save_stop_id
+                    save_stop_id(trade_id, _ids["stop"])
+                except Exception as _save_e:
+                    logger.debug(
+                        f"[PROTECT:{trade_id}] P1-8 save_stop_id failed (non-fatal): {_save_e}"
+                    )
         except Exception as _e:
             logger.debug(f"[PROTECT:{trade_id}] B76 order_id capture skipped: {_e}")
         return written  # Both legs consumed — happy path.
@@ -1271,6 +1369,25 @@ def write_oif(action: str, qty: int = 1, stop_price: float = None,
     # order). Verify the same way. Raises OIFStuckError on timeout.
     if written:
         _verify_consumed(written, trade_id, timeout_s=2.0, raise_on_stuck=True)
+
+    # P1-8 (2026-05-24): capture + persist NT8 order_id for raw STOP
+    # placements (PLACE_STOP_SELL/PLACE_STOP_BUY, also used by write_be_stop).
+    # Same shape as the bracket/protection paths: best-effort, never aborts
+    # the OIF write on a save failure.
+    if written and action in ("PLACE_STOP_SELL", "PLACE_STOP_BUY") and stop_price and trade_id:
+        try:
+            _soid = scan_outgoing_for_order_id(account, stop_price, timeout_s=0.5)
+            if _soid:
+                _recent_order_ids[trade_id] = {"stop": _soid}
+                try:
+                    from core.nt8_order_id_capture import save_stop_id
+                    save_stop_id(trade_id, _soid)
+                except Exception as _save_e:
+                    logger.debug(
+                        f"[OIF:{trade_id}] P1-8 save_stop_id failed (non-fatal): {_save_e}"
+                    )
+        except Exception as _e:
+            logger.debug(f"[OIF:{trade_id}] P1-8 stop order_id capture skipped: {_e}")
 
     return written
 

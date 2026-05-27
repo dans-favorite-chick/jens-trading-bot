@@ -45,15 +45,26 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 BASE_BOT_SRC = (ROOT / "bots" / "base_bot.py").read_text(encoding="utf-8")
+# 2026-05-24 P4-1 Stage 3: _evaluate_strategies body moved to
+# bots/_strategy_dispatch.py. The skip-path checks below now read from
+# that module's evaluate() body. The "no prod window gate" check still
+# scans base_bot.py for the bot_name == 'prod' guard.
+STRATEGY_DISPATCH_SRC = (
+    ROOT / "bots" / "_strategy_dispatch.py"
+).read_text(encoding="utf-8")
 
 
 def _evaluate_strategies_body() -> str:
-    """Return the body of BaseBot._evaluate_strategies as a string."""
+    """Return the body of evaluate() in bots/_strategy_dispatch.py.
+
+    Pre-2026-05-24 this was BaseBot._evaluate_strategies; the extracted
+    module preserves the body verbatim with self.X -> self.bot.X.
+    """
     m = re.search(
-        r"def _evaluate_strategies\(self\).*?(?=\n    (?:async )?def )",
-        BASE_BOT_SRC, re.DOTALL,
+        r"def evaluate\(self\).*?(?=\nclass |\Z)",
+        STRATEGY_DISPATCH_SRC, re.DOTALL,
     )
-    assert m, "couldn't locate BaseBot._evaluate_strategies"
+    assert m, "couldn't locate StrategyDispatch.evaluate()"
     return m.group(0)
 
 
@@ -92,9 +103,10 @@ def test_remaining_skip_paths_still_log():
     body = _evaluate_strategies_body()
 
     # HALT path: must update _last_eval before returning
+    # 2026-05-24 P4-1 Stage 3: extracted module uses self.bot.X instead of self.X.
     halt_section = body[body.find("HALT_MARKER_FILE"):body.find("# Apply runtime profile overrides")]
-    assert "self._last_eval" in halt_section, (
-        "HALT-path skip must populate self._last_eval so the dashboard "
+    assert "_last_eval" in halt_section, (
+        "HALT-path skip must populate _last_eval so the dashboard "
         "shows the halt reason"
     )
     assert "logger.warning" in halt_section, (

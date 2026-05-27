@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Phoenix Feed — Live Stream</title>
+<style>
+/* ===== SECTION: CSS Variables & Base ===== */
+:root {
+  --bg: #0d1117; --surface: #161b22; --border: #30363d;
+  --text: #e6edf3; --text-dim: #8b949e; --text-bright: #ffffff;
+  --green: #3fb950; --red: #f85149; --yellow: #d29922; --blue: #58a6ff; --purple: #bc8cff;
+  --font: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --mono: 'Cascadia Code', 'Consolas', monospace;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:var(--bg); color:var(--text); font-family:var(--font); font-size:14px; }
+.container { max-width:1400px; margin:0 auto; padding:12px; }
+
+/* ===== SECTION: Header ===== */
+.header { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+.header h1 { font-size:20px; color:var(--text-bright); }
+.header .nav { display:flex; gap:8px; align-items:center; }
+.header .nav a {
+  padding:6px 14px; background:var(--surface); border:1px solid var(--border);
+  border-radius:6px; color:var(--text-dim); text-decoration:none; font-size:12px;
+  font-family:var(--mono);
+}
+.header .nav a:hover { color:var(--text-bright); border-color:var(--blue); }
+.header .nav a.active { color:var(--text-bright); border-color:var(--blue); }
+.live-pulse {
+  display:inline-block; width:9px; height:9px; border-radius:50%;
+  background:var(--green); box-shadow:0 0 8px var(--green);
+  margin-right:6px; animation:pulse 1.4s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100%{opacity:.4;} 50%{opacity:1;} }
+
+/* ===== SECTION: Bot Selector ===== */
+.bot-bar { display:flex; gap:8px; padding:8px 12px; background:var(--surface);
+           border:1px solid var(--border); border-radius:6px; margin-bottom:12px;
+           align-items:center; font-family:var(--mono); font-size:12px; }
+.bot-bar label { color:var(--text-dim); }
+.bot-bar select { background:var(--bg); color:var(--text); border:1px solid var(--border);
+                  padding:4px 8px; border-radius:4px; font-family:var(--mono); }
+.bot-bar .meta { color:var(--text-dim); margin-left:auto; }
+.bot-bar .meta b { color:var(--text); }
+
+/* ===== SECTION: Card / Grid ===== */
+.card { background:var(--surface); border:1px solid var(--border); border-radius:8px;
+        padding:14px; margin-bottom:12px; }
+.card h3 { font-size:13px; color:var(--text-dim); text-transform:uppercase;
+           letter-spacing:1px; margin-bottom:10px; display:flex; align-items:center; }
+.card h3 .count { font-size:11px; color:var(--text-dim); margin-left:auto;
+                  font-family:var(--mono); letter-spacing:0; text-transform:none; }
+
+/* ===== SECTION: Signals Stream ===== */
+.stream { max-height:480px; overflow-y:auto; font-family:var(--mono); font-size:11px; }
+.signal-row { display:grid; grid-template-columns:80px 90px 200px 60px 60px 90px 1fr;
+              gap:8px; padding:5px 6px; border-bottom:1px solid var(--border);
+              align-items:center; }
+.signal-row:last-child { border-bottom:none; }
+.signal-row:hover { background:#0c111a; }
+.s-ts { color:var(--text-dim); font-size:10px; }
+.s-strat { color:var(--text); font-weight:600; overflow:hidden; text-overflow:ellipsis;
+           white-space:nowrap; }
+.s-reason { color:var(--text-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.s-score { text-align:right; color:var(--text); }
+.s-dir { text-align:center; font-weight:700; }
+.s-dir.long { color:var(--green); }
+.s-dir.short { color:var(--red); }
+.s-dir.flat { color:var(--text-dim); }
+.s-badge { padding:2px 7px; border-radius:4px; font-size:10px; font-weight:700;
+           text-align:center; white-space:nowrap; }
+.s-badge.signal { background:#0d2818; color:var(--green); }
+.s-badge.no-signal { background:var(--bg); color:var(--text-dim); border:1px solid var(--border); }
+.s-badge.skip { background:#1c1c1c; color:#888; border:1px solid #333; }
+.s-badge.blocked { background:#2d0000; color:var(--red); }
+.s-badge.error { background:#2d1f00; color:var(--yellow); }
+.empty { padding:18px; color:var(--text-dim); text-align:center; font-family:var(--mono);
+         font-size:12px; }
+
+/* ===== SECTION: Trades ===== */
+.trade-table { width:100%; border-collapse:collapse; font-size:12px; font-family:var(--mono); }
+.trade-table th { text-align:left; padding:6px 8px; color:var(--text-dim);
+                  border-bottom:1px solid var(--border); font-size:11px;
+                  text-transform:uppercase; letter-spacing:0.5px; }
+.trade-table td { padding:6px 8px; border-bottom:1px solid var(--border); }
+.trade-table tr:last-child td { border-bottom:none; }
+.trade-table .win { color:var(--green); font-weight:600; }
+.trade-table .loss { color:var(--red); font-weight:600; }
+.trade-table .dir-long { color:var(--green); }
+.trade-table .dir-short { color:var(--red); }
+
+/* ===== SECTION: Positions ===== */
+.pos-row { display:grid; grid-template-columns:90px 160px 70px 90px 90px 90px 70px 1fr;
+           gap:10px; padding:8px 6px; border-bottom:1px solid var(--border);
+           font-family:var(--mono); font-size:12px; align-items:center; }
+.pos-row:last-child { border-bottom:none; }
+.pos-row .label { font-size:10px; color:var(--text-dim); text-transform:uppercase; }
+.pos-row.long { background:#0a1f10; }
+.pos-row.short { background:#1f0a0a; }
+.pos-head { font-weight:700; color:var(--text-dim); border-bottom:2px solid var(--border); }
+.pnl-pos { color:var(--green); }
+.pnl-neg { color:var(--red); }
+
+/* ===== SECTION: Footer ===== */
+.footer { text-align:center; color:var(--text-dim); font-size:11px;
+          font-family:var(--mono); padding:10px; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- ===== Header ===== -->
+<div class="header">
+  <h1>Phoenix Feed <span style="font-size:11px; color:var(--text-dim); font-weight:400;">— live stream</span></h1>
+  <div class="nav">
+    <a href="/">Dashboard</a>
+    <a href="/feed" class="active">Feed</a>
+    <span style="color:var(--text-dim); font-size:11px; margin-left:8px;">
+      <span class="live-pulse"></span>Last: <span id="last-update">--</span>
+    </span>
+  </div>
+</div>
+
+<!-- ===== Bot Selector ===== -->
+<div class="bot-bar">
+  <label>Source bot:</label>
+  <select id="bot-select" onchange="forcePoll()">
+    <option value="sim" selected>sim</option>
+    <option value="prod">prod</option>
+  </select>
+  <label>Max rows:</label>
+  <select id="row-cap" onchange="forcePoll()">
+    <option value="20">20</option>
+    <option value="50" selected>50</option>
+    <option value="100">100</option>
+  </select>
+  <span class="meta">
+    refresh every <b>5s</b> · poll latency: <b id="poll-latency">--</b>ms
+  </span>
+</div>
+
+<!-- ===== Signals Stream ===== -->
+<div class="card">
+  <h3>Signals
+    <span class="count">most-recent first · <span id="signals-count">0</span> rows</span>
+  </h3>
+  <div id="signals-stream" class="stream">
+    <div class="empty">Loading signals…</div>
+  </div>
+</div>
+
+<!-- ===== Recent Trades ===== -->
+<div class="card">
+  <h3>Trades
+    <span class="count">last 10 closed · <span id="trades-count">0</span> rows</span>
+  </h3>
+  <table class="trade-table">
+    <thead>
+      <tr>
+        <th>Exit Time</th>
+        <th>Bot</th>
+        <th>Strategy</th>
+        <th>Dir</th>
+        <th>Qty</th>
+        <th style="text-align:right;">P&L</th>
+        <th>Exit Reason</th>
+      </tr>
+    </thead>
+    <tbody id="trades-body">
+      <tr><td colspan="7" class="empty">Loading trades…</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ===== Active Positions ===== -->
+<div class="card">
+  <h3>Positions
+    <span class="count">live <span id="positions-count">0</span> active</span>
+  </h3>
+  <div id="positions-body">
+    <div class="empty">Loading positions…</div>
+  </div>
+</div>
+
+<div class="footer">
+  Phoenix Feed · auto-refresh every 5s · data via /api/feed-signals, /api/feed-trades, /api/feed-positions
+</div>
+
+</div><!-- /container -->
+
+<script>
+const REFRESH_MS = 5000;
+let _inflight = false;
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s == null ? '' : String(s);
+  return d.innerHTML;
+}
+
+function fmtNum(v, digits) {
+  if (v == null || isNaN(v)) return '--';
+  return Number(v).toFixed(digits == null ? 2 : digits);
+}
+
+function fmtTs(v) {
+  if (!v) return '--';
+  // Accept either epoch float or ISO string
+  try {
+    const d = typeof v === 'number' ? new Date(v * 1000) : new Date(v);
+    if (isNaN(d.getTime())) return String(v).slice(0, 19);
+    return d.toLocaleTimeString();
+  } catch (e) {
+    return String(v).slice(0, 19);
+  }
+}
+
+function decisionBadgeClass(d) {
+  const dd = (d || '').toUpperCase();
+  if (dd === 'SIGNAL') return 'signal';
+  if (dd === 'NO_SIGNAL') return 'no-signal';
+  if (dd === 'SKIP' || dd === 'WARMUP') return 'skip';
+  if (dd === 'BLOCKED' || dd === 'REJECTED') return 'blocked';
+  if (dd === 'ERROR') return 'error';
+  return 'no-signal';
+}
+
+function dirClass(d) {
+  const dd = (d || '').toUpperCase();
+  if (dd === 'LONG') return 'long';
+  if (dd === 'SHORT') return 'short';
+  return 'flat';
+}
+
+// ── Signals ───────────────────────────────────────────────────────
+async function refreshSignals() {
+  const bot = document.getElementById('bot-select').value;
+  const cap = document.getElementById('row-cap').value;
+  const url = `/api/feed-signals?bot=${encodeURIComponent(bot)}&limit=${encodeURIComponent(cap)}`;
+  let rows = [];
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return;
+    const data = await res.json();
+    rows = Array.isArray(data) ? data : (data.signals || []);
+  } catch (e) {
+    return;
+  }
+  const root = document.getElementById('signals-stream');
+  document.getElementById('signals-count').textContent = rows.length;
+  if (!rows.length) {
+    root.innerHTML = '<div class="empty">No signal evaluations yet — bot may still be warming up.</div>';
+    return;
+  }
+  root.innerHTML = rows.map(r => {
+    const decision = (r.decision || 'NO_SIGNAL').toUpperCase();
+    const dir = (r.direction || '').toUpperCase();
+    return `<div class="signal-row">
+      <span class="s-ts">${esc(fmtTs(r.ts))}</span>
+      <span class="s-badge ${decisionBadgeClass(decision)}">${esc(decision)}</span>
+      <span class="s-strat">${esc(r.strategy || '—')}</span>
+      <span class="s-dir ${dirClass(dir)}">${esc(dir || '—')}</span>
+      <span class="s-score">${esc(fmtNum(r.score, 2))}</span>
+      <span class="s-reason" title="${esc(r.reason || '')}">${esc(r.reason || '—')}</span>
+      <span class="s-reason" style="color:var(--text-dim);">${esc(r.regime || '')}</span>
+    </div>`;
+  }).join('');
+}
+
+// ── Trades ────────────────────────────────────────────────────────
+async function refreshTrades() {
+  let rows = [];
+  try {
+    const res = await fetch('/api/feed-trades');
+    if (!res.ok) return;
+    const data = await res.json();
+    rows = Array.isArray(data) ? data : (data.trades || []);
+  } catch (e) {
+    return;
+  }
+  const tbody = document.getElementById('trades-body');
+  document.getElementById('trades-count').textContent = rows.length;
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">No trades yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(t => {
+    const pnl = Number(t.pnl_dollars_net != null ? t.pnl_dollars_net :
+                       (t.pnl_dollars != null ? t.pnl_dollars : 0));
+    const pnlCls = pnl >= 0 ? 'win' : 'loss';
+    const dir = (t.direction || '').toUpperCase();
+    const dirCls = dir === 'LONG' ? 'dir-long' : (dir === 'SHORT' ? 'dir-short' : '');
+    const strat = t.sub_strategy ? `${t.strategy || '?'}.${t.sub_strategy}` : (t.strategy || '?');
+    return `<tr>
+      <td>${esc(fmtTs(t.exit_time))}</td>
+      <td>${esc(t.bot_id || '?')}</td>
+      <td>${esc(strat)}</td>
+      <td class="${dirCls}">${esc(dir || '—')}</td>
+      <td>${esc(t.contracts || t.qty || 1)}</td>
+      <td style="text-align:right;" class="${pnlCls}">$${fmtNum(pnl, 2)}</td>
+      <td style="color:var(--text-dim);">${esc(t.exit_reason || t.close_reason || '—')}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Positions ─────────────────────────────────────────────────────
+async function refreshPositions() {
+  const bot = document.getElementById('bot-select').value;
+  const url = `/api/feed-positions?bot=${encodeURIComponent(bot)}`;
+  let payload = {};
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return;
+    payload = await res.json();
+  } catch (e) {
+    return;
+  }
+  const body = document.getElementById('positions-body');
+  // Accept either {positions: {...}} or a positions dict at root
+  const pos = payload.positions || payload || {};
+  // The bot's position-manager dict may have status=FLAT (no positions)
+  // or include an "all_positions" list for multi-leg layouts.
+  let rows = [];
+  if (Array.isArray(pos.all_positions) && pos.all_positions.length) {
+    rows = pos.all_positions;
+  } else if (pos.status && pos.status !== 'FLAT') {
+    rows = [pos];
+  }
+  document.getElementById('positions-count').textContent = rows.length;
+  if (!rows.length) {
+    body.innerHTML = '<div class="empty">FLAT — no active positions.</div>';
+    return;
+  }
+  const header = `<div class="pos-row pos-head">
+    <span>Bot</span><span>Strategy</span><span>Dir</span>
+    <span>Entry</span><span>Stop</span><span>Target</span>
+    <span>Qty</span><span>U/PnL</span>
+  </div>`;
+  body.innerHTML = header + rows.map(p => {
+    const dir = (p.direction || '').toUpperCase();
+    const dirClass = dir === 'LONG' ? 'long' : (dir === 'SHORT' ? 'short' : '');
+    const upnl = Number(p.unrealized_pnl || 0);
+    const upnlCls = upnl >= 0 ? 'pnl-pos' : 'pnl-neg';
+    return `<div class="pos-row ${dirClass}">
+      <span>${esc(p.bot || bot)}</span>
+      <span>${esc(p.strategy || '—')}</span>
+      <span>${esc(dir || '—')}</span>
+      <span>${esc(fmtNum(p.entry_price, 2))}</span>
+      <span>${esc(fmtNum(p.stop_price, 2))}</span>
+      <span>${esc(fmtNum(p.target_price, 2))}</span>
+      <span>${esc(p.contracts || 1)}</span>
+      <span class="${upnlCls}">$${fmtNum(upnl, 2)}</span>
+    </div>`;
+  }).join('');
+}
+
+// ── Poll loop ─────────────────────────────────────────────────────
+async function pollAll() {
+  if (_inflight) return;  // throttle: skip if previous tick still in flight
+  _inflight = true;
+  const t0 = performance.now();
+  try {
+    await Promise.all([refreshSignals(), refreshTrades(), refreshPositions()]);
+    const elapsed = Math.round(performance.now() - t0);
+    document.getElementById('poll-latency').textContent = elapsed;
+    document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+  } catch (e) {
+    document.getElementById('last-update').textContent =
+      'ERR @ ' + new Date().toLocaleTimeString();
+  } finally {
+    _inflight = false;
+  }
+}
+
+function forcePoll() { pollAll(); }
+
+pollAll();
+setInterval(pollAll, REFRESH_MS);
+</script>
+</body>
+</html>

@@ -95,7 +95,10 @@ base_bot_check.pyc.*
 
 # Broad ignores for noisy auto-generated content WITH targeted allowlists
 # below for the parts of these trees that ARE source-controlled.
-.claude/
+# 2026-05-24: removed bare `.claude/` line — was double-ignoring the tree
+# despite the allowlists below. The selective ignores at lines 53-67
+# (worktrees, cache, file-history, etc.) are the source of truth for
+# what's NOT tracked under .claude/.
 out/
 phoenix_bot/
 

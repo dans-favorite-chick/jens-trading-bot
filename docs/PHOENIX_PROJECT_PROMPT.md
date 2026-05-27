@@ -1,7 +1,8 @@
 # Phoenix Bot — Project Prompt (operator-facing architecture notes)
 
 This document captures operator-facing architecture decisions that
-don't fit in CLAUDE.md (developer reference) or BUILD_MAP.md (roadmap).
+don't fit in CLAUDE.md (developer reference) or docs/roadmap.md (the current
+roadmap; the legacy BUILD_MAP.md is archived at docs/archive/BUILD_MAP.md).
 Edit inline when behavior changes.
 
 ---
@@ -119,11 +120,11 @@ Six tactical fixes from 2026-04-24 (Epic v1) are locked in via dedicated regress
 | **OIFSink shim** | [phoenix_bot/orchestrator/oif_writer.py](phoenix_bot/orchestrator/oif_writer.py) | Skeleton | DirectFileSink default; RiskGateSink behind env flag |
 | **Risk gate runners** | [tools/risk_gate_runner.py](tools/risk_gate_runner.py), [tools/watchdog_runner.py](tools/watchdog_runner.py) | Ready | Manual-launch only today |
 | **FinBERT sentiment** | [core/sentiment_finbert.py](core/sentiment_finbert.py), [models/finbert_onnx_int8/](models/finbert_onnx_int8/) | Live (observation mode) | INT8 ONNX, p50=4.5ms p99=6.85ms |
-| **Sentiment council agent** | [phoenix_bot/council/sentiment_flow_agent.py](phoenix_bot/council/sentiment_flow_agent.py) | Wired with `weight=0.0` | Persists to ChromaDB; doesn't change council vote |
+| **Sentiment council agent** | [council/sentiment_flow_agent.py](council/sentiment_flow_agent.py) | Wired with `weight=0.0` | Persists to ChromaDB; doesn't change council vote |
 | **Finnhub WS stub** | [core/news/finnhub_ws.py](core/news/finnhub_ws.py) | Stub only | No live API key; `FINNHUB_API_KEY` env documented |
-| **Chicago VPS plan** | [docs/chicago_vps_migration_plan.md](docs/chicago_vps_migration_plan.md), [tools/verify_jsonl_continuity.py](tools/verify_jsonl_continuity.py) | Plan only — no migration | QuantVPS Chicago Pro recommended; Aurora not NJ |
+| **Chicago VPS plan** | [docs/archive/chicago_vps_migration_plan.md](archive/chicago_vps_migration_plan.md), [tools/verify_jsonl_continuity.py](tools/verify_jsonl_continuity.py) | STRICKEN — Phoenix stays on Trading PC (plan preserved for reference) | QuantVPS Chicago Pro recommended; Aurora not NJ |
 
-See [docs/phase_b_plus_roadmap.md](docs/phase_b_plus_roadmap.md) for status of every Phase B+ item.
+See [docs/archive/phase_b_plus_roadmap.md](archive/phase_b_plus_roadmap.md) for the historical Phase B+ item status (now superseded by [docs/roadmap.md](roadmap.md)).
 
 ### Test counts (2026-04-25 EOD)
 
@@ -151,7 +152,7 @@ See [docs/phase_b_plus_roadmap.md](docs/phase_b_plus_roadmap.md) for status of e
 - `core/bridge/stream_validator.py` + `tools/nt8_stream_quarantine.py` -- multi-stream detector (default OFF behind `PHOENIX_STREAM_VALIDATOR=1`).
 - `core/risk/risk_gate.py` + `tools/risk_gate_runner.py` + `tools/watchdog_runner.py` -- fail-closed risk gate skeleton (`PHOENIX_RISK_GATE=0` default; not yet migrated).
 - `core/sentiment_finbert.py` + `agents/sentiment_flow_agent.py` -- FinBERT skeleton + Council voter at weight=0 (observation only).
-- `tools/verify_jsonl_continuity.py` + `docs/chicago_vps_migration_plan.md` -- VPS migration plan (NOT executed).
+- `tools/verify_jsonl_continuity.py` + `docs/archive/chicago_vps_migration_plan.md` -- VPS migration plan (NOT executed; STRICKEN per Jennifer 2026-04-25).
 - `tools/skills_digest.py` + `SKILLS.md` -- auto-generated skills digest now wired into SessionStart hook.
 - `tools/grade_open_predictions.py` (yesterday) + the dashboard's new Grades + Logs tabs.
 

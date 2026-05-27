@@ -260,10 +260,20 @@ class TestBaseBotWiring(unittest.TestCase):
         self.assertIn("self.tape_reader = TapeReader()", self.src)
 
     def test_tape_reader_fed_on_each_tick(self):
-        self.assertIn("self.tape_reader.record_tick(tick)", self.src)
+        from tests._bot_src_search import bot_source_matches; assert bot_source_matches("self.tape_reader.record_tick(tick)", "self.bot.tape_reader.record_tick(tick)", "bot.tape_reader.record_tick(tick)"), "tape_reader.record_tick wiring missing — should be in bots/_ws_dispatcher.py"
 
     def test_tape_state_exposed_in_market_snapshot(self):
-        self.assertIn('market["tape_state"] = self.tape_reader.get_state()', self.src)
+        # 2026-05-24 P4-1 Stage 3: market enrichment moved to
+        # bots/_strategy_dispatch.py — tape_state is stashed via
+        # self.bot.tape_reader.get_state() in the extracted module.
+        from pathlib import Path
+        dispatch_src = (
+            Path(__file__).parent.parent / "bots" / "_strategy_dispatch.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            'market["tape_state"] = self.bot.tape_reader.get_state()',
+            dispatch_src,
+        )
 
 
 if __name__ == "__main__":

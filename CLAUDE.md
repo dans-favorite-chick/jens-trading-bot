@@ -21,6 +21,85 @@ NinjaTrader 8 (TickStreamer.cs indicator)
 5. **No Newtonsoft.Json in C#** — not bundled with NT8, use StringBuilder
 6. **VWAP calculated in Python** — Order Flow+ license required in NT8
 
+## 🛑 PROTECTED FILES — operator sign-off REQUIRED before edits
+
+**Canonical source: [`.claude/PROTECTED_FILES.md`](.claude/PROTECTED_FILES.md)**
+
+This section is a quick reference. The canonical file list, the full
+protocol, and the test invariants live in the canonical doc. The
+commit-msg hook at `.githooks/commit-msg` enforces this policy at
+commit time — `git commit --no-verify` is the only bypass and should
+be treated as a last resort.
+
+These files form Phoenix's execution + risk + live-mode interlock layer.
+A bug introduced here can cost real money on the next live trade. Treat
+them as the "Protected Zone" — never edit without an explicit operator
+go-ahead in chat.
+
+### Protocol when a change is needed
+
+1. **Propose the diff in chat first.** Describe the change in plain English,
+   show the exact `old_string` / `new_string`, explain why.
+2. **Wait for explicit go-ahead** (something like "yes, apply that", "ship it",
+   or "approved"). Vague signals do NOT count — if the operator hasn't said yes,
+   the answer is no.
+3. **Ship the edit.** Run the relevant test files immediately after, plus the
+   full pytest suite. Report the test count.
+4. **Commit message MUST include** `OPERATOR-APPROVED: <YYYY-MM-DD>` on its own
+   line so the audit trail is searchable.
+
+If a non-protected file accidentally requires editing a protected one to
+work (e.g. you need to add a config knob the risk_manager reads), STOP and
+ask — don't bundle the protected-file change into a "small refactor".
+
+### Files in the Protected Zone
+
+| File | Why protected |
+|---|---|
+| `bridge/oif_writer.py` | Writes OIF orders to NT8. Any bug here can place wrong-side/wrong-qty live orders. |
+| `bridge/bridge_server.py` | WS hub between NT8 and bots. A bug breaks the entire pipeline. |
+| `core/risk_manager.py` | Daily/weekly loss caps, recovery mode, Kelly sizing. |
+| `core/portfolio_risk_gate.py` | Cross-strategy exposure cap. Single source of truth for portfolio risk. |
+| `core/pending_entry_tracker.py` | 6-terminal-state guarantee on every LIMIT entry. |
+| `core/nt8_order_id_capture.py` | Atomic stop modify (cancel-replace). Bug here = orphaned stops. |
+| `core/live_canary_gate.py` | The interlock that refuses to start prod_bot with non-allowlisted strategies. |
+| `config/settings.py` — **only these specific symbols:** | |
+|   `LIVE_TRADING` | The master live/sim flag. |
+|   `LIVE_STRATEGY_ALLOWLIST` | Which strategies are allowed in live. Currently `("bias_momentum",)` (canary). |
+|   `DAILY_LOSS_LIMIT` / `WEEKLY_LOSS_LIMIT` | Cap hierarchy. |
+|   `PER_STRATEGY_DAILY_LOSS_CAP` | Per-strategy halt. |
+|   `INSTRUMENT` / `NEXT_CONTRACT` / `ROLL_DAYS_BEFORE_EXPIRATION` | Wrong instrument = wrong trades. |
+|   `PENDING_ENTRY_TIMEOUT_S` | If raised too high, stale limits can fill late. |
+| `config/strategies.py` — **only these specific patterns:** | |
+|   `FREEZE_ACTIVE` flag | Production-decision freeze. Flipping it to False re-opens kill-list / Wilson-CI promotion / `tier_3000` decisions. |
+|   `validated: True` flips on any strategy | Promotion to live. Requires Wilson n≥100 + walk_forward_gate PASS. |
+|   `walk_forward_gate: "hard_block"` flips | Strictest gate; only `bias_momentum` carries it today. |
+| `bots/prod_bot.py` `only_validated` property | The last gate that blocks `validated=False` strategies in live. |
+
+### What IS safe to edit without operator sign-off
+
+- Any file under `strategies/*.py` EXCEPT `base_strategy.py` (the dataclass interface).
+- Any file under `tests/` (test changes are always welcome).
+- Any file under `tools/` (read-only analysis tools).
+- `dashboard/` (operator-facing display, doesn't touch execution).
+- Documentation under `docs/` and `memory/`.
+- Strategy parameters within an existing strategy's config block (e.g. tuning
+  `stop_atr_mult` on `bias_momentum`), AS LONG AS `validated`, `enabled`, and
+  `walk_forward_gate` are unchanged.
+
+### Standing operator instructions that interact with these files
+
+- "Always `git push origin <branch>` after any save-and-commit action"
+  (per `feedback_auto_push_after_commit.md`) — applies AFTER protected edit
+  + approved commit, not before.
+- "After every fix output the Phase completed and the Findings fixed"
+  (per `feedback_phase_findings_output.md`) — applies to ALL fixes, but
+  is especially important for protected-zone changes since they are tied
+  to audit findings.
+- Never raw-open `logs/trade_memory.json` — use the canonical reader
+  (`core.trade_memory.load_all_trades()`). This is enforced because the
+  legacy single-file path is frozen and reading it gives stale data.
+
 ### Key Paths
 - OIF incoming: `C:\Users\Trading PC\Documents\NinjaTrader 8\incoming\`
 - OIF outgoing: `C:\Users\Trading PC\Documents\NinjaTrader 8\outgoing\`

@@ -642,7 +642,7 @@ This is purely display -- no dashboard button can promote ML stages or apply par
 
 ### Sentiment as the Council's primary feed
 
-[core/sentiment_finbert.py](../core/sentiment_finbert.py) (ProsusAI/FinBERT, INT8 ONNX, p50=4.5ms / p99=6.85ms on this Windows host) is the primary feed for the Council's `sentiment_flow_agent` ([phoenix_bot/council/sentiment_flow_agent.py](../phoenix_bot/council/sentiment_flow_agent.py)). Today the agent runs at `DEFAULT_WEIGHT = 0.0` — it observes and persists to ChromaDB but does not move the council vote. A future session will:
+[core/sentiment_finbert.py](../core/sentiment_finbert.py) (ProsusAI/FinBERT, INT8 ONNX, p50=4.5ms / p99=6.85ms on this Windows host) is the primary feed for the Council's `sentiment_flow_agent` ([council/sentiment_flow_agent.py](../council/sentiment_flow_agent.py)). Today the agent runs at `DEFAULT_WEIGHT = 0.0` — it observes and persists to ChromaDB but does not move the council vote. A future session will:
 1. Activate Finnhub WS (current stub: [core/news/finnhub_ws.py](../core/news/finnhub_ws.py))
 2. Tune `DEFAULT_WEIGHT` from observation data (target window: 14 days)
 3. Wire FRED macros as a second sentiment dimension

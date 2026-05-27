@@ -126,7 +126,9 @@ def test_be_on_bar_close_default_is_true():
 
 
 def test_base_bot_reads_be_on_bar_close_default():
-    src = (ROOT / "bots" / "base_bot.py").read_text(encoding="utf-8")
+    # P4-1 (2026-05-24): search all extracted bot modules, not base_bot.py alone
+    from tests._bot_src_search import bot_combined_source as _bcs
+    src = _bcs()
     assert 'STRATEGY_DEFAULTS.get("be_on_bar_close"' in src, (
         "BE gate should read the global default — wiring must exist "
         "for the config flag to actually drive behavior."

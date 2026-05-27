@@ -110,11 +110,18 @@ def test_daily_cap_log_once_only(caplog):
 # ─── [CAP:weekly:<account>] — weekly cap breach ──────────────────────
 
 def test_weekly_cap_emits_signature(caplog):
-    """Weekly cap breach → [CAP:weekly:<account>] CRITICAL log."""
+    """Weekly cap breach → [CAP:weekly:<account>] CRITICAL log.
+
+    2026-05-24 P0-3: read WEEKLY_LOSS_LIMIT dynamically so the test
+    tracks the config value instead of hardcoding $150 (which was the
+    old upside-down weekly cap — see synthesis F-02).
+    """
+    from config.settings import WEEKLY_LOSS_LIMIT
     caplog.set_level(logging.CRITICAL)
     rm = RiskManager()
     rm.state.daily_pnl = 0.0       # daily clean
-    rm.state.weekly_pnl = -500.0   # weekly over limit (default WEEKLY_LOSS_LIMIT is much smaller)
+    # Set weekly_pnl just past the configured weekly cap.
+    rm.state.weekly_pnl = -(WEEKLY_LOSS_LIMIT + 100.0)
     can, _ = rm.can_trade(account="SimBias Momentum")
     assert can is False
     matches = [

@@ -180,27 +180,48 @@ class DirectFileSink:
 
 
 # ---------------------------------------------------------------------------
-# RiskGateSink — fail-soft over Windows named pipe
+# RiskGateSink — fail-soft (default) OR fail-CLOSED (PHOENIX_RISK_GATE=1)
 # ---------------------------------------------------------------------------
 
 class RiskGateSink:
-    """Forward to RiskGate over a Windows named pipe. Used when
-    `PHOENIX_RISK_GATE=1`. The pipe-client open is per-call so a
-    crashed gate doesn't leak handles.
+    """Forward to RiskGate over a Windows named pipe.
 
-    Fail-soft: if the named pipe is unreachable (gate process not
-    running), log a one-shot WARN and fall back to DirectFileSink
-    so the bot keeps trading. Operators flipping the flag without
-    starting the gate process should see a single visible warning,
-    not a crash."""
+    Two failure modes, chosen at construction:
 
-    _fallback_warned = False  # class-level so warning fires once per process
+      `fail_closed=False` (default — used when explicit construction
+      omits the param): if the named pipe is unreachable, log a one-shot
+      WARN and fall back to DirectFileSink so the bot keeps trading.
+      This matches the original 2026-04-25 behavior.
+
+      `fail_closed=True` (used when PHOENIX_RISK_GATE=1 is explicitly
+      set in env): if the named pipe is unreachable, log CRITICAL and
+      return a REFUSE response with `sink="risk_gate_unavailable"`. The
+      caller (base_bot's _sink_submit_* wrappers) treats REFUSE as a
+      no-op and skips the entry — the bot does NOT execute the trade.
+
+      Why the split: P1-2 in docs/audits/SYNTHESIS_2026-05-24.md (F-05).
+      Setting PHOENIX_RISK_GATE=1 should mean "risk gate on, or no
+      trades happen" — not "risk gate maybe." Operators flipping the
+      flag without starting the gate process must see the bot stop
+      trading, not silently bypass the gate.
+
+      Why the default stays fail-soft: backward compatibility. Existing
+      callers that construct RiskGateSink() directly (no explicit
+      fail_closed arg) keep the original behavior. Only get_default_sink()
+      — driven by the env flag — opts into fail-closed.
+    """
+
+    _fallback_warned = False    # class-level so WARN fires once per process
+    _fail_closed_warned = False # class-level so CRITICAL fires once per process
 
     def __init__(self, pipe_path: str = r"\\.\pipe\phoenix_risk_gate",
-                 timeout_s: float = 2.0):
+                 timeout_s: float = 2.0,
+                 fail_closed: bool = False):
         self.pipe_path = pipe_path
         self.timeout_s = timeout_s
-        self._fallback = DirectFileSink()
+        self.fail_closed = fail_closed
+        # Only build the fallback sink when we actually might need it.
+        self._fallback = None if fail_closed else DirectFileSink()
 
     def submit(self, request: dict) -> dict:
         if "id" not in request:
@@ -209,8 +230,28 @@ class RiskGateSink:
         try:
             return self._call_pipe(line)
         except Exception as e:
-            # Fail-soft: log once, fall back to DirectFileSink so
-            # the bot doesn't lose its execution path. The B59 + price
+            if self.fail_closed:
+                # P1-2 fail-CLOSED: refuse the trade. Bot will not write
+                # the OIF. CRITICAL log once per process so operator sees
+                # it, then REFUSE response on every subsequent call.
+                if not RiskGateSink._fail_closed_warned:
+                    logger.critical(
+                        "[RISK_GATE_DOWN] pipe unreachable (%r) — fail-CLOSED "
+                        "active (PHOENIX_RISK_GATE=1). All OIF submissions "
+                        "will be REFUSED until tools/risk_gate_runner.py is "
+                        "running. Bot is NOT executing trades.", e,
+                    )
+                    RiskGateSink._fail_closed_warned = True
+                return {
+                    "v": 1,
+                    "id": request["id"],
+                    "decision": "REFUSE",
+                    "reason": f"risk_gate_unavailable: {e}",
+                    "sink": "risk_gate_unavailable",
+                }
+
+            # Fail-soft path (default): log once, fall back to DirectFileSink
+            # so the bot doesn't lose its execution path. The B59 + price
             # sanity guards downstream still apply.
             if not RiskGateSink._fallback_warned:
                 logger.warning(
@@ -258,9 +299,13 @@ def get_default_sink() -> OIFSink:
     PHOENIX_RISK_GATE unset or "0" -> DirectFileSink (legacy path,
     behavior identical to pre-migration code).
 
-    PHOENIX_RISK_GATE = "1" -> RiskGateSink (gate engaged; fails soft
-    to DirectFileSink if the gate process isn't running).
+    PHOENIX_RISK_GATE = "1" -> RiskGateSink with fail_closed=True
+    (P1-2, synthesis F-05). If the gate pipe is unreachable, the bot
+    REFUSES all trades and emits a CRITICAL log line. The previous
+    fail-soft behavior (silent fallback to DirectFileSink) was the
+    "risk gate optional" anti-pattern; with PHOENIX_RISK_GATE=1
+    explicitly set the operator's intent is "risk gate ON or no trades."
     """
     if os.environ.get("PHOENIX_RISK_GATE", "0") == "1":
-        return RiskGateSink()
+        return RiskGateSink(fail_closed=True)
     return DirectFileSink()

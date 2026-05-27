@@ -384,4 +384,8 @@ class RiskManager:
             "kill_reason": self.state.kill_reason,
             "daily_limit": self._daily_limit,
             "daily_used_pct": round(abs(self.state.daily_pnl) / self._daily_limit * 100, 1),
+            # P3-1 (2026-05-24): expose slider-controlled values so dashboard
+            # "live: <value>" pills can confirm the bot ACCEPTED the change.
+            "risk_per_trade": self._risk_per_trade,
+            "max_trades": self._max_trades,
         }

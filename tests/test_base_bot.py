@@ -47,12 +47,18 @@ def test_opening_session_class_loaded_after_2026_05_15_un_retire():
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Daily refresh task exists and is a coroutine
+# Daily refresh runner exists and exposes a coroutine .run()
+# 2026-05-24 P4-1 Stage 2: extracted to bots/_session_levels_refresher.py.
+# Test now asserts the runner attribute + its .run coroutine.
 # ═══════════════════════════════════════════════════════════════════
 def test_daily_refresh_task_is_a_coroutine():
     b = BaseBot()
-    assert hasattr(b, "_session_levels_refresh_task")
-    assert inspect.iscoroutinefunction(b._session_levels_refresh_task)
+    assert hasattr(b, "_session_levels_refresher"), (
+        "BaseBot must instantiate SessionLevelsRefresher in __init__"
+    )
+    assert inspect.iscoroutinefunction(b._session_levels_refresher.run), (
+        "SessionLevelsRefresher.run must be a coroutine"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════

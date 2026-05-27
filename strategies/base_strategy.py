@@ -9,6 +9,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 
+from core.trace_id import generate_trace_id
+
 
 @dataclass
 class Signal:
@@ -22,6 +24,11 @@ class Signal:
     reason: str            # Human-readable entry reason
     confluences: list[str] # List of confluences met
     trade_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    # P4-2 (2026-05-24): per-signal trace ID for lifecycle correlation.
+    # 8-char hex generated when the strategy emits the signal; persists
+    # through trade_memory so `grep "[TRACE:abc12345]" logs/*.log` shows
+    # the full lifecycle (SIGNAL → ROUTER → ENTRY → ACK → FILL → EXIT → CLOSE).
+    trace_id: str = field(default_factory=generate_trace_id)
     # Set True when the strategy has already computed an ATR-based stop internally.
     # base_bot will skip its own ATR override so the strategy's calculation is used.
     atr_stop_override: bool = False
@@ -59,6 +66,7 @@ class Signal:
     def to_dict(self) -> dict:
         return {
             "trade_id": self.trade_id,
+            "trace_id": self.trace_id,  # P4-2 lifecycle correlation
             "direction": self.direction,
             "strategy": self.strategy,
             "reason": self.reason,

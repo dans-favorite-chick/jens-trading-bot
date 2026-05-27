@@ -22,6 +22,24 @@ ROLL_DAYS_BEFORE_EXPIRATION = 8      # Auto-switch N trading days before expirat
 
 ACCOUNT = "Sim101"
 LIVE_TRADING = False  # Flip to True for real money (requires ATI enabled in NT8)
+
+# ─── LIVE CANARY CHOKE POINT (2026-05-24, operator directive) ──────
+# When LIVE_TRADING=True, the bot enforces canary mode: ONE account,
+# ONE instrument, allowlisted-and-validated strategies only, no AI
+# in the entry path. core/live_canary_gate.py validates these at
+# startup and refuses to start the bot if any constraint is violated.
+#
+# To put a new strategy on live: (1) demonstrate validated=True via
+# Wilson-CI gate (tools/validation_tracker.py --check-promotion), then
+# (2) add its name to LIVE_STRATEGY_ALLOWLIST below, then (3) restart
+# the bot. The canary checks the allowlist + validated flag + enabled
+# flag and CRITICAL-logs every rejection.
+#
+# bias_momentum is the first live candidate per docs/audits/SYNTHESIS_
+# 2026-05-24.md §4 and operator directive 2026-05-24. Do NOT add
+# es_nq_confluence, vwap_band_reversion, or any validated=False
+# strategy here.
+LIVE_STRATEGY_ALLOWLIST: tuple[str, ...] = ("bias_momentum",)
 TICK_SIZE = 0.25
 TICK_VALUE_PER_CONTRACT = 0.50    # MNQ: $0.50 per tick per 1 contract
 
@@ -59,6 +77,15 @@ DASHBOARD_PORT = 5000     # Flask dashboard
 NT8_DATA_ROOT = r"C:\Users\Trading PC\Documents\NinjaTrader 8"
 OIF_INCOMING = os.path.join(NT8_DATA_ROOT, "incoming")
 OIF_OUTGOING = os.path.join(NT8_DATA_ROOT, "outgoing")
+# 2026-05-25: OIF .tmp staging folder. NT8's ATI watches the incoming/
+# folder for ALL file extensions, not just .txt — staging a *.txt.tmp
+# inside incoming/ produced ~50% spurious "Unknown OIF file type" entries
+# in the NT8 Log tab (entry for the .tmp, then the actual order Working
+# entry). We now write the .tmp into a sibling folder so NT8 never sees
+# it, then os.replace() into incoming/ for the atomic same-volume rename.
+# MUST live on the same NTFS volume as OIF_INCOMING (same parent dir
+# guarantees this absent NTFS junction shenanigans).
+OIF_STAGING = os.path.join(NT8_DATA_ROOT, "incoming.staging")
 FILE_FALLBACK_PATH = r"C:\temp\mnq_data.json"
 
 # ─── Connection Thresholds ──────────────────────────────────────────
@@ -81,7 +108,12 @@ MAX_LOSS_PER_TRADE = 20.0       # Hard limit per trade ($)
 # loss days could have racked up with no auto-halt. Closed via this
 # audit.
 DAILY_LOSS_LIMIT = 200.0        # production: 4% of $5K starter equity
-WEEKLY_LOSS_LIMIT = 150.0       # Stop trading for the week ($)
+# 2026-05-24 P0-3 FIX (synthesis F-02): raised from $150 → $600.
+# Original $150 was LESS than the $200 daily cap, meaning a single $150 loss
+# day closed the bot for the rest of the week — hierarchy was upside-down.
+# New value is 3× daily cap, matching the standard belt-and-suspenders ratio.
+# Enforced by tests/test_risk_hierarchy.py: WEEKLY_LOSS_LIMIT >= DAILY_LOSS_LIMIT * 3.
+WEEKLY_LOSS_LIMIT = 600.0       # Stop trading for the week ($)
 RECOVERY_MODE_TRIGGER = 30.0    # At -$30 daily: cut size 50%, raise thresholds
 MAX_TRADES_PER_SESSION = 999  # Uncapped — don't limit winning days
 COOLOFF_AFTER_CONSECUTIVE_LOSSES = 2   # Pause after N consecutive losses (was 3)
@@ -163,11 +195,25 @@ CR_ADAPTIVE_SESSION = True
 CR_EXTENDED_END     = "15:00"  # On score 4+ days, trade until 3 PM CST
 
 # ─── Phase 4: AI Agents ────────────────────────────────────────────
-# Requires GEMINI_API_KEY in .env or environment variable
-AGENT_COUNCIL_ENABLED = True        # 7-voter bias consensus at session open
-AGENT_PRETRADE_FILTER_ENABLED = True  # Fast AI sanity check before entry
-AGENT_DEBRIEF_ENABLED = True        # End-of-session coaching debrief
-AGENT_MODEL = "gemini-2.5-flash"    # Model for all agents
+# Requires GEMINI_API_KEY in .env or environment variable.
+#
+# 2026-05-24 P0-4 KILL (synthesis F-03): all three flags flipped to False.
+# Reasons:
+#   - No measured uplift (advisory mode, no A/B harness, no published
+#     "uplift = $X / N trades, 95% CI [a,b]" report).
+#   - Free-tier Gemini quota was exhausted on 2026-05-24 morning, taking
+#     down the incident analyzer in the middle of a process_down event
+#     (F-04). The bot stack must not have a runtime dependency on a
+#     free-tier API quota.
+#   - Adds up to 3 seconds of latency before order entry; latency that
+#     is structural drag with zero measured edge.
+# Re-enable any single agent ONLY after an A/B harness publishes uplift
+# data in out/ with 95% CI lower bound > 0. See P4-6 in
+# docs/audits/SYNTHESIS_2026-05-24.md.
+AGENT_COUNCIL_ENABLED = False       # 7-voter bias consensus at session open
+AGENT_PRETRADE_FILTER_ENABLED = False  # Fast AI sanity check before entry
+AGENT_DEBRIEF_ENABLED = False       # End-of-session coaching debrief
+AGENT_MODEL = "gemini-2.5-flash"    # Model for all agents (kept for re-enable)
 
 # ─── Commission & Execution ─────────────────────────────────────────
 # B13 (2026-05-03): all values per CONTRACT, per SIDE (entry or exit).
@@ -191,6 +237,24 @@ ENTRY_ORDER_TYPE = "LIMIT"       # Recommended: LIMIT reduces slippage to ~0
 LIMIT_OFFSET_TICKS = 1           # Ticks beyond current price for aggressive fills
                                  # LONG entry: limit = price + (offset * TICK_SIZE)
                                  # SHORT entry: limit = price - (offset * TICK_SIZE)
+
+# ─── Pending-entry lifecycle (P1-7, 2026-05-25) ─────────────────────
+# A LIMIT entry sits at NT8 from submission until it either fills,
+# the operator cancels it, the bot restarts and adopts it, or the
+# strategy's thesis expires. P1-7 makes that last case explicit: the
+# pending-entry sweeper (see core/pending_entry_tracker.py + base_bot's
+# _pending_entry_sweeper_loop) issues a CANCEL OIF for any LIMIT entry
+# older than PENDING_ENTRY_TIMEOUT_S and records terminal_state=
+# "timeout_cancelled" in trade_memory.
+#
+# 90s is a deliberately tight default: at MNQ open volatility, any
+# LIMIT that hasn't filled in 90s is almost certainly out-of-touch
+# with the market (price moved away and the thesis is stale). Operator
+# can widen for slower-paced strategies via this knob without code
+# changes. Distinct from PositionManager.PENDING_ENTRY_TIMEOUT_S
+# (900s, the per-account entry-gate stale-detector); this knob governs
+# the per-trade lifecycle timeout, not the per-account gate.
+PENDING_ENTRY_TIMEOUT_S = 90.0
 
 # ─── Tick Bar Configuration ──────────────────────────────────────────
 # Tick bars complete every N trades (not seconds). Used for entry precision.
@@ -332,6 +396,28 @@ TELEGRAM_STRATEGY_CHAT_OVERRIDES: dict[str, str] = {
     # Leave empty dict to route all to the default channel.
 }
 TELEGRAM_TAG_STRATEGY = True   # Prepend [strategy] tag to every msg
+
+# ─── P1-3 (F-07/F-20) portfolio risk gate ──────────────────────────
+# Per-strategy daily caps don't sum-protect across the portfolio. With
+# 11 strategies × $200/day = $2,200 theoretical daily exposure, only
+# the global daily cap catches it — and only after the fact. The
+# portfolio risk gate (core/portfolio_risk_gate.py) is a prospective
+# pre-OIF check that refuses or reduces sizing when projected
+# in-window directional exposure would breach the cap or when a new
+# entry would stack onto a highly-correlated open position.
+#
+# Default mode is WARN (log-only). Flip PHOENIX_PORTFOLIO_CAP_BLOCK=1
+# in the bot's environment to enforce.
+PORTFOLIO_DIRECTIONAL_CAP = 5      # max simultaneous contracts in same direction
+PORTFOLIO_CORRELATION_THRESHOLD = 0.7  # Jaccard threshold for correlated-strategy gate
+
+# ─── P1-3 (2026-05-24, synthesis F-07 / F-20) Portfolio Risk Gate ──
+# Runtime cap on directional exposure + correlated-strategy concurrency.
+# Default WARN mode logs would-be decisions without blocking. Flip env
+# PHOENIX_PORTFOLIO_CAP_BLOCK=1 to actually refuse / reduce entries.
+# See core/portfolio_risk_gate.py for the gate logic.
+PORTFOLIO_DIRECTIONAL_CAP = 5      # max simultaneous contracts in same direction
+PORTFOLIO_CORRELATION_THRESHOLD = 0.7  # Jaccard threshold for correlated-strategy gate
 
 # ─── Logging ────────────────────────────────────────────────────────
 LOG_DIR = "logs"

@@ -191,21 +191,34 @@ class TestEntryPointsRaiseOnStuck:
 class TestHappyPath:
     def test_bracket_order_no_raise_when_consumed(self, monkeypatch, tmp_path):
         """NT8 simulated by immediately deleting any file written to
-        OIF_INCOMING — the writer must complete without raising."""
-        monkeypatch.setattr(oif, "OIF_INCOMING", str(tmp_path))
+        OIF_INCOMING — the writer must complete without raising.
 
-        real_stage_oif = oif._stage_oif
+        2026-05-25: `_stage_oif` now writes the `.tmp` into OIF_STAGING,
+        not into OIF_INCOMING. The actual file appears in incoming/ only
+        after `_commit_staged` runs `os.replace`. Hook the simulated NT8
+        consume there so the file gets deleted right after commit (mimics
+        NT8 ATI snapping it up sub-second).
+        """
+        incoming = tmp_path / "incoming"
+        staging = tmp_path / "incoming.staging"
+        incoming.mkdir()
+        # Don't create staging — let _stage_oif auto-create.
+        monkeypatch.setattr(oif, "OIF_INCOMING", str(incoming))
+        monkeypatch.setattr(oif, "OIF_STAGING", str(staging))
 
-        def _stage_then_delete(cmd, trade_id, suffix=""):
-            tmp_path_ret, final_path_ret = real_stage_oif(cmd, trade_id, suffix)
-            # Simulate NT8 consuming instantly (remove the file).
-            try:
-                os.remove(final_path_ret)
-            except FileNotFoundError:
-                pass
-            return tmp_path_ret, final_path_ret
+        real_commit = oif._commit_staged
 
-        monkeypatch.setattr(oif, "_stage_oif", _stage_then_delete)
+        def _commit_then_consume(staged, trade_id):
+            committed = real_commit(staged, trade_id)
+            # Simulate NT8 consuming instantly (remove every committed file).
+            for p in committed:
+                try:
+                    os.remove(p)
+                except FileNotFoundError:
+                    pass
+            return committed
+
+        monkeypatch.setattr(oif, "_commit_staged", _commit_then_consume)
 
         # Should not raise.
         paths = oif.write_bracket_order(

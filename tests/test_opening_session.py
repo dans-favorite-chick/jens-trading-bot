@@ -307,22 +307,72 @@ class TestOpenDrive:
         # ORB fields absent, Auction windows blocked by opening_type; nothing fires.
         assert s.evaluate(m) is None
 
-    def test_open_drive_target_is_2r_post_b2_fix(self):
-        # Bug B2 fix (2026-05-18): open_drive no longer targets pivot_pp
-        # (which landed wrong side of entry on a strong drive). Now uses
-        # entry ± 2R. See strategies/opening_session.py:373-388.
-        # Fixture: price=25025, h5=25020, l5=24998 → structural stop=25009,
-        # 1R=16pts, 2R target=25025+32=25057.
+    def test_open_drive_target_is_r1_continuation_post_b2_full_fix(self):
+        # F-26 / Bug B2 FULL fix (2026-05-25, operator decision
+        # "Continuation R1/S1"): open_drive targets R1 (LONG) / S1 (SHORT)
+        # whenever the continuation pivot is at least 1.5R from entry.
+        # Falls back to entry ± 2R when pivot is too close or missing.
+        # See strategies/opening_session.py:408-446.
+        #
+        # Fixture: price=25025, pivot_pp=25050, pd_low=24900, pd_high=25100,
+        # h5=25020, l5=24998 → structural_stop=25009, 1R=16pts.
+        # R1 = 2*PP - PD_L = 2*25050 - 24900 = 25200.
+        # candidate_dist = 25200 - 25025 = 175pts → 10.94R, well past 1.5R
+        # → target = R1 = 25200, target_method = "R1".
         s = make_strategy()
         m = open_drive_market()
         sig = s.evaluate(m)
         assert sig is not None
         structural_stop = (m["rth_5min_high"] + m["rth_5min_low"]) / 2.0
         one_r = abs(m["price"] - structural_stop)
-        expected_target = m["price"] + 2.0 * one_r  # LONG direction
+        r1 = 2.0 * m["pivot_pp"] - m["prior_day_low"]
+        expected_target = r1
+        candidate_dist = r1 - m["price"]
+        assert candidate_dist >= 1.5 * one_r, (
+            "Fixture must place R1 at >=1.5R from entry"
+        )
         assert sig.metadata["t1"] == pytest.approx(expected_target)
         assert sig.target_price == pytest.approx(expected_target)
-        assert sig.metadata["target_method"] == "2R_fixed_post_B2_fix"
+        assert sig.metadata["target_method"] == "R1"
+
+    def test_open_drive_target_falls_back_to_2r_when_pivot_too_close(self):
+        # F-26 fallback path: if R1 is < 1.5R from entry (a "weak"
+        # continuation), strategy uses entry ± 2R instead.
+        #
+        # Construct: pivot_pp / pd_low such that R1 is only ~10pts above
+        # entry (well under 1.5R=24pts).
+        s = make_strategy()
+        m = open_drive_market(
+            pivot_pp=25030.0,
+            prior_day_low=25020.0,  # R1 = 2*25030 - 25020 = 25040 → 15pts above price=25025
+        )
+        sig = s.evaluate(m)
+        assert sig is not None
+        structural_stop = (m["rth_5min_high"] + m["rth_5min_low"]) / 2.0
+        one_r = abs(m["price"] - structural_stop)
+        expected_target = m["price"] + 2.0 * one_r
+        assert sig.metadata["t1"] == pytest.approx(expected_target)
+        assert sig.target_price == pytest.approx(expected_target)
+        assert sig.metadata["target_method"] == "2R_fixed"
+
+    def test_open_drive_short_target_is_s1_continuation(self):
+        # SHORT mirror of the R1 test:
+        # S1 = 2*PP - PD_H. With price=24975, pivot_pp=24950,
+        # pd_high=25100, pd_low=24900: S1 = 2*24950 - 25100 = 24800.
+        # candidate_dist = 24975 - 24800 = 175pts → well past 1.5R.
+        s = make_strategy()
+        m = open_drive_market(
+            rth_5min_high=25002.0, rth_5min_low=24980.0, rth_5min_close=24980.0,
+            price=24975.0, pivot_pp=24950.0,
+        )
+        sig = s.evaluate(m)
+        assert sig is not None
+        assert sig.direction == "SHORT"
+        s1 = 2.0 * m["pivot_pp"] - m["prior_day_high"]
+        expected_target = s1
+        assert sig.metadata["t1"] == pytest.approx(expected_target)
+        assert sig.target_price == pytest.approx(expected_target)
+        assert sig.metadata["target_method"] == "S1"
 
 
 # ═══════════════════════════════════════════════════════════════════

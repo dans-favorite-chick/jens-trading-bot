@@ -52,6 +52,21 @@ GRADES_DIR = PROJECT_ROOT / "out" / "grades"
 # Validation-status commit body template (Jennifer's amendment)
 # ═══════════════════════════════════════════════════════════════════════
 
+# Default-strategy roster the harness evaluates on each weekly run. Order
+# matches the project's validated set per docs/STRATEGY_SPECIFICATIONS.md.
+DEFAULT_VALIDATION_STRATEGIES = (
+    "bias_momentum",
+    "high_precision_only",
+    "spring_setup",
+    "vwap_pullback",
+    "dom_pullback",
+    "noise_area",
+    "compression_breakout",
+)
+
+# Legacy fallback — used when no trades are available at all (the
+# harness is wired in but cold-start mode). Pins the historical
+# "NOT YET RUN (Phase C dependency)" wording the existing tests check.
 VALIDATION_STATUS_TEMPLATE = """## Validation status
 
 The following metrics MUST be computed and ticked before this proposal
@@ -68,9 +83,131 @@ config tweaks for paper-trade verification on sim_bot only.
 """
 
 
+def _checkbox(verdict: str) -> str:
+    """Map verdict -> markdown checkbox glyph."""
+    return {
+        "PASS": "- [x]",
+        "FAIL": "- [ ]",
+        "INSUFFICIENT_DATA": "- [~]",
+    }.get(verdict, "- [ ]")
+
+
+def render_validation_status(
+    strategies: tuple[str, ...] | list[str] = DEFAULT_VALIDATION_STRATEGIES,
+    min_trades: int = 200,
+) -> str:
+    """Run the P4-5 harness for each strategy and render the Validation
+    status section. Replaces the legacy "NOT YET RUN" template per F-24.
+
+    Per ``tools/walk_forward_harness.run_all``:
+      - PASS if walk-forward all-folds-positive AND DSR p<0.05 AND PBO<0.5
+      - FAIL if any of those gates fail
+      - INSUFFICIENT_DATA if < min_trades or any sub-test below its
+        sample-size threshold
+
+    If the harness import itself fails (cold install, missing logs dir),
+    falls back to the legacy template so the commit body is still
+    well-formed.
+    """
+    try:
+        from tools import walk_forward_harness as wfh
+        from core.trade_memory import load_all_trades
+    except Exception as e:  # pragma: no cover — defensive fallback
+        logger.warning(f"[evolution] harness import failed, using legacy: {e!r}")
+        return VALIDATION_STATUS_TEMPLATE
+
+    try:
+        all_trades = load_all_trades(str(PROJECT_ROOT / "logs"))
+    except Exception as e:  # pragma: no cover — defensive
+        logger.warning(f"[evolution] load_all_trades failed: {e!r}")
+        return VALIDATION_STATUS_TEMPLATE
+
+    if not all_trades:
+        return VALIDATION_STATUS_TEMPLATE
+
+    lines = [
+        "## Validation status",
+        "",
+        "Per `tools/walk_forward_harness.py` (P4-5, closes F-24). Gate:",
+        "PBO < 0.5 AND DSR p-value < 0.05 AND walk-forward all-folds-positive.",
+        "Sample-size gate: every strategy needs ≥200 trades before the math",
+        "produces non-INSUFFICIENT_DATA verdicts.",
+        "",
+    ]
+    any_insufficient = False
+    any_fail = False
+    for strat in strategies:
+        st_trades = [t for t in all_trades if t.get("strategy") == strat]
+        rep = wfh.run_all(st_trades, strategy=strat, min_trades=min_trades)
+        v = rep.get("verdict", "?")
+        cb = _checkbox(v)
+        wf_v = rep.get("walk_forward", {}).get("verdict", "?")
+        dsr = rep.get("dsr", {})
+        pbo = rep.get("pbo", {})
+        dsr_p = dsr.get("p_value")
+        pbo_val = pbo.get("pbo")
+        n = rep.get("n_trades", 0)
+        if v == "INSUFFICIENT_DATA":
+            any_insufficient = True
+            n_needed = max(min_trades, n + 1)
+            lines.append(
+                f"{cb} **{strat}** — `INSUFFICIENT_DATA` "
+                f"(n={n}, need ≥{min_trades}; "
+                f"walk_forward={wf_v}, DSR n/a, PBO n/a)"
+            )
+        elif v == "FAIL":
+            any_fail = True
+            lines.append(
+                f"{cb} **{strat}** — `FAIL` "
+                f"(walk_forward={wf_v}, "
+                f"DSR p={_fmt_num(dsr_p, '.4f')}, "
+                f"PBO={_fmt_num(pbo_val, '.3f')}, n={n})"
+            )
+        else:  # PASS
+            lines.append(
+                f"{cb} **{strat}** — `PASS` "
+                f"(walk_forward all-folds-positive, "
+                f"DSR p={_fmt_num(dsr_p, '.4f')}, "
+                f"PBO={_fmt_num(pbo_val, '.3f')}, n={n})"
+            )
+    lines.append("")
+    if any_fail:
+        lines.append("**DO NOT MERGE** — at least one strategy FAILED the P4-5 gate.")
+    elif any_insufficient:
+        lines.append(
+            "**DO NOT MERGE strategy-promotion changes** — one or more "
+            "strategies still INSUFFICIENT_DATA. Cherry-pick non-promotion "
+            "config tweaks for paper-trade verification on sim_bot only."
+        )
+    else:
+        lines.append(
+            "All listed strategies cleared the P4-5 gate. Operator may "
+            "promote any `validated=True` candidate from this list."
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _fmt_num(v, fmt: str) -> str:
+    if v is None:
+        return "n/a"
+    try:
+        return format(v, fmt)
+    except (TypeError, ValueError):
+        return str(v)
+
+
 def build_commit_body(week_start: str, week_end: str, proposals: list[dict],
-                      ai_review: str) -> str:
-    """Build the full git commit body. Always includes validation checkboxes."""
+                      ai_review: str,
+                      validation_section: str | None = None) -> str:
+    """Build the full git commit body. Always includes validation checkboxes.
+
+    ``validation_section`` lets the caller inject a pre-rendered status
+    (default: call ``render_validation_status()`` at build time, which
+    runs the P4-5 harness). Pass an explicit string for tests.
+    """
+    if validation_section is None:
+        validation_section = render_validation_status()
     lines = [
         f"weekly_evolution: proposals from {week_start} -> {week_end}",
         "",
@@ -93,7 +230,7 @@ def build_commit_body(week_start: str, week_end: str, proposals: list[dict],
         lines.append("")
         lines.append(ai_review)
         lines.append("")
-    lines.append(VALIDATION_STATUS_TEMPLATE)
+    lines.append(validation_section)
     return "\n".join(lines)
 
 

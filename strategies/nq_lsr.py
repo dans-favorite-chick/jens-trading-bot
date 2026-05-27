@@ -305,11 +305,15 @@ class NQLiquiditySweepReversal(BaseStrategy):
             logger.debug(f"[EVAL] {self.name}: SKIP bad_bar_ts")
             return None
 
-        # Freshness check — skip if we're late
-        import time
+        # Freshness check — skip if we're late.
+        # Compare against the strategy's "now" (works in both live and backtest),
+        # not wallclock time.time() which breaks backtests because wallclock is
+        # 2026 while last_bar_ts is the historical bar epoch.
+        # F-27 / PHASE 13 BUG B3 FIX (generalized 2026-05-24).
         bar_freshness = self.config.get("bar_freshness_sec", DEFAULT_BAR_FRESHNESS_SEC)
-        if (time.time() - last_bar_ts) > bar_freshness:
-            logger.debug(f"[EVAL] {self.name}: SKIP stale_bar age={time.time()-last_bar_ts:.0f}s")
+        now_ts = now_ct.timestamp()
+        if (now_ts - last_bar_ts) > bar_freshness:
+            logger.debug(f"[EVAL] {self.name}: SKIP stale_bar age={now_ts-last_bar_ts:.0f}s")
             return None
 
         # Per-bar dedup

@@ -1,0 +1,30 @@
+# Reconciliation tolerance configuration
+# Used by tools/reconcile_sim_vs_backtest.py to compare sim trades against
+# the deterministic backtester replay. Tighten progressively as the harness
+# stabilizes — these are LOOSE Stage-2 starting values per the operator
+# directive in P1-1.
+
+# Maximum allowed difference between sim entry time and backtest signal
+# time, in seconds. 60s = one 1m bar — matches the natural cadence of
+# evaluate() firing in the live pipeline.
+entry_time_seconds: 60
+
+# Maximum allowed difference between sim entry price and backtest entry
+# price, in MNQ ticks (0.25 points each).
+entry_price_ticks: 2
+
+# Maximum allowed difference between sim stop price and backtest stop
+# price, in MNQ ticks.
+stop_price_ticks: 2
+
+# When False, exit_reason differences are recorded but do NOT cause a
+# FAIL. Recommended initially — exit-time CSV vs live-tick paths differ
+# in resolution and a fresh harness will see many "stop vs target"
+# disagreements before we tighten.
+exit_reason_must_match: false
+
+# Allowed deviation between sim net P&L and backtest P&L, expressed as
+# a percentage of the absolute sim net. 25% = ±$5 on a $20 trade.
+# Loose initial value per the prompt — tighten to 10% once the headline
+# numbers stabilize.
+net_pnl_pct: 25.0

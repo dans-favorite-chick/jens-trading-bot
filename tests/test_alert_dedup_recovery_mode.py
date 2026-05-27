@@ -104,18 +104,16 @@ def test_base_bot_init_sets_recovery_alert_session_date_none():
 
 def test_recovery_alert_block_uses_dedup(monkeypatch):
     """Source-level grep: the RECOVERY MODE branch must check the dedup
-    state before firing notify_alert."""
-    src = (ROOT_PATH := __import__("pathlib").Path(ROOT)) / "bots" / "base_bot.py"
-    text = src.read_text(encoding="utf-8")
-    # The notify_alert("RECOVERY MODE" ...) call must be GUARDED by a
-    # check on _recovery_alert_session_date. Find both lines and verify
-    # the guard appears within ~4 lines BEFORE the alert.
-    idx = text.find('notify_alert(\n                        "RECOVERY MODE"')
-    if idx < 0:
-        # Fallback: any single-line variant
-        idx = text.find('"RECOVERY MODE"')
+    state before firing notify_alert.
+
+    2026-05-24 P4-1 Stage 4: this code lives in bots/_trade_exit.py
+    (_exit_trade body) — the alert fires after a loss closes via the
+    exit path. Search across all bot modules.
+    """
+    from tests._bot_src_search import bot_combined_source
+    text = bot_combined_source()
+    idx = text.find('"RECOVERY MODE"')
     assert idx > 0, "couldn't find RECOVERY MODE alert site"
-    # Look back ~6 lines for the dedup check
     pre = text[max(0, idx - 600):idx]
     assert "_recovery_alert_session_date" in pre, (
         "RECOVERY MODE alert is not guarded by _recovery_alert_session_date "

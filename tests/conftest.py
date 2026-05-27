@@ -30,9 +30,14 @@ def _isolate_oif_incoming(monkeypatch):
     monkeypatch it back to False inside their own fixture scope.
     """
     tmp = tempfile.mkdtemp(prefix="phoenix_oif_test_")
+    # 2026-05-25: _stage_oif now writes to OIF_STAGING (sibling of
+    # incoming/) and os.replace()s into incoming/. Redirect both so
+    # tests never touch the real NT8 folders.
+    staging_tmp = tempfile.mkdtemp(prefix="phoenix_oif_staging_test_")
     try:
         import bridge.oif_writer as _oif
         monkeypatch.setattr(_oif, "OIF_INCOMING", tmp, raising=False)
+        monkeypatch.setattr(_oif, "OIF_STAGING", staging_tmp, raising=False)
         monkeypatch.setattr(
             _oif, "_PYTEST_BYPASS_CONSUME_CHECK", True, raising=False,
         )
@@ -68,3 +73,4 @@ def _isolate_oif_incoming(monkeypatch):
         pass
     yield tmp
     shutil.rmtree(tmp, ignore_errors=True)
+    shutil.rmtree(staging_tmp, ignore_errors=True)

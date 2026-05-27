@@ -8,6 +8,49 @@ defaults on bot restart.
 Format is intentionally flat dict — easy for Claude Code to read/edit.
 """
 
+# ════════════════════════════════════════════════════════════════════
+# PRODUCTION-DECISION FREEZE (P0-5, 2026-05-24)
+# ════════════════════════════════════════════════════════════════════
+# Triggered by docs/audits/SYNTHESIS_2026-05-24.md confirmed answer "no"
+# to the gating question: "Has anyone ever reconciled sim_bot live-paper
+# output against the Phase 13 5-year backtest, with a per-strategy
+# divergence number you'd defend in writing?"
+#
+# Because the answer was no, every Phase 13 deliverable that depends on
+# backtest-derived numbers is conjecture. Until the reconciliation
+# harness (P1-1 in synthesis) ships and produces a defensible
+# divergence number for at least one strategy, the following are
+# FORBIDDEN:
+#
+#   - NO new `validated=True` flips (operator OR AI initiated).
+#   - NO kill-list application (the Phase 13 plan's strategy cull).
+#   - NO Phase 13 verdict shipping (exit policies, filter additions).
+#   - NO tier_3000 sizing prep — SIZING_MODE stays "flat_1".
+#   - NO new strategy promotions (`enabled=True` for previously-disabled).
+#   - NO parameter retunes whose justification is "the backtest says so."
+#
+# What IS permitted under the freeze:
+#   - Production-decision-independent reliability work (NT8 recovery,
+#     dead-man's switch, WS watchdog, OIF lifecycle).
+#   - Pure correctness fixes that don't depend on backtest fidelity
+#     (B2 design, time.time() audit, grader sync, roll handling).
+#   - Decomposition refactors that preserve behavior (the base_bot
+#     rebuild — but every extraction step must keep test suite green).
+#
+# Lifting this freeze requires:
+#   1. P1-1 reconciliation harness passing for at least bias_momentum.
+#   2. out/reconciliation_<date>_bias_momentum.md committed.
+#   3. Operator sign-off on the divergence numbers vs documented tolerances.
+#   4. Then: flip FREEZE_ACTIVE to False below, with a comment naming
+#      the commit / report that authorized the lift.
+#
+# Tools that check this:
+#   - tools/validation_tracker.py --check-promotion prints a FREEZE
+#     banner when this flag is True.
+#   - tests/test_freeze_interlock.py asserts the constant exists.
+# ════════════════════════════════════════════════════════════════════
+FREEZE_ACTIVE: bool = True
+
 STRATEGY_DEFAULTS = {
     # ─── Global Thresholds (dashboard sliders) ──────────────────────
     "min_confluence": 5.0,            # Slider: 2.0 – 7.0, step 0.1 (raised from 3.5 — fewer, better trades)
@@ -67,6 +110,12 @@ STRATEGIES = {
     "bias_momentum": {
         "enabled": True,
         "validated": True,    # Runs in prod bot
+        # F-25 (2026-05-25): per-strategy walk-forward gate.
+        # "hard_block" = tools/walk_forward_harness.py + validation_tracker
+        # --check-promotion will REFUSE promotion if CPCV / DSR / PBO is
+        # not run on the latest commit. bias_momentum is the live canary
+        # — it gets the strictest gate.
+        "walk_forward_gate": "hard_block",
         # NQ-calibrated ATR-anchored stop (B14 2026-04-20). Fixed-tick stops get
         # taken out by noise on NQ — use 1.5×ATR anchored to last 5m wick.
         "stop_method": "atr_anchored",
@@ -264,15 +313,58 @@ STRATEGIES = {
         "min_precision": 65,
         "max_hold_min": 30,
     },
-    # ─── dom_pullback DELETED 2026-05-21 ──────────────────────────
-    # Reason: 0 trades / 0 signals in 5-year canonical backtest
-    # (tools/phoenix_real_backtest.py with --strategies dom_pullback
-    # --start 2021-05-17 --end 2026-05-15). Strategy gates never
-    # produced an entry in 1.77M 1m-bar cycles. Live sim showed 6/6
-    # losses today (-$33 on SimDom Pull Back). Not in plan §1.1
-    # winners and zero Phase 13 backtest support. Class file deleted,
-    # all registry entries removed. The dedicated SimDom Pull Back
-    # NT8 account can be removed manually by operator when convenient.
+    # ─── dom_pullback RESTORED 2026-05-25 (operator decision) ─────
+    # History:
+    #   2026-05-21 DELETED — 0 trades / 0 signals in 5y canonical backtest
+    #     (tools/phoenix_real_backtest.py with --strategies dom_pullback
+    #     --start 2021-05-17 --end 2026-05-15). Strategy gates never
+    #     produced an entry in 1.77M 1m-bar cycles. Live sim showed 6/6
+    #     losses (-$33 on SimDom Pull Back). Not in PHASE_13_WINNERS.
+    #   2026-05-25 RE-ADDED + enabled in sim — operator chose "treat it
+    #     like the other 5 sim heavy-test strategies. Accumulate live-
+    #     paper data; decide later based on sim_bot evidence, not the
+    #     broken backtest verdict." The class file was restored from
+    #     git commit b35f6c7^.
+    # Safety:
+    #   - validated=False → prod_bot won't load it (only_validated gate).
+    #   - LIVE_STRATEGY_ALLOWLIST excludes it → core/live_canary_gate.py
+    #     will refuse to start prod_bot if dom_pullback ever appears in
+    #     the live-strategies set. dom_pullback is sim-only by policy.
+    #   - walk_forward_gate="informational" → Wilson-CI promotion check
+    #     warns but does not block. Promotion to live requires:
+    #       (a) operator removes from sim-only list AND adds to
+    #           LIVE_STRATEGY_ALLOWLIST, AND
+    #       (b) Wilson 95% CI lower bound passes the 50-trade gate, AND
+    #       (c) walk_forward_gate flipped to "hard_block" with a CPCV /
+    #           DSR / PBO pass on a fresh backtest first.
+    "dom_pullback": {
+        "enabled": True,
+        "validated": False,    # SIM ONLY — canary gate enforces this.
+        # NQ-calibrated ATR-anchored stop (B14 2026-04-20). Replaces fixed 10t — too tight.
+        "stop_method": "atr_anchored",
+        "stop_atr_mult": 2.0,
+        "min_stop_ticks": 40,
+        "max_stop_ticks": 200,  # 2026-05-17: was 120 — NQ vol regime fix (V2)
+        "stop_fallback_ticks": 64,
+        # 2026-05-13 (#8): skip when natural ATR stop > max_stop_ticks.
+        # 2026-05-17: SIM TESTING — flipped True->False for V2 overhaul.
+        #             RESTORE to True before live promotion.
+        "skip_on_stop_clamp": False,
+        "target_rr": 2.5,     # 2.5:1 = 25t = 6.25pts minimum capture
+        # DOM absorption threshold — 0=any signal, 100=very strong only
+        # 35 is moderate: absorption is visible but not overwhelming.
+        "min_dom_strength": 35,
+        # Pullback detection: data-validated P25 zone for "at the level".
+        "max_ema_dist_ticks": 28,
+        "max_vwap_dist_ticks": 20,
+        "max_hold_min": 20,
+        "stop_fallback_mode": "confirmation",
+        # F-25 (2026-05-25): per-strategy walk-forward gate.
+        # "informational" = tools/walk_forward_harness.py reports but
+        # does not block promotion. Flip to "hard_block" before any
+        # live promotion.
+        "walk_forward_gate": "informational",
+    },
 
     "ib_breakout": {
         # 2026-05-15 fix: same ET-midnight anchor bug as ORB had been
@@ -711,12 +803,23 @@ STRATEGIES = {
     # See docs/CLAUDE_CODE_DEPLOYMENT_PROMPT.md (Phase 4) for full context.
 
     "nq_lsr": {
-        # 2026-05-21 PHASE 13 SHIP AUDIT pt3: enabled=False (was True).
-        # Same reasoning as dom_pullback / big_move_signal — not in plan
-        # §1.1, no Phase 13 backtest evidence, demote+kill rather than
-        # let sim_bot keep firing it. Re-enable after a clean backtest.
-        "enabled": False,
+        # 2026-05-24 SIM HEAVY-TEST ENABLE (operator directive):
+        # re-enabled for sim_bot heavy testing. validated=False keeps
+        # it OFF in live mode — core/live_canary_gate.py refuses any
+        # non-allowlisted / non-validated strategy when LIVE_TRADING=True
+        # (LIVE_STRATEGY_ALLOWLIST = ("bias_momentum",)). The strategy
+        # runs in sim_bot's per-strategy NT8 sub-account; prod_bot's
+        # `only_validated` property also blocks it in live mode.
+        # PREVIOUS NOTE: 2026-05-21 PHASE 13 SHIP AUDIT pt3 disabled it
+        # — not in PHOENIX_BEST_PLAN §1.1, no Phase 13 backtest evidence.
+        # Heavy sim testing is the path to either restoring confidence
+        # or formally killing.
+        "enabled": True,
         "validated": False,
+        # F-25 (2026-05-25): "informational" = walk-forward harness
+        # reports but does not block. Flip to "hard_block" before any
+        # live promotion (operator must also add to LIVE_STRATEGY_ALLOWLIST).
+        "walk_forward_gate": "informational",
         "session_windows_ct": [("08:30", "11:00"), ("13:30", "15:00")],
         "max_trades_per_day": 4,
         "max_stop_ticks": 30,
@@ -737,15 +840,17 @@ STRATEGIES = {
     },
 
     "orb_fade": {
-        # 2026-05-20 PHASE 13 SHIP AUDIT pt2: enabled=False (was True).
-        # F-004 in OPERATOR_MORNING_BRIEF.md (2nd audit). Just flipping
-        # validated=False wasn't enough — sim_bot still loaded + fired
-        # signals through it (only_validated=False). Disable entirely so
-        # the strategy doesn't burn compute or emit noisy log lines.
-        # PHASE_13_IMPLEMENTATION_PLAN §O explicitly KILLED this
-        # strategy (PF 0.34, -$255/5y, "anti-edge" verdict).
-        "enabled": False,
+        # 2026-05-24 SIM HEAVY-TEST ENABLE (operator directive):
+        # re-enabled for sim_bot. Live mode protected by
+        # core/live_canary_gate.py (allowlist + validated guard).
+        # The B3 wallclock bug (F-27) was fixed 2026-05-18 so the
+        # strategy can actually emit signals now. PHASE_13 plan §O
+        # previously called it "anti-edge" (PF 0.34) — sim testing
+        # post-B3-fix will confirm whether that verdict holds.
+        "enabled": True,
         "validated": False,
+        # F-25 (2026-05-25): informational walk-forward gate (sim only).
+        "walk_forward_gate": "informational",
         "session_windows_ct": [("08:45", "12:00")],
         "max_trades_per_day": 2,
         "max_stop_ticks": 30,
@@ -760,12 +865,16 @@ STRATEGIES = {
     },
 
     "orb_v2": {
-        # 2026-05-20 PHASE 13 SHIP AUDIT pt2: enabled=False. F-004 in
-        # OPERATOR_MORNING_BRIEF.md (2nd audit). B-002 notes orb_v2
-        # produced only 1 trade in 5y backtest. Plan ships
-        # opening_session.orb (managed-exit chandelier), NOT orb_v2.
-        "enabled": False,
+        # 2026-05-24 SIM HEAVY-TEST ENABLE (operator directive):
+        # re-enabled for sim_bot. Live mode protected by
+        # core/live_canary_gate.py. Backtest showed only 1 trade in 5y,
+        # but per the reconciliation harness findings (out/reconciliation_
+        # 2026-05-24_bias_momentum.md), the canonical backtest may not be
+        # a reliable predictor; sim_bot data is the right test.
+        "enabled": True,
         "validated": False,
+        # F-25 (2026-05-25): informational walk-forward gate (sim only).
+        "walk_forward_gate": "informational",
         "or_duration_minutes": 15,
         "min_or_size_points": 11,
         "max_or_size_points": 80,
@@ -782,12 +891,15 @@ STRATEGIES = {
     },
 
     "compression_breakout_v2": {
-        # 2026-05-20 PHASE 13 SHIP AUDIT pt2: enabled=False. F-004.
-        # PHASE_13_IMPLEMENTATION_PLAN.md §A Bug B4 EXPLICITLY KILLED
-        # this strategy: PF 0.61, MFE/MAE 0.19, "fundamentally anti-edge
-        # for MNQ in current regime. No fix recommended -- just kill."
-        "enabled": False,
+        # 2026-05-24 SIM HEAVY-TEST ENABLE (operator directive):
+        # re-enabled for sim_bot. Live mode protected by
+        # core/live_canary_gate.py. Backtest verdict was "kill" (PF 0.61);
+        # sim_bot heavy-test will either confirm that verdict or surface
+        # any post-V2 regime change that the backtest can't see.
+        "enabled": True,
         "validated": False,
+        # F-25 (2026-05-25): informational walk-forward gate (sim only).
+        "walk_forward_gate": "informational",
         "max_trades_per_day": 3,
         "bb_period": 20,
         "bb_std": 1.5,            # NQ-tuned (was 2.0 Carter default)
@@ -809,11 +921,14 @@ STRATEGIES = {
     },
 
     "compression_breakout_micro": {
-        # 2026-05-20 PHASE 13 SHIP AUDIT pt2: enabled=False. F-004.
-        # PHASE_13_IMPLEMENTATION_PLAN.md §A: -$48, PF 0.97 — marginal
-        # anti-edge variant of compression_breakout family.
-        "enabled": False,
+        # 2026-05-24 SIM HEAVY-TEST ENABLE (operator directive):
+        # re-enabled for sim_bot. Live mode protected by
+        # core/live_canary_gate.py. Backtest was marginal (PF 0.97);
+        # sim_bot accumulates the data needed for an honest verdict.
+        "enabled": True,
         "validated": False,
+        # F-25 (2026-05-25): informational walk-forward gate (sim only).
+        "walk_forward_gate": "informational",
         "max_trades_per_day": 5,
         "bb_period": 20,
         "bb_std": 1.4,            # tighter still — 1m bars naturally tighter
@@ -837,6 +952,11 @@ STRATEGIES = {
     "vwap_pullback_v2": {
         "enabled": True,
         "validated": True,
+        # F-25 (2026-05-25): "informational" because vwap_pullback_v2 is
+        # NOT in LIVE_STRATEGY_ALLOWLIST today (only bias_momentum is).
+        # The canary gate already blocks it from live regardless of this
+        # flag. Flip to "hard_block" when promoting to the allowlist.
+        "walk_forward_gate": "informational",
         "max_trades_per_day": 4,
         "max_vwap_dist_ticks": 60,
         "min_tf_votes": 2,

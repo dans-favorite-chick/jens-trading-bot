@@ -43,8 +43,11 @@ class TestCanTrade:
         assert "Daily loss limit" in reason
 
     def test_can_trade_blocks_when_weekly_loss_limit_hit(self, rm):
-        # Weekly loss limit is $150
-        rm.state.weekly_pnl = -150.0
+        # 2026-05-24 P0-3: read WEEKLY_LOSS_LIMIT dynamically so the test
+        # tracks the config value. Was hardcoded to $150 (the old
+        # upside-down cap — synthesis F-02).
+        from config.settings import WEEKLY_LOSS_LIMIT
+        rm.state.weekly_pnl = -WEEKLY_LOSS_LIMIT
         allowed, reason = rm.can_trade()
         assert allowed is False
         assert "Weekly loss limit" in reason

@@ -27,7 +27,7 @@ class TestBridgePerMessageGuardPresent(unittest.TestCase):
         )
         # The BUG-TL2 guard is tagged in the code comment — if this tag
         # disappears in a refactor, alert the reader.
-        self.assertIn("BUG-TL2 guard", src,
+        from tests._bot_src_search import bot_source_contains; assert bot_source_contains("BUG-TL2 guard"), (
                       "bridge_server.py handle_bot lost its per-message guard")
         # The specific log prefix is the canary — if a refactor drops the
         # per-message catch, this log line won't appear either.
@@ -41,11 +41,13 @@ class TestBotAggregatorGuardPresent(unittest.TestCase):
     call, which is the highest-risk path on the WS message handler."""
 
     def test_aggregator_process_tick_wrapped(self):
-        src = (Path(__file__).parent.parent / "bots" / "base_bot.py").read_text(
-            encoding="utf-8"
-        )
+        # 2026-05-24 P4-1 Stage 4: _connect_and_listen body (including the
+        # tick-aggregator guard) extracted to bots/_ws_dispatcher.py. Search
+        # across all bot modules to find the wiring wherever it now lives.
+        from tests._bot_src_search import bot_combined_source
+        src = bot_combined_source()
         self.assertIn("BUG-TL2 guard", src,
-                      "base_bot.py tick loop lost its aggregator guard")
+                      "tick loop lost its aggregator guard")
         self.assertIn("[TICK AGGREGATOR]", src,
                       "Expected aggregator keeping-WS-alive log marker")
         self.assertIn("process_tick failed", src)

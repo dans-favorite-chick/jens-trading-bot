@@ -7,34 +7,55 @@ from pathlib import Path
 
 from tools.routines.weekly_evolution import (
     build_commit_body, aggregate_week, generate_proposals,
-    VALIDATION_STATUS_TEMPLATE,
+    VALIDATION_STATUS_TEMPLATE, render_validation_status,
 )
 
 
 class TestValidationCheckboxes:
     """Per Jennifer 2026-04-25: every commit body MUST include the
-    CPCV / DSR / PBO checkboxes. They read NOT YET RUN until Phase C."""
+    CPCV / DSR / PBO validation gate. 2026-05-25 P4-5 (F-24): the gate
+    is now an actual run of tools/walk_forward_harness.py, but the
+    legacy NOT-YET-RUN template is preserved as a cold-start fallback.
+    """
 
-    def test_template_has_three_checkboxes(self):
+    def test_legacy_template_has_three_checkboxes(self):
         for marker in ["CPCV fold metrics", "DSR p-value", "PBO"]:
             assert marker in VALIDATION_STATUS_TEMPLATE
         assert "NOT YET RUN" in VALIDATION_STATUS_TEMPLATE
         assert "Phase C dependency" in VALIDATION_STATUS_TEMPLATE
 
-    def test_template_has_unchecked_boxes(self):
-        # Three unchecked boxes "[ ]"
+    def test_legacy_template_has_unchecked_boxes(self):
+        # Three unchecked boxes "[ ]" — legacy fallback shape
         assert VALIDATION_STATUS_TEMPLATE.count("- [ ]") == 3
 
-    def test_commit_body_includes_template(self):
+    def test_commit_body_includes_validation_section(self):
+        # Pass an explicit validation_section so the test is deterministic
+        # and does not depend on the live trade_memory state.
         body = build_commit_body(
             week_start="2026-04-19", week_end="2026-04-25",
             proposals=[], ai_review="(no proposals to review)",
+            validation_section=VALIDATION_STATUS_TEMPLATE,
         )
         assert "Validation status" in body
         assert "CPCV fold metrics" in body
         assert "NOT YET RUN" in body
         # Validation section must be present even with zero proposals
         assert "DO NOT MERGE" in body
+
+    def test_render_validation_status_emits_checkbox_per_strategy(self):
+        """The new P4-5 harness output: one checkbox row per strategy
+        with PASS/FAIL/INSUFFICIENT_DATA + numeric DSR p / PBO when
+        available. References the harness module by name."""
+        section = render_validation_status(
+            strategies=("bias_momentum",),
+            min_trades=200,
+        )
+        assert "Validation status" in section
+        # P4-5 references
+        assert "walk_forward_harness.py" in section
+        # Either the strategy line is rendered OR the cold-start fallback
+        # template kicked in (defensive: no trades available)
+        assert "bias_momentum" in section or "NOT YET RUN" in section
 
     def test_commit_body_lists_proposals(self):
         body = build_commit_body(
@@ -46,6 +67,7 @@ class TestValidationCheckboxes:
                  "reasoning": "P2 always failing"},
             ],
             ai_review="proposal 1: SAFE; proposal 2: CAUTION",
+            validation_section=VALIDATION_STATUS_TEMPLATE,
         )
         assert "loosen ATR cap" in body
         assert "drop VCR threshold" in body

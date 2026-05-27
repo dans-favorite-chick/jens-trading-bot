@@ -1258,7 +1258,7 @@ Shipping the normalize this sprint is the right move: it creates a stable floor,
 
 ## Phase 7 — Action plan deltas
 
-**Status: consolidated.** Full deltas doc at [docs/ACTION_PLAN_V2_1_DELTAS.md](../../docs/ACTION_PLAN_V2_1_DELTAS.md).
+**Status: consolidated.** Full deltas doc at [docs/archive/ACTION_PLAN_V2_1_DELTAS.md](../../docs/archive/ACTION_PLAN_V2_1_DELTAS.md).
 
 ### Step 7.1 — Summary
 

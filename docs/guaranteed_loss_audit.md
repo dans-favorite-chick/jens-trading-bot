@@ -92,4 +92,4 @@ pretends to capture the kind of 50–100 point moves the comment claims
 
 ## Judgment calls
 
-Recorded in `docs/final-sprint-assumptions.md`.
+Recorded in `docs/archive/final-sprint-assumptions.md`.

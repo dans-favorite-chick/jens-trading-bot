@@ -230,7 +230,9 @@ def test_exhaustion_today_peak_signature_scores_high():
 # ── Wiring + config ──────────────────────────────────────────────────
 
 def test_base_bot_instantiates_big_move_detector():
-    src = (ROOT / "bots" / "base_bot.py").read_text(encoding="utf-8")
+    # P4-1 (2026-05-24): search all extracted bot modules, not base_bot.py alone
+    from tests._bot_src_search import bot_combined_source as _bcs
+    src = _bcs()
     assert "from core.big_move_detector import BigMoveDetector" in src
     assert "self.big_move = BigMoveDetector()" in src
     # The exhaustion exit must be wired into the position loop

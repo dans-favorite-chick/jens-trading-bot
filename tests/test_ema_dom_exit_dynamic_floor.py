@@ -102,7 +102,9 @@ def test_short_direction_uses_abs_target_distance():
 # ── Source pin ─────────────────────────────────────────────────────────
 
 def test_base_bot_uses_dynamic_70pct_floor():
-    src = (ROOT / "bots" / "base_bot.py").read_text(encoding="utf-8")
+    # P4-1 (2026-05-24): search all extracted bot modules, not base_bot.py alone
+    from tests._bot_src_search import bot_combined_source as _bcs
+    src = _bcs()
     assert "_target_ticks * 0.70" in src, (
         "ema_dom_exit smart-exit should use the 70% dynamic floor."
     )

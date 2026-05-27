@@ -202,39 +202,56 @@ def test_every_plan_winner_has_per_strategy_risk_key():
             )
 
 
-def test_allowed_legacies_stay_disabled():
-    """2026-05-22 pt8 (agent ac705046 audit gap): assert that every
-    ALLOWED_DISABLED_LEGACIES entry actually IS disabled today. The
-    list exists to grant amnesty to legacy files that still live in
-    the repo + import paths but must never fire. Without this test,
-    a casual `enabled=True` flip on any legacy slips through CI.
+def test_allowed_legacies_stay_live_blocked():
+    """2026-05-24 (operator directive): assertion broadened.
 
-    To re-promote a legacy: remove it from ALLOWED_DISABLED_LEGACIES
-    AND add it to WINNERS_PHASE13 (or BEYOND_PLAN) with a backtest
-    citation. Both edits required — by design.
+    Original rule: every ALLOWED_DISABLED_LEGACIES entry must be
+    enabled=False so it can't fire. That was the right rule for the
+    earlier "one bot loads everything" architecture. With the 2026-05-24
+    live canary gate (core/live_canary_gate.py) and the operator's
+    sim-heavy-testing directive, the rule changed: legacies MAY be
+    enabled (so sim_bot accumulates data on them) but MUST be blocked
+    from live trading via at least one of:
+      - validated=False, OR
+      - name not in config.settings.LIVE_STRATEGY_ALLOWLIST
+
+    The live canary at startup refuses any strategy that fails EITHER
+    gate (validated=True AND in allowlist both required to reach live).
+
+    To make a legacy live-tradeable: (1) accumulate live n>=100 sim_bot
+    evidence + pass Wilson-CI promotion (tools/validation_tracker.py
+    --check-promotion), (2) flip validated=True, (3) add to
+    LIVE_STRATEGY_ALLOWLIST. All three edits required.
     """
     from config.strategies import STRATEGIES
+    from config.settings import LIVE_STRATEGY_ALLOWLIST
+    allowlist = set(LIVE_STRATEGY_ALLOWLIST or ())
     for name in ALLOWED_DISABLED_LEGACIES:
         cfg = STRATEGIES.get(name)
         if cfg is None:
-            # Strategy entirely removed from config = fine; the legacy
-            # tuple is for files in the repo, not for config presence.
             continue
-        assert cfg.get("enabled") is False, (
-            f"Legacy strategy '{name}' has enabled={cfg.get('enabled')}, "
-            f"but it's listed in ALLOWED_DISABLED_LEGACIES. Either:\n"
-            f"  (a) revert the enabled flag, or\n"
-            f"  (b) promote it: remove from ALLOWED_DISABLED_LEGACIES, "
-            f"add to WINNERS_PHASE13/BEYOND_PLAN with backtest evidence."
+        is_validated = cfg.get("validated", False)
+        is_allowlisted = name in allowlist
+        live_blocked = (not is_validated) or (not is_allowlisted)
+        assert live_blocked, (
+            f"Legacy strategy '{name}' would reach LIVE TRADING: "
+            f"validated={is_validated}, in_allowlist={is_allowlisted}. "
+            f"Live canary requires BOTH for live; at least ONE must be "
+            f"False for legacies. To promote, follow the 3-step process "
+            f"in this test's docstring."
         )
 
 
-def test_no_killed_strategies_are_enabled():
-    """Strategies on PHASE_13_IMPLEMENTATION_PLAN.md's explicit kill list
-    must be enabled=False. Same guardrail logic as F-004 of the audit.
-    Catches the case where a future operator override re-enables a
-    plan-killed strategy."""
+def test_no_killed_strategies_can_reach_live():
+    """KILLED strategies must be blocked from live trading.
+
+    2026-05-24 broadened: enabled may be True (operator directive for
+    sim heavy testing) but validated=False + LIVE_STRATEGY_ALLOWLIST
+    exclusion must keep them out of live. The live canary gate
+    (core/live_canary_gate.py) enforces this at startup."""
     from config.strategies import STRATEGIES
+    from config.settings import LIVE_STRATEGY_ALLOWLIST
+    allowlist = set(LIVE_STRATEGY_ALLOWLIST or ())
     KILLED = (
         "orb_fade",                   # §O EXPLICIT KILL (PF 0.34, anti-edge)
         "compression_breakout_v2",    # §A Bug B4 EXPLICIT KILL (anti-edge)
@@ -243,12 +260,15 @@ def test_no_killed_strategies_are_enabled():
     )
     for name in KILLED:
         cfg = STRATEGIES.get(name, {})
-        # missing from STRATEGIES is fine (means removed entirely)
         if not cfg:
             continue
-        assert cfg.get("enabled") is False, (
-            f"Killed strategy '{name}' has enabled={cfg.get('enabled')}. "
-            f"Plan explicitly killed it; must stay enabled=False unless a "
-            f"new backtest reverses the kill verdict (then update KILLED "
-            f"tuple here)."
+        is_validated = cfg.get("validated", False)
+        is_allowlisted = name in allowlist
+        live_blocked = (not is_validated) or (not is_allowlisted)
+        assert live_blocked, (
+            f"KILLED strategy '{name}' would reach LIVE TRADING: "
+            f"validated={is_validated}, in_allowlist={is_allowlisted}. "
+            f"Plan explicitly killed it; if a new backtest reverses the "
+            f"kill verdict, update the KILLED tuple here AND remove the "
+            f"allowlist requirement above."
         )

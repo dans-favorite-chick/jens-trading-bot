@@ -470,6 +470,14 @@ def index():
     return render_template("dashboard.html")
 
 
+# P3-2 (2026-05-24): live signal/trade/position stream view.
+# Reads data from /api/feed-* endpoints below (polled every 5s by the
+# in-page JS — no full-page reload).
+@app.route("/feed")
+def feed_page():
+    return render_template("feed.html")
+
+
 # ─── API: Read Endpoints ────────────────────────────────────────────
 @app.route("/api/status")
 def api_status():
@@ -594,6 +602,95 @@ def api_trades():
         "lab": session_trades.get("lab", []),
         "session_start_ts": _calendar_day_start_ct_epoch(),
     })
+
+
+# ─── P3-2 (2026-05-24): /feed route data sources ────────────────────
+@app.route("/api/feed-signals")
+def api_feed_signals():
+    """Most-recent strategy evaluations from the bot's last_eval buffer.
+    Query: ?bot=sim|prod (default sim), ?limit=N (default 50, max 200).
+    """
+    bot = request.args.get("bot", "sim")
+    try:
+        limit = max(1, min(200, int(request.args.get("limit", 50))))
+    except (TypeError, ValueError):
+        limit = 50
+    with _state_lock:
+        bot_state = dict(_state.get(bot) or {})
+    eval_block = bot_state.get("last_eval") or {}
+    ts = eval_block.get("ts")
+    regime = eval_block.get("regime")
+    rows = []
+    for s in (eval_block.get("strategies") or []):
+        score = s.get("score")
+        rows.append({
+            "ts": s.get("ts") or ts,
+            "strategy": s.get("name") or s.get("strategy"),
+            "direction": s.get("direction"),
+            "score": score,
+            "decision": s.get("decision") or (
+                "SIGNAL" if score and score >= 3.5 else "NO_SIGNAL"
+            ),
+            "reason": s.get("reason"),
+            "regime": regime,
+        })
+    # Fallback: surface last_signal if no per-strategy array
+    if not rows and bot_state.get("last_signal"):
+        ls = bot_state["last_signal"]
+        rows.append({
+            "ts": ls.get("ts"), "strategy": ls.get("strategy"),
+            "direction": ls.get("direction"), "score": ls.get("score"),
+            "decision": "SIGNAL", "reason": ls.get("reason"),
+            "regime": regime,
+        })
+    return safe_jsonify(rows[-limit:][::-1])  # newest first
+
+
+@app.route("/api/feed-trades")
+def api_feed_trades():
+    """Last 10 closed trades across all bots, newest first. Uses canonical
+    reader per memory/trade_memory_canonical_reader.md."""
+    try:
+        from core.trade_memory import load_all_trades
+        rows = load_all_trades(logs_dir=os.path.join(PROJECT_ROOT, "logs"))
+    except Exception as e:
+        logger.warning(f"[FEED_TRADES] load_all_trades failed: {e!r}")
+        return safe_jsonify([])
+    if not isinstance(rows, list):
+        return safe_jsonify([])
+    def _key(t):
+        try: return float(t.get("exit_time") or 0)
+        except (TypeError, ValueError): return 0.0
+    rows.sort(key=_key, reverse=True)
+    return safe_jsonify(rows[:10])
+
+
+@app.route("/api/feed-positions")
+def api_feed_positions():
+    """Live positions for one bot."""
+    bot = request.args.get("bot", "sim")
+    with _state_lock:
+        bot_state = dict(_state.get(bot) or {})
+    pos = bot_state.get("position") or {}
+    return safe_jsonify({"bot": bot, "positions": pos, "ts": time.time()})
+
+
+# ─── P4-3 (2026-05-24, F-23): tick→OIF latency telemetry ────────────
+@app.route("/api/latency")
+def api_latency():
+    """Per-stage latency stats for the tick → OIF pipeline.
+
+    Shape: {tick_to_bar: {count, mean_ms, p50_ms, p90_ms, p99_ms, max_ms}, ...}
+    In-process only — this is the dashboard's own tracker singleton.
+    Bridge and bot have their own per-process trackers; cross-process
+    aggregation is P4-3.2 future work.
+    """
+    from core.latency_tracker import get_latency_tracker
+    return safe_jsonify(get_latency_tracker().summary())
+
+
+# P3-1 (2026-05-24): /api/runtime-controls/save already exists below at
+# the original location — removed duplicate stub here.
 
 
 @app.route("/api/strategy-risk")

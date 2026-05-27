@@ -203,6 +203,59 @@ class TradeMemory:
             trade["bot_id"] = "unknown"
         self.trades.append(trade)
         self.save()
+        # P4-4 (2026-05-25): shadow-write to SQLite. JSON above remains
+        # canonical; any SQLite hiccup MUST NOT break the JSON path. See
+        # core/trade_memory_db.py module docstring + docs/runbook.md
+        # "P4-4 SQLite dual-write" for cutover gate.
+        try:
+            from core.trade_memory_db import TradeMemoryDB
+            TradeMemoryDB().write_trade(trade)
+        except Exception as e:
+            logger.warning(f"SQLite dual-write failed (JSON unaffected): {e}")
+
+    def update_trade(self, trade_id: str, updates: dict) -> bool:
+        """Update an existing trade row IN-PLACE by trade_id.
+
+        2026-05-27 — added as the canonical writer for post-exit
+        agent reflections (P4-6 prerequisite: a per-trade debriefer
+        verdict would land here). Also usable by any future
+        post-hoc enrichment (signal-flow review, label correction,
+        etc.).
+
+        Args:
+            trade_id: The trade_id to find. Returns False if not found.
+            updates: Dict of fields to merge onto the trade row. Existing
+                     keys are overwritten; absent keys are left intact.
+
+        Returns:
+            True if found and updated, False if no row matches.
+
+        NOTE: callers MUST use this method (NOT raw json open/dump)
+        because it also synchronizes the SQLite shadow copy that
+        P4-4 introduced.
+        """
+        matched = False
+        for t in self.trades:
+            if t.get("trade_id") == trade_id:
+                t.update(updates)
+                t["last_updated_at"] = datetime.now().isoformat()
+                matched = True
+                break
+        if not matched:
+            return False
+        self.save()
+        # P4-4: keep SQLite shadow in lockstep with JSON.
+        try:
+            from core.trade_memory_db import TradeMemoryDB
+            db = TradeMemoryDB()
+            # write_trade upserts by trade_id, so this works as update.
+            for t in self.trades:
+                if t.get("trade_id") == trade_id:
+                    db.write_trade(t)
+                    break
+        except Exception as e:
+            logger.warning(f"SQLite update_trade shadow failed (JSON unaffected): {e}")
+        return True
 
     def recent(self, n: int = 30) -> list[dict]:
         return self.trades[-n:]

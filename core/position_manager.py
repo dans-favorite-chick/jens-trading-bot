@@ -180,6 +180,17 @@ class Position:
     # carry tier=None and remain backward-compatible.
     tier: Optional[str] = None
 
+    # ── 2026-05-27: P4-6 prerequisite — AI agent verdict persistence ──
+    # The pretrade_filter and council_gate agents produce verdicts at
+    # signal time (in-memory on self.bot._filter_verdict /
+    # self.bot._council_result). Without persisting them onto the
+    # Position, they evaporate by the time close_position assembles the
+    # trade row. The P4-6 uplift harness needs them per-trade to compute
+    # Cohort A (GO) / Cohort B (NO_GO) lift CIs. Pre-2026-05-27 trades
+    # carry agent_verdicts=None.
+    agent_verdicts: Optional[dict] = None
+    agent_decision_ts_ct: Optional[str] = None
+
     # ── B76 stop-modify via cancel+replace (2026-04-21) ─────────────────
     # NT8-assigned order_ids captured by
     # bridge.oif_writer.scan_outgoing_for_order_id after bracket/protect
@@ -583,6 +594,15 @@ class PositionManager:
                 f"trade_id={trade_id}: {e!r} — operator should verify "
                 f"NT8 has no working LIMIT on this account"
             )
+        # P1-7 (2026-05-25): mirror the cancel into the lifecycle tracker so
+        # the per-trade ledger sees the terminal transition. Best-effort.
+        try:
+            from core.pending_entry_tracker import get_pending_entry_tracker
+            get_pending_entry_tracker().mark_cancelled(
+                trade_id, reason="position_manager_stale_expiry",
+            )
+        except Exception:
+            pass
 
     def get_pending_entry(self, account: str) -> dict | None:
         """Return the pending-entry record for an account, honouring
@@ -772,6 +792,18 @@ class PositionManager:
                 net_pnl / max(1e-9, pos.r_distance * 2.0 * pos.contracts) if pos.r_distance > 0 else 0.0,
                 3,
             ),
+            # 2026-05-27: AI agent verdicts captured at signal time and
+            # stashed on Position via _trade_entry. Schema:
+            #   agent_verdicts = {
+            #     "pretrade": "GO"|"NO_GO"|"NEUTRAL"|None,
+            #     "council":  "GO"|"NO_GO"|"NEUTRAL"|None,
+            #     "debrief":  None,  # populated post-exit by an UPDATE if
+            #                        # a per-trade reflection ever ships
+            #   }
+            # Pre-2026-05-27 trades: None (the P4-6 uplift harness
+            # defaults legacy rows to None and reports INSUFFICIENT_DATA).
+            "agent_verdicts":       getattr(pos, "agent_verdicts", None),
+            "agent_decision_ts_ct": getattr(pos, "agent_decision_ts_ct", None),
         }
 
         self.trade_history.append(trade)

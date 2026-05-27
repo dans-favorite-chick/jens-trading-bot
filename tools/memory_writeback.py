@@ -28,8 +28,10 @@ Flags:
 """
 
 import argparse
+import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -108,8 +110,60 @@ def atomic_write(path: Path, content: str, verify: bool = True) -> bool:
     return True
 
 
-def audit_append(event: str, actor: str, details: dict) -> None:
-    """Append one event to audit_log.jsonl. Append-only, never overwrites."""
+def _content_hash(payload: dict) -> str:
+    """Stable hash of a writeback payload, EXCLUDING any timestamp keys.
+
+    Used to dedupe identical SessionEnd events that fire back-to-back
+    (the 2026-05-25 incident: 3 identical writebacks within 4 seconds,
+    each producing a duplicate "Session changes: 83 files modified"
+    block in RECENT_CHANGES.md).
+    """
+    # Defensive: strip any ts-style key so the hash is content-only.
+    clean = {k: v for k, v in payload.items() if k not in ("ts", "timestamp")}
+    blob = json.dumps(clean, sort_keys=True, default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _last_audit_content_hash() -> str | None:
+    """Read the last JSONL line in audit_log.jsonl and return its
+    content hash, or None if file missing/empty/malformed."""
+    if not AUDIT_LOG.exists():
+        return None
+    try:
+        # File can be large; tail by reading the last ~16 KB.
+        size = AUDIT_LOG.stat().st_size
+        with open(AUDIT_LOG, "rb") as f:
+            f.seek(max(0, size - 16384))
+            tail = f.read().decode("utf-8", errors="replace")
+        last_line = ""
+        for line in tail.splitlines():
+            if line.strip():
+                last_line = line
+        if not last_line:
+            return None
+        rec = json.loads(last_line)
+        return _content_hash({
+            "event": rec.get("event"),
+            "actor": rec.get("actor"),
+            "details": rec.get("details", {}),
+        })
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def audit_append(event: str, actor: str, details: dict) -> bool:
+    """Append one event to audit_log.jsonl. Append-only, never overwrites.
+
+    Returns True if the entry was written, False if it was deduped
+    against an immediately-prior identical entry (post-2026-05-25 fix).
+    """
+    new_hash = _content_hash({"event": event, "actor": actor, "details": details})
+    last_hash = _last_audit_content_hash()
+    if last_hash is not None and last_hash == new_hash:
+        # Identical to the previous entry — most likely a SessionEnd
+        # hook re-fire (context compaction, etc.). Skip the duplicate.
+        return False
+
     entry = {
         "ts": datetime.now().astimezone().isoformat(timespec="seconds"),
         "event": event,
@@ -121,16 +175,93 @@ def audit_append(event: str, actor: str, details: dict) -> None:
         f.write(json.dumps(entry) + "\n")
         f.flush()
         os.fsync(f.fileno())
+    return True
 
 
-def append_to_recent_changes(summary: str, changed_files: list, decisions: list) -> None:
-    """Prepend a new dated entry to RECENT_CHANGES.md (newest first)."""
+def _first_existing_block_hash(content: str) -> str | None:
+    """Extract the FIRST (most recent) dated entry from RECENT_CHANGES.md
+    and return its content-hash (summary + files + decisions, no ts).
+
+    Used to dedupe consecutive identical writebacks. The file is
+    newest-first, so the most recent block is the one just below the
+    `---\n\n` header marker."""
+    # Block format: "### <ts> — <summary>\n\n[**Files changed:** ...]\n[**Decisions:** ...]\n---\n"
+    marker = "---\n\n"
+    if marker not in content:
+        return None
+    body = content.split(marker, 1)[1]
+    # Take everything up to the next "---" (end of first entry)
+    end = body.find("\n---")
+    if end == -1:
+        return None
+    first_block = body[:end]
+    # Parse: first line is "### <ts> — <summary>".
+    # The timestamp portion has variable token count (e.g.
+    # "2026-05-25 08:30 Central Daylight Time" is 4 tokens, while
+    # "2026-05-25 08:30 CDT" is 3), so split on the em-dash separator
+    # instead of trying to count tokens.
+    lines = first_block.splitlines()
+    if not lines:
+        return None
+    head = lines[0]
+    summary: str
+    if "—" in head:
+        summary = head.split("—", 1)[1].strip()
+    elif " - " in head:  # ASCII-dash fallback
+        summary = head.split(" - ", 1)[1].strip()
+    else:
+        # Last-resort: strip the leading "### " and take everything else.
+        summary = head.lstrip("# ").strip()
+    files: list[str] = []
+    decisions: list[str] = []
+    section = None
+    for ln in lines[1:]:
+        s = ln.strip()
+        if s == "**Files changed:**":
+            section = "files"
+            continue
+        if s == "**Decisions:**":
+            section = "decisions"
+            continue
+        if not s:
+            section = None
+            continue
+        if section == "files" and s.startswith("- "):
+            files.append(s[2:].strip("`"))
+        elif section == "decisions" and s.startswith("- "):
+            decisions.append(s[2:])
+    return _content_hash({
+        "summary": summary,
+        "changed_files": files,
+        "decisions": decisions,
+    })
+
+
+def append_to_recent_changes(summary: str, changed_files: list, decisions: list) -> bool:
+    """Prepend a new dated entry to RECENT_CHANGES.md (newest first).
+
+    Returns True if a new block was written, False if it was deduped
+    against the most-recent existing block (post-2026-05-25 fix: the
+    SessionEnd hook can fire several times in a row with identical
+    payload — context compaction, session resume, etc. — and we don't
+    want each event to leave its own duplicate block)."""
     if not RECENT_CHANGES.exists():
         # Bootstrap the file
         initial = "# Phoenix Bot — Recent Changes\n\n_Auto-appended by tools/memory_writeback.py via SessionEnd hook._\n\n---\n\n"
         atomic_write(RECENT_CHANGES, initial)
 
     current = RECENT_CHANGES.read_text(encoding="utf-8")
+
+    # Dedupe against the most-recent existing block.
+    incoming_hash = _content_hash({
+        "summary": summary,
+        "changed_files": list(changed_files),
+        "decisions": list(decisions),
+    })
+    existing_hash = _first_existing_block_hash(current)
+    if existing_hash is not None and existing_hash == incoming_hash:
+        return False  # Identical to last block — skip the duplicate.
+
     now = datetime.now().astimezone()
     entry_lines = [
         f"### {now.strftime('%Y-%m-%d %H:%M %Z')} — {summary}",
@@ -159,6 +290,7 @@ def append_to_recent_changes(summary: str, changed_files: list, decisions: list)
         new_content = current + "\n" + new_entry
 
     atomic_write(RECENT_CHANGES, new_content)
+    return True
 
 
 def update_current_state(summary: str) -> None:
@@ -168,7 +300,6 @@ def update_current_state(summary: str) -> None:
     content = CURRENT_STATE.read_text(encoding="utf-8")
     now = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
     # Replace the _Last updated: ...* line
-    import re
     new_content = re.sub(
         r"^_Last updated: [^_]+_$",
         f"_Last updated: {now}_",
@@ -268,8 +399,8 @@ def main():
 
     # Acquire lock
     with FileLock(LOCK_FILE):
-        # Append to audit log (always — this is source of truth)
-        audit_append(
+        # Append to audit log (source of truth; content-hash deduped).
+        audit_written = audit_append(
             event="session_writeback",
             actor="claude-session",
             details={
@@ -279,21 +410,35 @@ def main():
             },
         )
 
-        # Append to RECENT_CHANGES.md
-        append_to_recent_changes(args.summary, args.changed_files, args.decisions)
+        # Append to RECENT_CHANGES.md (content-hash deduped).
+        rc_written = append_to_recent_changes(
+            args.summary, args.changed_files, args.decisions
+        )
 
-        # Update CURRENT_STATE.md timestamp
+        # Update CURRENT_STATE.md timestamp (idempotent — safe even on dedupe).
         update_current_state(args.summary)
 
-        # Git commit
+        # Git commit — skip the commit if both append targets deduped,
+        # otherwise we'd produce empty commits.
         if args.commit:
-            committed = git_commit_memory(f"memory: {args.summary[:70]}")
-            if committed:
-                print(f"[WRITEBACK] Committed memory/ changes")
+            if not (audit_written or rc_written):
+                print("[WRITEBACK] Identical to last writeback — no new commit")
             else:
-                print(f"[WRITEBACK] Nothing to commit")
+                committed = git_commit_memory(f"memory: {args.summary[:70]}")
+                if committed:
+                    print(f"[WRITEBACK] Committed memory/ changes")
+                else:
+                    print(f"[WRITEBACK] Nothing to commit")
 
-        print(f"[WRITEBACK OK] {args.summary}")
+        if not (audit_written or rc_written):
+            print(f"[WRITEBACK DEDUPE] {args.summary} (skipped — duplicate)")
+        else:
+            wrote = []
+            if audit_written:
+                wrote.append("audit")
+            if rc_written:
+                wrote.append("recent_changes")
+            print(f"[WRITEBACK OK] {args.summary} (wrote: {', '.join(wrote)})")
         return 0
 
 

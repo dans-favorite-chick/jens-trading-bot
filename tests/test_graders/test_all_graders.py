@@ -267,16 +267,44 @@ class TestCompressionSqueezeGrader:
         assert r.qual_pass is False
 
 
-# ─────────── P6 spring_setup silence ───────────
+# ─────────── P6 retired-strategy silence (post-F-19: config-driven) ───────────
+#
+# After F-19 fix (2026-05-24), the grader queries config/strategies.py
+# at run time for the canonical retired/disabled set. These tests pin
+# config to a deterministic shape so they don't drift with real-config
+# edits. The detailed F-19 contract lives in
+# tests/test_grader_config_alignment.py.
 
 class TestSpringSilenceGrader:
-    def test_pass_with_no_spring_logs(self):
+    def test_pass_with_no_spring_logs(self, monkeypatch):
+        # Deterministic config: only spring_setup is retired, the init
+        # line doesn't mention it → pass.
+        import config.strategies as strategies_mod
+        monkeypatch.setattr(
+            strategies_mod, "STRATEGIES",
+            {
+                "bias_momentum": {"enabled": True,  "validated": True},
+                "vwap_pullback": {"enabled": True,  "validated": True},
+                "spring_setup":  {"enabled": False, "retired": True},
+            },
+            raising=True,
+        )
         events = [E("2026-04-25T09:30:00", "Bot", "INFO",
                     "[SIM] Strategies: ['bias_momentum','vwap_pullback']")]
         r = SpringSilenceGrader().grade(events, {})
         assert r.overall_pass
 
-    def test_fail_when_strategy_in_init(self):
+    def test_fail_when_strategy_in_init(self, monkeypatch):
+        # spring_setup retired in config + appears in init line → fail.
+        import config.strategies as strategies_mod
+        monkeypatch.setattr(
+            strategies_mod, "STRATEGIES",
+            {
+                "bias_momentum": {"enabled": True,  "validated": True},
+                "spring_setup":  {"enabled": False, "retired": True},
+            },
+            raising=True,
+        )
         events = [E("2026-04-25T09:30:00", "Bot", "INFO",
                     "Strategies: ['bias_momentum','spring_setup']", strategy="spring_setup")]
         r = SpringSilenceGrader().grade(events, {})
@@ -284,7 +312,19 @@ class TestSpringSilenceGrader:
         # AND init line includes it → qual fails
         assert not r.qual_pass
 
-    def test_ignores_anthropic_debrief_payloads(self):
+    def test_ignores_anthropic_debrief_payloads(self, monkeypatch):
+        # spring_setup retired in config + only mention is inside an
+        # Anthropic debrief payload → quant passes (filter logic
+        # preserved).
+        import config.strategies as strategies_mod
+        monkeypatch.setattr(
+            strategies_mod, "STRATEGIES",
+            {
+                "bias_momentum": {"enabled": True,  "validated": True},
+                "spring_setup":  {"enabled": False, "retired": True},
+            },
+            raising=True,
+        )
         events = [E("2026-04-25T17:30:00", "anthropic._base_client", "DEBUG",
                     'Request options: {... "strategy": "spring_setup" ...}',
                     strategy="spring_setup")]

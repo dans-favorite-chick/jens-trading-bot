@@ -36,7 +36,9 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-BASE_BOT_SRC = (ROOT / "bots" / "base_bot.py").read_text(encoding="utf-8")
+# P4-1 (2026-05-24): search all extracted bot modules, not base_bot.py alone
+from tests._bot_src_search import bot_combined_source as _bcs
+BASE_BOT_SRC = _bcs()
 POS_MGR_SRC = (ROOT / "core" / "position_manager.py").read_text(encoding="utf-8")
 
 

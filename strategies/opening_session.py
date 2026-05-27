@@ -405,26 +405,45 @@ class OpeningSessionStrategy(BaseStrategy):
         one_r = abs(price - stop_price)
         be_milestone = price + one_r if direction == "LONG" else price - one_r
 
-        # PHASE 13 BUG B2 FIX (2026-05-18):
-        # OLD: t1 = pivot_pp  (classic Pivot Point, average of prior day H/L/C).
-        #   On a STRONG OPEN DRIVE UP, current price closes ABOVE PP by definition
-        #   (the drive went past the prior-day mean). PP target lands BELOW
-        #   entry → target hit at LOSS instantly. 557 fires / 5y / -$106k.
-        #
-        # NEW: t1 = entry ± 2R (fixed 2:1 reward:risk).
-        #   Open Drive is a CONTINUATION setup — we want a target ABOVE entry
-        #   on a LONG. 2R from stop distance is regime-adaptive (wider stops
-        #   → wider targets) and avoids structural targets that can land
-        #   anywhere relative to entry.
-        #
-        # Future enhancement candidates (Phase 14+): use R1 = 2*PP - PD_L
-        # for LONG / S1 = 2*PP - PD_H for SHORT, IF R1/S1 is at least
-        # 1.5R away from entry; fall back to 2R fixed otherwise.
+        # PHASE 13 BUG B2 FIX (2026-05-18 partial; 2026-05-25 complete).
+        # OLD: t1 = pivot_pp → landed below entry on LONG drives → instant loss.
+        # PARTIAL FIX (2026-05-18): t1 = entry ± 2R fixed.
+        # FULL FIX (2026-05-25, operator decision "Continuation R1/S1"):
+        #   R1 = 2*PP - PD_L  (classic resistance pivot; LONG target)
+        #   S1 = 2*PP - PD_H  (classic support pivot;    SHORT target)
+        #   Open Drive is a CONTINUATION setup — R1/S1 are the natural
+        #   continuation targets. Use them IF they're at least 1.5R from
+        #   entry (otherwise the pivot is too close for an open-drive
+        #   thesis — fall back to 2R fixed). If pivot_pp / PD_high / PD_low
+        #   missing, also fall back to 2R fixed.
         target_distance = 2.0 * one_r
+        target_source = "2R_fixed"
+        try:
+            if (pivot_pp is not None and pd_high is not None
+                    and pd_low is not None):
+                if direction == "LONG":
+                    r1 = 2.0 * pivot_pp - pd_low
+                    candidate = r1
+                    candidate_dist = candidate - price
+                else:
+                    s1 = 2.0 * pivot_pp - pd_high
+                    candidate = s1
+                    candidate_dist = price - candidate
+                # Continuation must be at least 1.5R away to justify
+                # using the pivot vs the 2R-fixed fallback.
+                if candidate_dist >= 1.5 * one_r:
+                    target_distance = candidate_dist
+                    target_source = "R1" if direction == "LONG" else "S1"
+        except (TypeError, ValueError):
+            pass  # fall through to 2R fixed
         if direction == "LONG":
             t1 = price + target_distance
         else:
             t1 = price - target_distance
+        self._log_eval(
+            f"OPEN_DRIVE {sub} target={target_source} "
+            f"dist={target_distance:.2f} ({target_distance / one_r:.2f}R)"
+        )
 
         return self._build_signal(
             direction=direction,
@@ -447,7 +466,11 @@ class OpeningSessionStrategy(BaseStrategy):
                 "or_high": h5,
                 "or_low": l5,
                 "pivot_pp_ref": pivot_pp,  # logged for reference (was the broken target)
-                "target_method": "2R_fixed_post_B2_fix",
+                # F-26 (B2 full fix, 2026-05-25): dynamic target source.
+                # "R1" / "S1" = continuation pivot (preferred when >=1.5R out)
+                # "2R_fixed" = fallback when pivot too close or missing.
+                "target_method": target_source,
+                "target_distance_R": round(target_distance / one_r, 2),
                 "trail_after_target": True,
                 "trail_ticks": int(self.config.get("open_drive_trail_ticks", 20)),
             },

@@ -356,6 +356,11 @@ class BridgeServer:
                     logger.warning(f"Bad JSON from NT8: {message[:100]}")
                     continue
 
+                # P4-3 (F-23) 2026-05-24: stamp bridge-in timestamp on every
+                # parsed message so the bot can compute tick→bar latency.
+                # In-process only; adds one dict assignment (<1µs).
+                data["t_bridge_in"] = time.time()
+
                 msg_type = data.get("type", "")
 
                 if msg_type == "connect":
@@ -744,6 +749,31 @@ class BridgeServer:
             "bot_heartbeats": dict(self.bot_heartbeats),
         }
 
+    # ─── WS Ping Broadcaster ────────────────────────────────────────
+    # 2026-05-24 P1-6 (F-11): broadcast a dedicated wsping every 30s to
+    # every connected bot so each bot's WS watchdog can distinguish "no
+    # ticks because the market is quiet" from "WS dead." Without this, a
+    # bot's any-frame staleness timer false-fires during weekend/lunch/
+    # overnight 0-tick windows (~106s defensive reconnect cycle observed).
+    # The watchdog now keys off wsping receipt, not generic frame receipt.
+    async def _wsping_loop(self):
+        while True:
+            try:
+                await asyncio.sleep(30)
+                msg = json.dumps({"type": "wsping", "ts": time.time()})
+                # Snapshot to avoid mutation during iteration.
+                for name, ws in list(self.bot_connections.items()):
+                    try:
+                        await asyncio.wait_for(ws.send(msg), timeout=2)
+                    except Exception as _send_err:
+                        # Dead-bot send must not kill the loop; broadcast
+                        # path already removes dropped bots on next tick.
+                        logger.debug(
+                            f"[WSPING] send to '{name}' failed: {_send_err!r}"
+                        )
+            except Exception as _outer:
+                logger.debug(f"[WSPING] loop error: {_outer!r}")
+
     # ─── NT8 Stale Watcher ──────────────────────────────────────────
     async def stale_watcher(self):
         """Monitor NT8 connection health. Emit DISTINCT signals (B7 fix):
@@ -921,6 +951,9 @@ class BridgeServer:
         logger.info("Waiting for NT8 to connect...")
         logger.info("(Start NinjaTrader, load TickStreamer indicator on MNQM6 chart)")
         logger.info("")
+
+        # 2026-05-24 P1-6 (F-11): bot-side WS watchdog proof-of-life.
+        asyncio.ensure_future(self._wsping_loop())
 
         # Run background tasks
         await asyncio.gather(

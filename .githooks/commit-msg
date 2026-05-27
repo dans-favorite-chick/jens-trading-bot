@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+"""Phoenix commit-msg hook — enforces OPERATOR-APPROVED tag on edits
+to protected files.
+
+Why commit-msg (not pre-commit):
+  Pre-commit fires BEFORE the user provides the commit message. It
+  cannot validate the message because the message file doesn't yet
+  exist in a stable form. commit-msg fires AFTER message capture and
+  receives the message file path as sys.argv[1] — that's the documented
+  git mechanism for message validation. Earlier 2026-05-27 version of
+  this hook lived at .githooks/pre-commit; it would fall back to the
+  PREVIOUS commit's message via `git log -1 HEAD`, which never has the
+  new approval tag, so it falsely blocked every protected commit.
+
+Activate per-clone: `python tools/install_git_hooks.py`
+(runs `git config core.hooksPath .githooks` and verifies).
+
+Canonical policy: .claude/PROTECTED_FILES.md
+Test:             tests/test_protected_files_policy.py
+
+Behavior:
+1. Read the pending commit message from sys.argv[1] (the message file
+   git passes in).
+2. Scan the staged diff for any protected FILE.
+3. Scan the staged diff for any protected SYMBOL inside
+   config/settings.py or config/strategies.py.
+4. If any protected change is staged, require
+   `^OPERATOR-APPROVED:\\s+(\\d{4}-\\d{2}-\\d{2})\\s*$` on its own line
+   in the commit message. Date must be within the last 7 days.
+5. On failure: print remediation to stderr, exit 1.
+
+Bypass: `git commit --no-verify` — emergency only.
+"""
+from __future__ import annotations
+
+import re
+import subprocess
+import sys
+from datetime import date, datetime, timedelta
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# ─── Protected file list (keep in sync with .claude/PROTECTED_FILES.md) ──
+PROTECTED_FILES = {
+    "bridge/oif_writer.py",
+    "bridge/bridge_server.py",
+    "core/risk_manager.py",
+    "core/portfolio_risk_gate.py",
+    "core/pending_entry_tracker.py",
+    "core/nt8_order_id_capture.py",
+    "core/live_canary_gate.py",
+    "core/position_manager.py",
+    "core/trade_memory.py",
+    "bots/prod_bot.py",
+}
+
+# Symbols inside config/* that, if touched, count as a protected change.
+PROTECTED_SYMBOLS_BY_FILE = {
+    "config/settings.py": [
+        "LIVE_TRADING",
+        "LIVE_STRATEGY_ALLOWLIST",
+        "DAILY_LOSS_LIMIT",
+        "WEEKLY_LOSS_LIMIT",
+        "PER_STRATEGY_DAILY_LOSS_CAP",
+        "INSTRUMENT",
+        "NEXT_CONTRACT",
+        "ROLL_DAYS_BEFORE_EXPIRATION",
+        "PENDING_ENTRY_TIMEOUT_S",
+        "AGENT_COUNCIL_ENABLED",
+        "AGENT_PRETRADE_FILTER_ENABLED",
+        "AGENT_DEBRIEF_ENABLED",
+    ],
+    "config/strategies.py": [
+        "FREEZE_ACTIVE",
+        '"validated": True',
+        '"walk_forward_gate": "hard_block"',
+    ],
+}
+
+APPROVAL_RE = re.compile(r"^OPERATOR-APPROVED:\s+(\d{4}-\d{2}-\d{2})\s*$", re.M)
+MAX_APPROVAL_AGE_DAYS = 7
+
+
+def _git(args: list[str]) -> str:
+    """Run a git command and return stdout, '' on error."""
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), *args],
+            check=False, capture_output=True, encoding="utf-8", errors="replace",
+        )
+        return r.stdout or ""
+    except Exception:
+        return ""
+
+
+def _staged_files() -> list[str]:
+    """List of staged file paths (relative to repo root)."""
+    out = _git(["diff", "--cached", "--name-only"])
+    return [ln.strip() for ln in out.splitlines() if ln.strip()]
+
+
+def _staged_diff(path: str) -> str:
+    """Return the unified diff for one staged file."""
+    return _git(["diff", "--cached", "--", path])
+
+
+def _commit_message(msg_file_path: str | None) -> str:
+    """Read the pending commit message from the file git passes in via
+    sys.argv[1]. Strip git-prepared comment lines (those starting with
+    '#') so they don't contribute to the body — git renders them but
+    strips before commit.
+
+    Falls back to `git log -1 HEAD` only if the file is missing or
+    empty (defensive — git always passes the path)."""
+    if msg_file_path:
+        try:
+            txt = Path(msg_file_path).read_text(encoding="utf-8", errors="replace")
+            non_comment = [ln for ln in txt.splitlines()
+                           if not ln.lstrip().startswith("#")]
+            joined = "\n".join(non_comment).strip()
+            if joined:
+                return joined
+        except OSError:
+            pass
+    # Defensive fallback (should not normally be reached).
+    return _git(["log", "-1", "--format=%B", "HEAD"]).strip()
+
+
+def _detect_protected_changes() -> list[str]:
+    """Return human-readable reasons describing each protected change
+    in the staged diff. Empty list = no protected change."""
+    reasons: list[str] = []
+    for path in _staged_files():
+        # Normalize Windows -> POSIX separator for matching.
+        path_posix = path.replace("\\", "/")
+        if path_posix in PROTECTED_FILES:
+            reasons.append(f"  - {path_posix} (protected file)")
+            continue
+        symbols = PROTECTED_SYMBOLS_BY_FILE.get(path_posix)
+        if not symbols:
+            continue
+        diff = _staged_diff(path)
+        # Look at + and - lines only (actual changes).
+        change_lines = [ln for ln in diff.splitlines()
+                        if (ln.startswith("+") or ln.startswith("-"))
+                        and not ln.startswith("+++")
+                        and not ln.startswith("---")]
+        body = "\n".join(change_lines)
+        for sym in symbols:
+            if sym in body:
+                reasons.append(f"  - {path_posix} (protected symbol: {sym})")
+    return reasons
+
+
+def _approval_status(message: str) -> tuple[bool, str]:
+    """Return (ok, why_not). ok=True means message has a fresh approval."""
+    m = APPROVAL_RE.search(message)
+    if not m:
+        return False, "no OPERATOR-APPROVED: <YYYY-MM-DD> line"
+    raw = m.group(1)
+    try:
+        approval_dt = datetime.strptime(raw, "%Y-%m-%d").date()
+    except ValueError:
+        return False, f"OPERATOR-APPROVED date '{raw}' is not YYYY-MM-DD"
+    today = date.today()
+    if approval_dt > today + timedelta(days=1):
+        return False, f"OPERATOR-APPROVED date '{raw}' is in the future"
+    if today - approval_dt > timedelta(days=MAX_APPROVAL_AGE_DAYS):
+        return False, (
+            f"OPERATOR-APPROVED date '{raw}' is older than "
+            f"{MAX_APPROVAL_AGE_DAYS}d (today is {today.isoformat()})"
+        )
+    return True, ""
+
+
+def main(argv: list[str]) -> int:
+    reasons = _detect_protected_changes()
+    if not reasons:
+        return 0  # No protected change → pass.
+
+    # commit-msg hooks receive the message file as argv[1].
+    msg_path = argv[1] if len(argv) > 1 else None
+    message = _commit_message(msg_path)
+    ok, why_not = _approval_status(message)
+    if ok:
+        return 0
+
+    # Build the user-facing failure message. Print to stderr so it shows
+    # under git's "hook failed" red banner.
+    print("=" * 70, file=sys.stderr)
+    print("BLOCKED: commit touches a protected file without operator approval",
+          file=sys.stderr)
+    print("=" * 70, file=sys.stderr)
+    print("Protected changes detected:", file=sys.stderr)
+    for r in reasons:
+        print(r, file=sys.stderr)
+    print("", file=sys.stderr)
+    print(f"Reason: {why_not}", file=sys.stderr)
+    print("", file=sys.stderr)
+    print("To fix:", file=sys.stderr)
+    print("  1. Confirm the operator approved this edit in chat", file=sys.stderr)
+    print(f"  2. Add this line to the commit message (today's date):",
+          file=sys.stderr)
+    print(f"       OPERATOR-APPROVED: {date.today().isoformat()}",
+          file=sys.stderr)
+    print("  3. Re-run the commit.", file=sys.stderr)
+    print("", file=sys.stderr)
+    print("Emergency bypass: git commit --no-verify  (last resort)",
+          file=sys.stderr)
+    print("Canonical policy: .claude/PROTECTED_FILES.md", file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

@@ -40,6 +40,35 @@ sys.path.insert(0, str(ROOT))
 CT = ZoneInfo("America/Chicago")
 
 
+# ─── stdout encoding safety ─────────────────────────────────────────
+# On Windows the default console code page is cp1252, which can't
+# encode the em-dashes, box-drawing chars, and emoji this file prints.
+# Reconfigure stdout/stderr to UTF-8 if possible, falling back to a
+# replace-error handler so we never crash on a stray non-ASCII char.
+# Operator hit this on 2026-05-25 running --check-promotion without
+# PYTHONIOENCODING=utf-8 (UnicodeEncodeError on the U+26A0 warning glyph).
+def _reconfigure_stream(stream) -> None:
+    try:
+        stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:  # noqa: BLE001 - best-effort; pre-3.7 streams or pipes
+        pass
+
+
+_reconfigure_stream(sys.stdout)
+_reconfigure_stream(sys.stderr)
+
+
+def _safe_print(*args, **kwargs) -> None:
+    """print() with ASCII fallback if the active encoding can't render a char."""
+    try:
+        print(*args, **kwargs)
+    except UnicodeEncodeError:
+        sep = kwargs.get("sep", " ")
+        text = sep.join(str(a) for a in args)
+        kwargs.pop("sep", None)
+        print(text.encode("ascii", "replace").decode("ascii"), **kwargs)
+
+
 # ─── data root: cwd if it has logs/, else fall back to project ROOT ──
 def _data_root() -> Path:
     """Detect phoenix_bot root via any trade_memory file (legacy or per-bot)."""
@@ -226,16 +255,68 @@ def _summary_stats(pnls: list[float], strip_top_pct: float = 10.0) -> dict:
 _TENTATIVE_N = 100
 
 
+# F-25 (2026-05-25): per-strategy walk-forward gate values.
+#   "hard_block"     — REFUSE promotion if no PASS walk-forward report
+#                       exists for this strategy. Used for bias_momentum
+#                       (the live canary) and any strategy on the live
+#                       allowlist.
+#   "informational"  — Report walk-forward status; warn but don't fail.
+#                       Default for sim heavy-test strategies.
+# A missing field is treated as "informational" with a deprecation note
+# (we want every strategy to declare its gate explicitly).
+_WF_GATE_HARD_BLOCK = "hard_block"
+_WF_GATE_INFO = "informational"
+
+
+def _latest_walk_forward_report(
+    out_dir, strategy: str
+):
+    """Return (path, payload_dict) for the most recent walk-forward
+    JSON report for `strategy`, or (None, None) if no report exists.
+
+    Looks under {project_root}/out/walk_forward_<date>_<strategy>.json.
+    """
+    import json
+    out_dir = Path(out_dir)
+    if not out_dir.exists():
+        return (None, None)
+    candidates = sorted(
+        out_dir.glob(f"walk_forward_*_{strategy}.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if not candidates:
+        return (None, None)
+    latest = candidates[0]
+    try:
+        payload = json.loads(latest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return (latest, None)
+    return (latest, payload)
+
+
 def check_promotion_eligibility(
     trades: list[dict],
     strategy_configs: dict,
+    data_root=None,
 ) -> list[tuple[str, int, str]]:
-    """Wilson-CI promotion guardrail (#22, 2026-05-13).
+    """Wilson-CI + walk-forward promotion guardrail.
 
-    A strategy can only carry `validated=True` (which makes it eligible
-    for prod_bot via the only_validated gate) once it has at least
-    TENTATIVE (n >= 100) statistical confidence. A strategy promoted
-    earlier is making a directional call on noise.
+    Original (#22, 2026-05-13): a strategy can only carry validated=True
+    (which makes it eligible for prod_bot via the only_validated gate)
+    once it has at least TENTATIVE (n >= 100) statistical confidence.
+
+    Extended (F-25, 2026-05-25): for strategies marked
+    walk_forward_gate="hard_block" in config/strategies.py, the
+    Wilson-CI gate is necessary but not sufficient — the strategy must
+    also have a PASS verdict from tools/walk_forward_harness.py (CPCV /
+    DSR / PBO). Without that report, promotion is REFUSED. This is
+    enforced for the live canary (bias_momentum) and any strategy
+    promoted to LIVE_STRATEGY_ALLOWLIST.
+
+    Strategies with walk_forward_gate="informational" (or missing) get
+    a printed status line but no hard failure — the Wilson check still
+    applies.
 
     Returns a list of (strategy_name, current_n, reason) tuples for
     every misclassified strategy — empty list = clean. Caller decides
@@ -245,6 +326,10 @@ def check_promotion_eligibility(
     for t in trades:
         counts[t.get("strategy", "unknown")] += 1
     violations: list[tuple[str, int, str]] = []
+    # Resolve walk-forward report directory once.
+    wf_dir = None
+    if data_root is not None:
+        wf_dir = Path(data_root) / "out"
     for name, cfg in strategy_configs.items():
         if not cfg.get("validated", False):
             continue
@@ -259,6 +344,38 @@ def check_promotion_eligibility(
                 f"below TENTATIVE tier. Demote to validated=False "
                 f"until n>={_TENTATIVE_N}."
             ))
+            # If Wilson fails, no point checking walk-forward.
+            continue
+
+        # F-25 walk-forward gate.
+        gate = cfg.get("walk_forward_gate", _WF_GATE_INFO)
+        if gate == _WF_GATE_HARD_BLOCK and wf_dir is not None:
+            path, payload = _latest_walk_forward_report(wf_dir, name)
+            if path is None:
+                violations.append((
+                    name, n,
+                    f"walk_forward_gate=hard_block but NO walk-forward "
+                    f"report found in {wf_dir}/. Run "
+                    f"`python tools/walk_forward_harness.py "
+                    f"--strategy {name}` and re-run promotion check."
+                ))
+            elif payload is None:
+                violations.append((
+                    name, n,
+                    f"walk_forward_gate=hard_block but report "
+                    f"{path.name} could not be parsed as JSON. "
+                    f"Re-run harness."
+                ))
+            else:
+                verdict = (payload.get("verdict") or "").upper()
+                if verdict != "PASS":
+                    reason = payload.get("reason") or "(no reason)"
+                    violations.append((
+                        name, n,
+                        f"walk_forward_gate=hard_block and latest "
+                        f"report ({path.name}) verdict={verdict} — "
+                        f"reason: {reason}. PASS required to promote."
+                    ))
     return violations
 
 
@@ -296,14 +413,53 @@ def main():
 
     # ── #22 promotion guardrail ──────────────────────────────────────
     if args.check_promotion:
-        from config.strategies import STRATEGIES
-        violations = check_promotion_eligibility(trades, STRATEGIES)
+        from config.strategies import STRATEGIES, FREEZE_ACTIVE
+        # P0-5 (2026-05-24): production-decision freeze banner. Even if
+        # the Wilson-CI check passes, the operator should see that the
+        # freeze is active so no new validations are flipped during the
+        # reconciliation period.
+        if FREEZE_ACTIVE:
+            print("=" * 64)
+            print("!! PRODUCTION-DECISION FREEZE IS ACTIVE")
+            print("    See config/strategies.py top + ")
+            print("    docs/audits/SYNTHESIS_2026-05-24.md P0-5.")
+            print("    NO new validated=True flips, NO kill-list,")
+            print("    NO Phase 13 verdicts, NO tier_3000 prep")
+            print("    until P1-1 reconciliation ships.")
+            print("=" * 64)
+        violations = check_promotion_eligibility(
+            trades, STRATEGIES, data_root=data_root,
+        )
+
+        # F-25 (2026-05-25): informational walk-forward status banner.
+        # Even when nothing blocks, surface each strategy's gate +
+        # latest report so the operator sees the state of statistical
+        # validation at a glance.
+        print("\n[walk-forward-gate] per-strategy status:")
+        wf_dir = data_root / "out"
+        for name, cfg in STRATEGIES.items():
+            if not cfg.get("enabled", False):
+                continue
+            if cfg.get("retired"):
+                continue
+            gate = cfg.get("walk_forward_gate", "informational")
+            path, payload = _latest_walk_forward_report(wf_dir, name)
+            if path is None:
+                status = "no-report"
+            elif payload is None:
+                status = f"unparseable ({path.name})"
+            else:
+                v = payload.get("verdict", "?")
+                status = f"{v} ({path.name})"
+            print(f"  - {name:<28} gate={gate:<14} {status}")
+
         if not violations:
-            print("[promotion-check] OK — no validated=True strategy "
-                  f"is below TENTATIVE (n>={_TENTATIVE_N}).")
+            print("\n[promotion-check] OK — no validated=True strategy "
+                  f"is below TENTATIVE (n>={_TENTATIVE_N}) "
+                  "and all hard_block strategies have PASS reports.")
             return 0
-        print(f"[promotion-check] FAIL — {len(violations)} strategies "
-              "below TENTATIVE but flagged validated=True:")
+        print(f"\n[promotion-check] FAIL — {len(violations)} promotion "
+              "violations:")
         for name, n, reason in violations:
             print(f"  - {name}: {reason}")
         return 2

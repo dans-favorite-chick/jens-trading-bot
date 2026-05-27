@@ -128,18 +128,18 @@ class TestFileContentWellFormed(unittest.TestCase):
         self.assertIn("_stage_oif", src)
         self.assertIn("_commit_staged", src)
 
-    def test_legacy_path_no_longer_uses_plain_open_write(self):
-        """B45 rev3 (2026-04-21) intentionally reverted to direct write
-        inside _stage_oif after .tmp/.stage attempts broke NT8's
-        FileSystemWatcher. The original P1 concern (partial-write race on
-        concurrent NT8 read) is empirically non-existent for ~100-byte
-        OIF files on Windows NTFS — partial-write window is sub-ms and
-        NT8 reads only on complete-write events.
+    def test_legacy_path_uses_staging_for_tmp_writes(self):
+        """2026-05-25: _stage_oif writes the `.tmp` into OIF_STAGING (a
+        sibling of OIF_INCOMING, outside NT8's watch tree) then
+        os.replace()s into incoming/. This eliminates the spurious
+        "Unknown OIF file type ...txt.tmp" entries that flooded the NT8
+        Log tab when NT8's ATI raced Phoenix's rename on transient .tmp
+        files inside incoming/.
 
-        New contract: _stage_oif must write to the final path directly,
-        no cross-directory rename. Other functions in oif_writer must
-        NOT do their own `with open(filepath, "w")` (all file IO goes
-        through _stage_oif).
+        New contract: _stage_oif writes to OIF_STAGING/<file>.txt.tmp,
+        _commit_staged calls os.replace into OIF_INCOMING/<file>.txt.
+        Other functions in oif_writer must NOT do their own
+        `with open(filepath, "w")` (all file IO goes through _stage_oif).
         """
         src = (Path(__file__).parent.parent / "bridge" / "oif_writer.py").read_text(
             encoding="utf-8"
@@ -147,9 +147,20 @@ class TestFileContentWellFormed(unittest.TestCase):
         stage_start = src.index("def _stage_oif")
         stage_end = src.index("def ", stage_start + 1)
         stage_region = src[stage_start:stage_end]
-        # B45 rev3: direct-write to final_path (no staging dir).
-        self.assertIn('open(final_path, "w")', stage_region,
-                      "_stage_oif must write directly to final_path (B45 rev3)")
+        # 2026-05-25: staged write lives at OIF_STAGING.
+        self.assertIn('OIF_STAGING', stage_region,
+                      "_stage_oif must stage .tmp files in OIF_STAGING")
+        self.assertIn('staging_tmp', stage_region,
+                      "_stage_oif must write to a staging_tmp path")
+        self.assertIn('".tmp"', stage_region.replace("'", '"'),
+                      "_stage_oif must produce a .tmp staged file")
+        # _commit_staged must use os.replace (atomic cross-folder rename).
+        commit_start = src.index("def _commit_staged")
+        commit_end = src.index("def ", commit_start + 1)
+        commit_region = src[commit_start:commit_end]
+        self.assertIn('os.replace(tmp, final)', commit_region,
+                      "_commit_staged must use os.replace (atomic) for "
+                      "cross-folder rename")
         # Everywhere else: should NOT have plain `open(filepath, "w")` ops
         rest = src[:stage_start] + src[stage_end:]
         self.assertNotIn('with open(filepath, "w")', rest,

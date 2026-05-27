@@ -97,7 +97,12 @@ class TestScaleOutRouting:
         """
         from bots import base_bot
 
-        src = inspect.getsource(base_bot.BaseBot._scale_out_trade)
+        # 2026-05-24 P4-1 Stage 4: _scale_out_trade body extracted to
+        # bots/_scale_out.py; the BaseBot method is now a thin delegation.
+        # Source-level grep needs to hit the extracted body, not the
+        # 4-line delegation shim.
+        from bots._scale_out import ScaleOut as _SO
+        src = inspect.getsource(_SO.scale_out_trade)
         # Strip comment lines so docstrings/explanatory comments that
         # legitimately mention 'write_be_stop' (the bad-pattern note)
         # don't trigger the grep.
@@ -119,7 +124,12 @@ class TestScaleOutRouting:
         """After fix, _scale_out_trade must use _move_nt8_stop."""
         from bots import base_bot
 
-        src = inspect.getsource(base_bot.BaseBot._scale_out_trade)
+        # 2026-05-24 P4-1 Stage 4: _scale_out_trade body extracted to
+        # bots/_scale_out.py; the BaseBot method is now a thin delegation.
+        # Source-level grep needs to hit the extracted body, not the
+        # 4-line delegation shim.
+        from bots._scale_out import ScaleOut as _SO
+        src = inspect.getsource(_SO.scale_out_trade)
         assert "_move_nt8_stop" in src, (
             "_scale_out_trade must call _move_nt8_stop to ensure the BE "
             "move goes through the cancel+replace (P0.5) path."

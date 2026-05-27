@@ -120,27 +120,30 @@ class TestIdempotency:
 # sync function that builds an async coroutine + runs it.
 # ═══════════════════════════════════════════════════════════════════
 def _make_bot_for_loop_test(reconcile_fn, interval_s=0.01):
-    """Construct a MagicMock with just enough surface for the loop to run."""
-    from bots.base_bot import BaseBot
+    """Construct a MagicMock + RuntimeReconciliationLoop wrapper.
 
-    bot = MagicMock(spec=BaseBot)
+    2026-05-24 P4-1 Stage 2: loop extracted from BaseBot._runtime_reconciliation_loop
+    to bots/_runtime_reconciliation.py::RuntimeReconciliationLoop. Tests
+    now exercise the wrapper class directly.
+    """
+    from bots._runtime_reconciliation import RuntimeReconciliationLoop
+
+    bot = MagicMock()
     bot.RUNTIME_RECON_INTERVAL_S = interval_s
     bot._shutdown_reconciliation = False
     bot._reconcile_positions_from_nt8 = reconcile_fn
-    # Bind the unbound async method to our mock.
-    bot._runtime_reconciliation_loop = (
-        BaseBot._runtime_reconciliation_loop.__get__(bot)
-    )
-    return bot
+    bot._resolve_exit_pending_positions = MagicMock()
+    loop = RuntimeReconciliationLoop(bot)
+    return bot, loop
 
 
 class TestRuntimeLoop:
     def test_loop_invokes_reconcile_on_interval(self):
         reconcile_mock = MagicMock(return_value=[])
-        bot = _make_bot_for_loop_test(reconcile_mock)
+        bot, loop = _make_bot_for_loop_test(reconcile_mock)
 
         async def _run():
-            task = asyncio.create_task(bot._runtime_reconciliation_loop())
+            task = asyncio.create_task(loop.run())
             await asyncio.sleep(0.05)  # let a handful of cycles run
             bot._shutdown_reconciliation = True
             try:
@@ -154,11 +157,11 @@ class TestRuntimeLoop:
     def test_loop_respects_shutdown_flag(self):
         """Flipping _shutdown_reconciliation ends the loop cleanly."""
         reconcile_mock = MagicMock(return_value=[])
-        bot = _make_bot_for_loop_test(reconcile_mock)
+        bot, loop = _make_bot_for_loop_test(reconcile_mock)
 
         async def _run():
             bot._shutdown_reconciliation = True  # flip BEFORE starting
-            task = asyncio.create_task(bot._runtime_reconciliation_loop())
+            task = asyncio.create_task(loop.run())
             # Loop should exit after the first sleep even if we never
             # change the flag again. Timeout well above interval (0.01s)
             # would indicate the loop is ignoring the flag.
@@ -176,10 +179,10 @@ class TestRuntimeLoop:
                 raise RuntimeError("first-call failure")
             return []
 
-        bot = _make_bot_for_loop_test(_flaky_reconcile)
+        bot, loop = _make_bot_for_loop_test(_flaky_reconcile)
 
         async def _run():
-            task = asyncio.create_task(bot._runtime_reconciliation_loop())
+            task = asyncio.create_task(loop.run())
             await asyncio.sleep(0.05)
             bot._shutdown_reconciliation = True
             try:

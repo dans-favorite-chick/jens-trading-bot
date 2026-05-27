@@ -146,21 +146,28 @@ class TestExoticTypeGraceful(unittest.TestCase):
 
 
 class TestPushBoundaryGuarded(unittest.TestCase):
-    """The dashboard_loop already wraps json.dumps() + HTTP in a try/except
-    at line ~479 of base_bot.py. This test confirms the try/except is still
-    there — any refactor that drops it would regress to BUG-TL1 observability
-    (and worse, could propagate to the WS handler)."""
+    """The dashboard pusher wraps json.dumps() + HTTP in a try/except.
+    This test confirms the try/except is still there — any refactor that
+    drops it would regress to BUG-TL1 observability.
+
+    2026-05-24 P4-1 Stage 2: the dashboard loop was extracted to
+    bots/_dashboard_pusher.py. Check the extracted module, not base_bot.py.
+    `_json_default_safe` stays defined in base_bot.py (line ~836); the
+    push sites moved to the extracted module."""
 
     def test_dashboard_loop_has_outer_exception_guard(self):
-        src = (Path(__file__).parent.parent / "bots" / "base_bot.py").read_text(encoding="utf-8")
-        # The guard is the specific pattern we rely on; look for both the
-        # outer try and the warning log.
-        self.assertIn("Dashboard push failed:", src,
-                      "Dashboard-push outer guard log message missing — "
-                      "serialize failures could propagate.")
-        # The _json_default_safe helper must be referenced by both push sites.
-        self.assertGreaterEqual(src.count("_json_default_safe"), 3,
-                                "Expected _json_default_safe in 2 json.dumps calls + 1 definition = 3+ refs.")
+        pusher_src = (Path(__file__).parent.parent / "bots" / "_dashboard_pusher.py").read_text(encoding="utf-8")
+        base_src = (Path(__file__).parent.parent / "bots" / "base_bot.py").read_text(encoding="utf-8")
+        # The guard log line lives in the extracted module now.
+        self.assertIn("Dashboard push failed:", pusher_src,
+                      "Dashboard-push outer guard log message missing from "
+                      "bots/_dashboard_pusher.py — serialize failures could propagate.")
+        # _json_default_safe definition must still live in base_bot.py.
+        self.assertIn("def _json_default_safe", base_src,
+                      "_json_default_safe definition missing from base_bot.py")
+        # And the extracted pusher must reference it (lazy import inside run()).
+        self.assertIn("_json_default_safe", pusher_src,
+                      "_dashboard_pusher.py must reference _json_default_safe")
 
 
 if __name__ == "__main__":

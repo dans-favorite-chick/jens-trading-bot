@@ -816,6 +816,20 @@ def main():
     from core.single_instance import acquire_or_exit
     acquire_or_exit("sim")
 
+    # 2026-05-24 P0-2 (synthesis F-08, F-09): sim-overrides opt-in channel.
+    # Applies config/sim_overrides.py iff PHOENIX_SIM_OVERRIDES=1. Refuses
+    # to start if PHOENIX_SIM_OVERRIDES=1 + LIVE_TRADING=True. Critical-level
+    # log line names every applied override.
+    from core.sim_overrides_loader import load_and_apply_sim_overrides
+    load_and_apply_sim_overrides()
+
+    # 2026-05-24 LIVE CANARY: validate live-mode constraints. No-op in sim.
+    # SimBot should never run with LIVE_TRADING=True (it's the multi-account
+    # research bot) but the gate is here defensively in case someone flips
+    # the flag and forgets which bot they're starting.
+    from core.live_canary_gate import validate_live_config
+    validate_live_config()
+
     bot = SimBot()
     try:
         asyncio.run(bot.run())

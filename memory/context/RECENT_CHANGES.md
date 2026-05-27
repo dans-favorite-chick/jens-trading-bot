@@ -147,56 +147,6 @@ F-25.
 - `bots/base_bot.py`
 
 ---
-### 2026-05-25 09:32 Central Daylight Time — Session changes: 83 files modified
-
-**Files changed:**
-- `.gitignore`
-- `AI Trading Analysis System Research.md`
-- `BUILD_MAP.md`
-- `Epic Update v1 Prompt.md`
-- `OPERATOR_TODO.md`
-- `PHOENIX_PROJECT_PROMPT.md`
-- `PHOENIX_ROADMAP_v4.md`
-- `PROJECT_EXPORT_PROMPT.md`
-- `README.md`
-- `REBUILD_PLAN.md`
-- `SCRATCH_DIRS.md`
-- `STRATEGY_KNOWLEDGE_INJECTION_PROMPT.md`
-- `archived/menthorq_2026-05-05/menthorq/gamma/2026-04-20_blind.txt`
-- `archived/menthorq_2026-05-05/menthorq/gamma/2026-04-20_levels.txt`
-- `archived/menthorq_2026-05-05/menthorq/gamma/2026-04-21_blind.txt`
-- `archived/menthorq_2026-05-05/menthorq/gamma/2026-04-21_levels.txt`
-- `archived/menthorq_2026-05-05/menthorq/gamma/README.md`
-- `archived/menthorq_2026-05-05/menthorq_daily.json`
-- `audit_report.md`
-- `bots/base_bot.py`
-
----
-### 2026-05-25 09:32 Central Daylight Time — Session changes: 83 files modified
-
-**Files changed:**
-- `.gitignore`
-- `AI Trading Analysis System Research.md`
-- `BUILD_MAP.md`
-- `Epic Update v1 Prompt.md`
-- `OPERATOR_TODO.md`
-- `PHOENIX_PROJECT_PROMPT.md`
-- `PHOENIX_ROADMAP_v4.md`
-- `PROJECT_EXPORT_PROMPT.md`
-- `README.md`
-- `REBUILD_PLAN.md`
-- `SCRATCH_DIRS.md`
-- `STRATEGY_KNOWLEDGE_INJECTION_PROMPT.md`
-- `archived/menthorq_2026-05-05/menthorq/gamma/2026-04-20_blind.txt`
-- `archived/menthorq_2026-05-05/menthorq/gamma/2026-04-20_levels.txt`
-- `archived/menthorq_2026-05-05/menthorq/gamma/2026-04-21_blind.txt`
-- `archived/menthorq_2026-05-05/menthorq/gamma/2026-04-21_levels.txt`
-- `archived/menthorq_2026-05-05/menthorq/gamma/README.md`
-- `archived/menthorq_2026-05-05/menthorq_daily.json`
-- `audit_report.md`
-- `bots/base_bot.py`
-
----
 ### 2026-05-25 08:39 Central Daylight Time — Session changes: 80 files modified
 
 **Files changed:**
@@ -472,56 +422,6 @@ F-25.
 - `docs/exit-sprint-assumptions.md`
 
 ---
-### 2026-05-24 10:57 Central Daylight Time — Session changes: 32 files modified
-
-**Files changed:**
-- `AI Trading Analysis System Research.md`
-- `BUILD_MAP.md`
-- `Epic Update v1 Prompt.md`
-- `OPERATOR_TODO.md`
-- `PHOENIX_PROJECT_PROMPT.md`
-- `PHOENIX_ROADMAP_v4.md`
-- `PROJECT_EXPORT_PROMPT.md`
-- `README.md`
-- `REBUILD_PLAN.md`
-- `SCRATCH_DIRS.md`
-- `STRATEGY_KNOWLEDGE_INJECTION_PROMPT.md`
-- `audit_report.md`
-- `data/historical/volumetric/2026-05-22.jsonl`
-- `data/historical/volumetric/_recorder.log`
-- `docs/ACTION_PLAN_V2_1_DELTAS.md`
-- `docs/FILE_CLEANUP_AUDIT.md`
-- `docs/STRATEGY_SHIP_AUDIT.md`
-- `docs/TODO_RETIRE_LEGACY_REPO.md`
-- `docs/chicago_vps_migration_plan.md`
-- `docs/exit-sprint-assumptions.md`
-
----
-### 2026-05-24 10:57 Central Daylight Time — Session changes: 32 files modified
-
-**Files changed:**
-- `AI Trading Analysis System Research.md`
-- `BUILD_MAP.md`
-- `Epic Update v1 Prompt.md`
-- `OPERATOR_TODO.md`
-- `PHOENIX_PROJECT_PROMPT.md`
-- `PHOENIX_ROADMAP_v4.md`
-- `PROJECT_EXPORT_PROMPT.md`
-- `README.md`
-- `REBUILD_PLAN.md`
-- `SCRATCH_DIRS.md`
-- `STRATEGY_KNOWLEDGE_INJECTION_PROMPT.md`
-- `audit_report.md`
-- `data/historical/volumetric/2026-05-22.jsonl`
-- `data/historical/volumetric/_recorder.log`
-- `docs/ACTION_PLAN_V2_1_DELTAS.md`
-- `docs/FILE_CLEANUP_AUDIT.md`
-- `docs/STRATEGY_SHIP_AUDIT.md`
-- `docs/TODO_RETIRE_LEGACY_REPO.md`
-- `docs/chicago_vps_migration_plan.md`
-- `docs/exit-sprint-assumptions.md`
-
----
 ### 2026-05-24 10:56 Central Daylight Time — Session changes: 32 files modified
 
 **Files changed:**
@@ -548,56 +448,6 @@ F-25.
 
 ---
 ### 2026-05-24 10:54 Central Daylight Time — Session changes: 32 files modified
-
-**Files changed:**
-- `AI Trading Analysis System Research.md`
-- `BUILD_MAP.md`
-- `Epic Update v1 Prompt.md`
-- `OPERATOR_TODO.md`
-- `PHOENIX_PROJECT_PROMPT.md`
-- `PHOENIX_ROADMAP_v4.md`
-- `PROJECT_EXPORT_PROMPT.md`
-- `README.md`
-- `REBUILD_PLAN.md`
-- `SCRATCH_DIRS.md`
-- `STRATEGY_KNOWLEDGE_INJECTION_PROMPT.md`
-- `audit_report.md`
-- `data/historical/volumetric/2026-05-22.jsonl`
-- `data/historical/volumetric/_recorder.log`
-- `docs/ACTION_PLAN_V2_1_DELTAS.md`
-- `docs/FILE_CLEANUP_AUDIT.md`
-- `docs/STRATEGY_SHIP_AUDIT.md`
-- `docs/TODO_RETIRE_LEGACY_REPO.md`
-- `docs/chicago_vps_migration_plan.md`
-- `docs/exit-sprint-assumptions.md`
-
----
-### 2026-05-24 10:54 Central Daylight Time — Session changes: 32 files modified
-
-**Files changed:**
-- `AI Trading Analysis System Research.md`
-- `BUILD_MAP.md`
-- `Epic Update v1 Prompt.md`
-- `OPERATOR_TODO.md`
-- `PHOENIX_PROJECT_PROMPT.md`
-- `PHOENIX_ROADMAP_v4.md`
-- `PROJECT_EXPORT_PROMPT.md`
-- `README.md`
-- `REBUILD_PLAN.md`
-- `SCRATCH_DIRS.md`
-- `STRATEGY_KNOWLEDGE_INJECTION_PROMPT.md`
-- `audit_report.md`
-- `data/historical/volumetric/2026-05-22.jsonl`
-- `data/historical/volumetric/_recorder.log`
-- `docs/ACTION_PLAN_V2_1_DELTAS.md`
-- `docs/FILE_CLEANUP_AUDIT.md`
-- `docs/STRATEGY_SHIP_AUDIT.md`
-- `docs/TODO_RETIRE_LEGACY_REPO.md`
-- `docs/chicago_vps_migration_plan.md`
-- `docs/exit-sprint-assumptions.md`
-
----
-### 2026-05-24 10:53 Central Daylight Time — Session changes: 32 files modified
 
 **Files changed:**
 - `AI Trading Analysis System Research.md`
@@ -680,20 +530,6 @@ F-25.
 
 ---
 ### 2026-05-24 10:09 Central Daylight Time — Session changes: 2 files modified
-
-**Files changed:**
-- `data/historical/volumetric/2026-05-22.jsonl`
-- `data/historical/volumetric/_recorder.log`
-
----
-### 2026-05-24 09:47 Central Daylight Time — Session changes: 2 files modified
-
-**Files changed:**
-- `data/historical/volumetric/2026-05-22.jsonl`
-- `data/historical/volumetric/_recorder.log`
-
----
-### 2026-05-24 09:47 Central Daylight Time — Session changes: 2 files modified
 
 **Files changed:**
 - `data/historical/volumetric/2026-05-22.jsonl`
@@ -1287,12 +1123,6 @@ investigation. No behavior change.
 - `agents/session_debriefer.py`
 
 ---
-### 2026-05-13 08:17 Central Daylight Time — Session changes: 1 files modified
-
-**Files changed:**
-- `agents/session_debriefer.py`
-
----
 ### 2026-04-25 ~17:40 CDT — full automation lattice operational (manual entry)
 
 After the dual-stream incident cleanup, an additional 2-hour push to close
@@ -1576,81 +1406,6 @@ Next session must re-run all five `register_*.ps1` scripts as Administrator.
 - `strategies/orb.py`
 
 ---
-### 2026-04-25 10:00 Central Daylight Time — Session changes: 24 files modified
-
-**Files changed:**
-- `PHOENIX_PROJECT_PROMPT.md`
-- `agents/council_gate.py`
-- `bots/base_bot.py`
-- `bots/sim_bot.py`
-- `bridge/bridge_server.py`
-- `bridge/oif_writer.py`
-- `config/strategies.py`
-- `core/position_manager.py`
-- `core/startup_reconciliation.py`
-- `core/tick_aggregator.py`
-- `dashboard/server.py`
-- `dashboard/templates/dashboard.html`
-- `docs/phase_c_architecture.md`
-- `launch_all.bat`
-- `ninjatrader/PhoenixOIFGuard.cs`
-- `requirements.txt`
-- `strategies/bias_momentum.py`
-- `strategies/dom_pullback.py`
-- `strategies/noise_area.py`
-- `strategies/orb.py`
-
----
-### 2026-04-25 09:58 Central Daylight Time — Session changes: 24 files modified
-
-**Files changed:**
-- `PHOENIX_PROJECT_PROMPT.md`
-- `agents/council_gate.py`
-- `bots/base_bot.py`
-- `bots/sim_bot.py`
-- `bridge/bridge_server.py`
-- `bridge/oif_writer.py`
-- `config/strategies.py`
-- `core/position_manager.py`
-- `core/startup_reconciliation.py`
-- `core/tick_aggregator.py`
-- `dashboard/server.py`
-- `dashboard/templates/dashboard.html`
-- `docs/phase_c_architecture.md`
-- `launch_all.bat`
-- `ninjatrader/PhoenixOIFGuard.cs`
-- `requirements.txt`
-- `strategies/bias_momentum.py`
-- `strategies/dom_pullback.py`
-- `strategies/noise_area.py`
-- `strategies/orb.py`
-
----
-### 2026-04-25 09:58 Central Daylight Time — Session changes: 24 files modified
-
-**Files changed:**
-- `PHOENIX_PROJECT_PROMPT.md`
-- `agents/council_gate.py`
-- `bots/base_bot.py`
-- `bots/sim_bot.py`
-- `bridge/bridge_server.py`
-- `bridge/oif_writer.py`
-- `config/strategies.py`
-- `core/position_manager.py`
-- `core/startup_reconciliation.py`
-- `core/tick_aggregator.py`
-- `dashboard/server.py`
-- `dashboard/templates/dashboard.html`
-- `docs/phase_c_architecture.md`
-- `launch_all.bat`
-- `ninjatrader/PhoenixOIFGuard.cs`
-- `requirements.txt`
-- `strategies/bias_momentum.py`
-- `strategies/dom_pullback.py`
-- `strategies/noise_area.py`
-- `strategies/orb.py`
-
----
 ### 2026-04-25 09:58 Central Daylight Time — Session changes: 24 files modified
 
 **Files changed:**
@@ -1766,22 +1521,6 @@ Next session must re-run all five `register_*.ps1` scripts as Administrator.
 
 ---
 ### 2026-04-24 05:56 Central Daylight Time — Session changes: 11 files modified
-
-**Files changed:**
-- `bots/sim_bot.py`
-- `bridge/bridge_server.py`
-- `bridge/oif_writer.py`
-- `core/position_manager.py`
-- `core/startup_reconciliation.py`
-- `dashboard/templates/dashboard.html`
-- `launch_all.bat`
-- `ninjatrader/PhoenixOIFGuard.cs`
-- `strategies/bias_momentum.py`
-- `strategies/dom_pullback.py`
-- `tests/test_oif_filename_tagging.py`
-
----
-### 2026-04-24 05:55 Central Daylight Time — Session changes: 11 files modified
 
 **Files changed:**
 - `bots/sim_bot.py`

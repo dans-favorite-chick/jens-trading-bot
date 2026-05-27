@@ -136,8 +136,17 @@ def get_account_for_signal(
     """
     # ── Multi-account ATI kill-switch (B40) ────────────────────────────
     # Dynamic attribute read so tests / runtime can toggle the flag.
+    #
+    # 2026-05-24 (operator directive): when LIVE_TRADING=True, ALWAYS force
+    # single-account routing regardless of MULTI_ACCOUNT_ROUTING_ENABLED.
+    # Live canary is a one-account-one-instrument-one-to-three-strategies
+    # operation; multi-account routing is a sim-bot research mode that
+    # has no place in live trading. This makes it IMPOSSIBLE for a
+    # forgotten flag flip to route a real-money order to a sim sub-account.
     try:
         import config.settings as _s
+        if getattr(_s, "LIVE_TRADING", False):
+            return _DEFAULT_ACCOUNT
         if not getattr(_s, "MULTI_ACCOUNT_ROUTING_ENABLED", True):
             return _DEFAULT_ACCOUNT
     except Exception:
