@@ -100,6 +100,9 @@ def main():
                     help="Calendar days of bars BEFORE --start to replay so the "
                          "strategy's rolling internal tables (e.g. noise_area's "
                          "sigma_open) warm up. Only [start,end] minutes are compared.")
+    ap.add_argument("--bar-source", choices=["databento", "recorded"], default="databento",
+                    help="recorded = replay the bot's own logs/history bars (MNQ) "
+                         "instead of databento CSVs (closes the tf_bias gap).")
     args = ap.parse_args()
     strategy = args.strategy
 
@@ -121,9 +124,14 @@ def main():
     def slc(df):
         return df[(df.ts >= start) & (df.ts <= end)].reset_index(drop=True)
 
-    print("loading CSVs...")
-    mnq1 = slc(_load_bars_from_csv(str(DATA / "mnq_1min_databento.csv")))
-    mnq5 = slc(_load_bars_from_csv(str(DATA / "mnq_5min_databento.csv")))
+    print(f"loading bars (source={args.bar_source})...")
+    if args.bar_source == "recorded":
+        from tools.replay_enrichment.recorded_bars import load_recorded_bars
+        mnq1 = load_recorded_bars(args.start, args.end, "1m", warmup_days=args.warmup_days)
+        mnq5 = load_recorded_bars(args.start, args.end, "5m", warmup_days=args.warmup_days)
+    else:
+        mnq1 = slc(_load_bars_from_csv(str(DATA / "mnq_1min_databento.csv")))
+        mnq5 = slc(_load_bars_from_csv(str(DATA / "mnq_5min_databento.csv")))
     mes1 = slc(_load_bars_from_csv(str(DATA / "mes_1min_databento.csv")))
     mes5 = slc(_load_bars_from_csv(str(DATA / "mes_5min_databento.csv")))
     print(f"MNQ1m={len(mnq1)} MNQ5m={len(mnq5)} MES1m={len(mes1)} MES5m={len(mes5)}")

@@ -838,8 +838,28 @@ class CSVEnrichmentPipeline:
         self._recorded_cvd = recorded_cvd_provider
         self._es_nq_rs_at = es_nq_rs_at
         self._enrich_day_cr = enrich_day_cr
+        # Regime: the backtester's _classify_regime uses a different taxonomy
+        # (e.g. "LUNCH") than live, which derives regime from SESSION_WINDOWS via
+        # core.session_manager. Use the live classifier so regime (and thus
+        # bias_momentum's regime_veto) matches what the bot actually saw.
+        try:
+            from core.session_manager import SessionManager
+            self._session_mgr = SessionManager(bot_name="prod")
+        except Exception:
+            self._session_mgr = None
 
     def _apply_real_enrichment(self, market: dict, current_ts) -> None:
+        # regime: use the live SessionManager time->regime mapping so it matches
+        # what the bot recorded (the backtester's default _classify_regime uses a
+        # different taxonomy). regime_veto in several strategies gates on this.
+        sm = getattr(self, "_session_mgr", None)
+        if sm is not None:
+            try:
+                _nct = market.get("now_ct")
+                if _nct is not None:
+                    market["regime"] = sm.get_current_regime(_nct)
+            except Exception:
+                pass
         """Overwrite the stubbed strategy-branching fields with reconstructed
         real values. Each field degrades to the existing stub if its source is
         unavailable (e.g. before volumetric coverage), so this never crashes a
