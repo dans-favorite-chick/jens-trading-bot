@@ -767,6 +767,7 @@ def run(
     lookaround_min: int = 5,
     limit: Optional[int] = None,
     real_enrichment: bool = False,
+    bar_source: str = "databento",
 ) -> int:
     """Top-level harness: load trades, replay each, compare, write
     report. Returns exit code (0 if all REPLAYED within tolerance AND
@@ -801,8 +802,18 @@ def run(
     from tools.phoenix_real_backtest import _load_bars_from_csv
     data_dir = ROOT / "data" / "historical"
     logger.info("loading CSVs once into memory (cache for all replays)...")
-    cache_mnq_1m = _load_bars_from_csv(str(data_dir / "mnq_1min_databento.csv"))
-    cache_mnq_5m = _load_bars_from_csv(str(data_dir / "mnq_5min_databento.csv"))
+    if bar_source == "recorded":
+        # Replay the bot's OWN recorded bars (logs/history) so the backtester's
+        # tf_bias/vwap/price match live exactly (databento bars diverge sub-tick
+        # and flip the hypersensitive tf_bias 2-of-3 vote ~50% of the time).
+        from tools.replay_enrichment.recorded_bars import load_recorded_bars
+        _s, _e = since.strftime("%Y-%m-%d"), until.strftime("%Y-%m-%d")
+        cache_mnq_1m = load_recorded_bars(_s, _e, "1m", warmup_days=3)
+        cache_mnq_5m = load_recorded_bars(_s, _e, "5m", warmup_days=3)
+        logger.info(f"recorded MNQ bars: 1m={len(cache_mnq_1m):,} 5m={len(cache_mnq_5m):,} (MES from databento)")
+    else:
+        cache_mnq_1m = _load_bars_from_csv(str(data_dir / "mnq_1min_databento.csv"))
+        cache_mnq_5m = _load_bars_from_csv(str(data_dir / "mnq_5min_databento.csv"))
     cache_mes_1m = _load_bars_from_csv(str(data_dir / "mes_1min_databento.csv"))
     cache_mes_5m = _load_bars_from_csv(str(data_dir / "mes_5min_databento.csv"))
     logger.info(
@@ -955,6 +966,12 @@ def main():
              "delta), es_nq_rs (MES bars), day_type/cr_verdict (live core "
              "modules). Only meaningful in the volumetric-covered window (2026-05-04+).",
     )
+    ap.add_argument(
+        "--bar-source", choices=["databento", "recorded"], default="databento",
+        help="recorded = replay the bot's OWN logs/history bars (MNQ) so tf_bias/"
+             "vwap/price match live exactly. Use with --real-enrichment for a "
+             "real-vs-real reconcile. Requires recorded bars covering the window.",
+    )
     args = ap.parse_args()
 
     since = _parse_date(args.since)
@@ -990,6 +1007,7 @@ def main():
         lookaround_min=args.lookaround_min,
         limit=args.limit,
         real_enrichment=args.real_enrichment,
+        bar_source=args.bar_source,
     )
     sys.exit(rc)
 
