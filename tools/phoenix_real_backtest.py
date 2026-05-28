@@ -802,6 +802,60 @@ class CSVEnrichmentPipeline:
             market["mes_bars_1m"] = list(self.mes.bars_1m)
         return market
 
+    # ── Real-enrichment de-stub (opt-in) ──────────────────────────
+    def enable_real_enrichment(self, recorded_cvd_provider=None) -> None:
+        """Turn on de-stubbed enrichment for the recent (volumetric-covered)
+        window: real cvd_health from recorded order-flow, real es_nq_rs from
+        MNQ(=NQ)/MES(=ES) 5m bars, and real day_type/cr_verdict via the live
+        core modules — replacing the BALANCED / CVD-approx / es_nq_rs-absent
+        stubs in _build_market_dict so reconciliation compares real-vs-real.
+
+        Safe on instances built via __new__ (the reconcile factory). The CVD
+        provider is heavy to build (parses volumetric_history.jsonl) so the
+        CALLER builds it once and shares it across per-trade pipelines.
+        """
+        from tools.replay_enrichment.recorded_es_nq_rs import es_nq_rs_at
+        from tools.replay_enrichment.recorded_day_cr import enrich_day_cr
+        self.real_enrichment = True
+        self._recorded_cvd = recorded_cvd_provider
+        self._es_nq_rs_at = es_nq_rs_at
+        self._enrich_day_cr = enrich_day_cr
+
+    def _apply_real_enrichment(self, market: dict, current_ts) -> None:
+        """Overwrite the stubbed strategy-branching fields with reconstructed
+        real values. Each field degrades to the existing stub if its source is
+        unavailable (e.g. before volumetric coverage), so this never crashes a
+        backtest and never silently fabricates a value out of coverage."""
+        prov = getattr(self, "_recorded_cvd", None)
+        if prov is not None:
+            try:
+                # The volumetric file is timestamped in naive machine-local
+                # (CT) time; match that reference when looking up the minute.
+                ct_naive = current_ts.tz_convert(_CT).tz_localize(None).to_pydatetime()
+                h_long = prov.health_at(ct_naive, "LONG")
+                h_short = prov.health_at(ct_naive, "SHORT")
+                if h_long is not None:
+                    market["cvd_health"] = h_long
+                    market["cvd_method"] = "recorded_delta"
+                if h_short is not None:
+                    market["cvd_health_short"] = h_short
+            except Exception:
+                pass
+        es_fn = getattr(self, "_es_nq_rs_at", None)
+        if es_fn is not None and self.mes_5m_df is not None:
+            try:
+                rs = es_fn(current_ts, self.mnq_5m_df, self.mes_5m_df)
+                if rs is not None:
+                    market["es_nq_rs"] = rs
+            except Exception:
+                pass
+        day_fn = getattr(self, "_enrich_day_cr", None)
+        if day_fn is not None:
+            try:
+                market.update(day_fn(market))  # day_type, cr_verdict, cr_*
+            except Exception:
+                pass
+
     # ── Public iterator ───────────────────────────────────────────
 
     def iter_eval_cycles(self) -> Iterator[tuple]:
@@ -892,6 +946,8 @@ class CSVEnrichmentPipeline:
 
             # Build snapshot + emit
             market = self._build_market_dict(mnq_1m_bar, current_dt_ct, current_dt_ct)
+            if getattr(self, "real_enrichment", False):
+                self._apply_real_enrichment(market, current_ts)
             session_info = {
                 "regime": market["regime"],
                 "now_ct": current_dt_ct,

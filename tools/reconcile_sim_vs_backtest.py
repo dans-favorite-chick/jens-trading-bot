@@ -766,6 +766,7 @@ def run(
     logs_dir: str = "logs",
     lookaround_min: int = 5,
     limit: Optional[int] = None,
+    real_enrichment: bool = False,
 ) -> int:
     """Top-level harness: load trades, replay each, compare, write
     report. Returns exit code (0 if all REPLAYED within tolerance AND
@@ -809,6 +810,17 @@ def run(
         f"MES1m={len(cache_mes_1m):,} MES5m={len(cache_mes_5m):,}"
     )
 
+    # Real-enrichment de-stub: build the (heavy) recorded-CVD provider ONCE
+    # and share it across every per-trade pipeline, so the backtester replays
+    # against real cvd_health / es_nq_rs / day_type / cr_verdict instead of the
+    # stub values — i.e. reconcile compares real-vs-real, not real-vs-stub.
+    cvd_provider = None
+    if real_enrichment:
+        from tools.replay_enrichment.recorded_cvd import RecordedCVDProvider
+        vol_path = ROOT / "logs" / "volumetric_history.jsonl"
+        logger.info(f"real-enrichment ON — building RecordedCVDProvider from {vol_path}")
+        cvd_provider = RecordedCVDProvider(volumetric_path=str(vol_path))
+
     def _factory(start, end):
         """Build a CSVEnrichmentPipeline by slicing cached DataFrames.
 
@@ -837,6 +849,8 @@ def run(
         pipe.mes_5m_df = cache_mes_5m[(cache_mes_5m.ts >= start_ts) & (cache_mes_5m.ts <= end_ts)].reset_index(drop=True)
         pipe.mnq = EnrichmentState()
         pipe.mes = EnrichmentState()
+        if real_enrichment:
+            pipe.enable_real_enrichment(cvd_provider)
         return pipe
 
     rows: list[ComparisonRow] = []
@@ -935,6 +949,12 @@ def main():
         "--limit", type=int, default=None,
         help="Only replay first N trades (smoke runs).",
     )
+    ap.add_argument(
+        "--real-enrichment", action="store_true",
+        help="De-stub the backtester: replay against real cvd_health (recorded "
+             "delta), es_nq_rs (MES bars), day_type/cr_verdict (live core "
+             "modules). Only meaningful in the volumetric-covered window (2026-05-04+).",
+    )
     args = ap.parse_args()
 
     since = _parse_date(args.since)
@@ -969,6 +989,7 @@ def main():
         logs_dir=args.logs_dir,
         lookaround_min=args.lookaround_min,
         limit=args.limit,
+        real_enrichment=args.real_enrichment,
     )
     sys.exit(rc)
 
