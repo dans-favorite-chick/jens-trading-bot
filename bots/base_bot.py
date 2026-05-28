@@ -136,7 +136,12 @@ from core.session_tagger import session_for as session_tag_for
 from core.structural_bias import compute_structural_bias
 from bridge.footprint_builder import FootprintAccumulator
 from core.footprint_patterns import scan_bar as scan_footprint_bar
-from core.contract_rollover import get_active_contract, log_rollover_status
+from core.contract_rollover import (
+    get_active_contract,
+    log_rollover_status,
+    is_t_minus_15_pre_roll,
+    flatten_for_roll,
+)
 from core.simple_sizing import get_sizer as get_simple_sizer
 from core.knowledge_rag import KnowledgeRAG
 from core.pandas_ta_detector import PandasTADetector
