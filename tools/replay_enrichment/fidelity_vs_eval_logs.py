@@ -1,24 +1,23 @@
 """Fidelity check — de-stubbed backtester vs LIVE prod eval-log ground truth.
 
 Produces a defensible per-strategy divergence number WITHOUT waiting for new
-live trades to accumulate. For one calendar day it:
+live trades. Over a date range it:
 
   - replays the de-stubbed CSVEnrichmentPipeline (real cvd_health from recorded
     delta, es_nq_rs from MES bars, day_type/cr_verdict from the live core
-    modules) and runs the REAL bias_momentum.evaluate() each 1m cycle;
+    modules) and runs the REAL <strategy>.evaluate() each 1m cycle;
   - aligns each cycle (by CT minute) to the live prod eval record the bot
-    actually wrote that day (logs/history/<date>_prod.jsonl);
-  - compares the reconstructed cr_verdict to the live-recorded cr_verdict, and
-    the backtester's bias_momentum DECISION (signal / no-signal / direction) to
-    what live bias_momentum recorded.
+    actually wrote (logs/history/<date>_prod.jsonl);
+  - compares the backtester's DECISION (signal / no-signal / direction) to what
+    the live strategy recorded, plus cr_verdict where applicable.
 
-This measures STRATEGY-LOGIC + ENRICHMENT fidelity — whether the backtester
-SEES and DECIDES like the live bot on the same wall-clock minute. It does NOT
-measure execution fidelity (fills, latency, slippage); that still requires real
-live trades. Read-only; writes nothing except its stdout report.
+Measures STRATEGY-LOGIC + ENRICHMENT fidelity (does the backtest SEE and DECIDE
+like live on the same wall-clock minute) — NOT execution fidelity (fills,
+latency, slippage), which still needs real live trades. Read-only.
 
 Usage:
-    python tools/replay_enrichment/fidelity_vs_eval_logs.py --date 2026-05-13
+    python tools/replay_enrichment/fidelity_vs_eval_logs.py \
+        --strategy noise_area --start 2026-05-06 --end 2026-05-15
 """
 from __future__ import annotations
 
@@ -26,7 +25,7 @@ import argparse
 import json
 import sys
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date as date_cls
 from pathlib import Path
 
 import pandas as pd
@@ -44,61 +43,72 @@ DATA = ROOT / "data" / "historical"
 
 
 def _minute_key_ct(ts_utc) -> datetime:
-    """UTC pandas Timestamp -> naive-CT datetime floored to the minute."""
     return (ts_utc.tz_convert(_CT).tz_localize(None)
             .to_pydatetime().replace(second=0, microsecond=0))
 
 
-def load_live_evals(date_str: str) -> dict[datetime, dict]:
-    """Return {ct_minute: live_eval_record} from the prod history log."""
-    path = ROOT / "logs" / "history" / f"{date_str}_prod.jsonl"
+def _daterange(start: str, end: str):
+    d0 = datetime.strptime(start, "%Y-%m-%d").date()
+    d1 = datetime.strptime(end, "%Y-%m-%d").date()
+    d = d0
+    while d <= d1:
+        yield d.isoformat()
+        d += timedelta(days=1)
+
+
+def load_live_evals(start: str, end: str, strategy: str) -> dict[datetime, dict]:
+    """Merge {ct_minute: live_eval_record} across prod history logs in range."""
     out: dict[datetime, dict] = {}
-    if not path.exists():
-        return out
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except Exception:
-                continue
-            if rec.get("event") != "eval":
-                continue
-            try:
-                dt = datetime.fromisoformat(rec["ts"]).replace(second=0, microsecond=0)
-            except Exception:
-                continue
-            bm = None
-            for s in rec.get("strategies", []) or []:
-                if s.get("name") == "bias_momentum":
-                    bm = s
-                    break
-            out[dt] = {
-                "cr_verdict": rec.get("cr_verdict"),
-                "bm_result": (bm or {}).get("result"),
-                "bm_direction": (bm or {}).get("direction"),
-            }
+    for date_str in _daterange(start, end):
+        path = ROOT / "logs" / "history" / f"{date_str}_prod.jsonl"
+        if not path.exists():
+            continue
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                if rec.get("event") != "eval":
+                    continue
+                try:
+                    dt = datetime.fromisoformat(rec["ts"]).replace(second=0, microsecond=0)
+                except Exception:
+                    continue
+                sig = None
+                for s in rec.get("strategies", []) or []:
+                    if s.get("name") == strategy:
+                        sig = s
+                        break
+                out[dt] = {
+                    "cr_verdict": rec.get("cr_verdict"),
+                    "result": (sig or {}).get("result"),
+                    "direction": (sig or {}).get("direction"),
+                }
     return out
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--date", required=True, help="YYYY-MM-DD (CT day to check)")
+    ap.add_argument("--strategy", default="bias_momentum")
+    ap.add_argument("--start", required=True, help="YYYY-MM-DD (CT, inclusive)")
+    ap.add_argument("--end", required=True, help="YYYY-MM-DD (CT, inclusive)")
     args = ap.parse_args()
-    date_str = args.date
+    strategy = args.strategy
 
-    live = load_live_evals(date_str)
-    print(f"live prod eval records for {date_str}: {len(live)}")
+    live = load_live_evals(args.start, args.end, strategy)
+    live_sig_min = sum(1 for v in live.values() if v["result"] == "SIGNAL")
+    print(f"live prod eval records {args.start}..{args.end}: {len(live)} "
+          f"(minutes where {strategy} SIGNAL: {live_sig_min})")
     if not live:
-        print("No prod eval log for that date — pick a date with logs/history/"
-              "<date>_prod.jsonl AND databento CSV coverage (<= ~2026-05-15).")
+        print("No prod eval logs in range.")
         return
 
-    # Pipeline window: load the CT day +/- buffer, in UTC.
-    start = pd.Timestamp(f"{date_str}T00:00:00Z") - pd.Timedelta(hours=8)
-    end = pd.Timestamp(f"{date_str}T00:00:00Z") + pd.Timedelta(hours=32)
+    start = pd.Timestamp(f"{args.start}T00:00:00Z") - pd.Timedelta(hours=8)
+    end = pd.Timestamp(f"{args.end}T00:00:00Z") + pd.Timedelta(days=1, hours=8)
 
     def slc(df):
         return df[(df.ts >= start) & (df.ts <= end)].reset_index(drop=True)
@@ -110,7 +120,7 @@ def main():
     mes5 = slc(_load_bars_from_csv(str(DATA / "mes_5min_databento.csv")))
     print(f"MNQ1m={len(mnq1)} MNQ5m={len(mnq5)} MES1m={len(mes1)} MES5m={len(mes5)}")
     if len(mnq1) == 0:
-        print("No MNQ CSV bars in window — date is outside databento coverage.")
+        print("No MNQ CSV bars in range — outside databento coverage.")
         return
 
     pipe = CSVEnrichmentPipeline.__new__(CSVEnrichmentPipeline)
@@ -120,17 +130,14 @@ def main():
     prov = RecordedCVDProvider(volumetric_path=str(ROOT / "logs" / "volumetric_history.jsonl"))
     pipe.enable_real_enrichment(prov)
 
-    strat = instantiate_strategies(["bias_momentum"])["bias_momentum"]
+    strat = instantiate_strategies([strategy])[strategy]
 
     matched = 0
-    cr_compared = 0
-    cr_agree = 0
-    cr_live_dist: Counter = Counter()
-    cr_bt_dist: Counter = Counter()
-    decision = Counter()  # both/live_only/bt_only/neither
+    decision = Counter()
     dir_match = 0
     dir_total = 0
     bt_eval_errors = 0
+    bt_only_examples = []
 
     for eval_ts, market, b1, b5, sess in pipe.iter_eval_cycles():
         key = _minute_key_ct(eval_ts)
@@ -138,57 +145,47 @@ def main():
         if lv is None:
             continue
         matched += 1
-
-        # cr_verdict fidelity
-        live_cr = lv["cr_verdict"]
-        bt_cr = market.get("cr_verdict")
-        if live_cr is not None:
-            cr_compared += 1
-            cr_live_dist[live_cr] += 1
-            cr_bt_dist[bt_cr] += 1
-            if live_cr == bt_cr:
-                cr_agree += 1
-
-        # bias_momentum DECISION fidelity
         try:
             sig = strat.evaluate(market, list(b5), list(b1), sess)
         except Exception:
             bt_eval_errors += 1
             sig = None
-        live_sig = (lv["bm_result"] == "SIGNAL")
+        live_sig = (lv["result"] == "SIGNAL")
         bt_sig = sig is not None
         if live_sig and bt_sig:
             decision["both_signal"] += 1
             dir_total += 1
-            if (lv.get("bm_direction") or "").upper() == (getattr(sig, "direction", "") or "").upper():
+            if (lv.get("direction") or "").upper() == (getattr(sig, "direction", "") or "").upper():
                 dir_match += 1
         elif live_sig and not bt_sig:
             decision["live_only"] += 1
         elif bt_sig and not live_sig:
             decision["bt_only"] += 1
+            if len(bt_only_examples) < 8:
+                bt_only_examples.append(str(key))
         else:
             decision["neither_signal"] += 1
 
     print("\n================ FIDELITY REPORT ================")
-    print(f"date: {date_str}  |  matched CT-minutes (live eval AND backtest cycle): {matched}")
-    print("\n-- cr_verdict (reconstructed vs live-recorded) --")
-    if cr_compared:
-        print(f"  agreement: {cr_agree}/{cr_compared} = {100*cr_agree/cr_compared:.1f}%")
-        print(f"  live dist: {dict(cr_live_dist)}")
-        print(f"  backtest dist: {dict(cr_bt_dist)}")
-    else:
-        print("  no comparable cr_verdict (live recorded none)")
-    print("\n-- bias_momentum decision (backtest vs live) --")
+    print(f"strategy: {strategy}  |  range: {args.start}..{args.end}")
+    print(f"matched CT-minutes (live eval AND backtest cycle): {matched}")
+    print("\n-- decision (backtest vs live) --")
     tot = sum(decision.values())
     for k in ("both_signal", "neither_signal", "live_only", "bt_only"):
         print(f"  {k}: {decision[k]}/{tot}")
     if dir_total:
-        print(f"  direction match | both signalled: {dir_match}/{dir_total} = "
-              f"{100*dir_match/dir_total:.1f}%")
-    agree_decisions = decision["both_signal"] + decision["neither_signal"]
+        print(f"  direction match | both signalled: {dir_match}/{dir_total}")
     if tot:
-        print(f"  decision agreement (signal-or-not): {agree_decisions}/{tot} = "
-              f"{100*agree_decisions/tot:.1f}%")
+        agree = decision["both_signal"] + decision["neither_signal"]
+        print(f"  decision agreement (signal-or-not): {agree}/{tot} = {100*agree/tot:.2f}%")
+        live_total_sig = decision["both_signal"] + decision["live_only"]
+        bt_total_sig = decision["both_signal"] + decision["bt_only"]
+        print(f"  live signals in matched set: {live_total_sig} | backtest signals: {bt_total_sig}")
+        print(f"  signal recall (bt reproduced live): {decision['both_signal']}/{live_total_sig}"
+              if live_total_sig else "  signal recall: n/a (live had 0 signals in matched set)")
+        print(f"  over-fire (bt signalled, live did not): {decision['bt_only']}")
+    if bt_only_examples:
+        print(f"  bt_only example minutes: {bt_only_examples}")
     if bt_eval_errors:
         print(f"  (backtest evaluate() errors: {bt_eval_errors})")
     print("=================================================")
