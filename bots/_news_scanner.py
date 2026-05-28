@@ -67,6 +67,15 @@ class NewsScanner:
                 from core.market_intel import get_full_intel
                 intel = await get_full_intel()
                 if intel:
+                    # 2026-05-28: stash the full intel so consumers that read
+                    # self._latest_intel (cockpit grading; sim es_nq_rs
+                    # enrichment) see live data. Previously only run_council
+                    # set this, and the council is disabled (P0-4), so it was
+                    # always None and `nq_es_relative_strength` (fetched here
+                    # every 2 min) was discarded. Observation-only in prod —
+                    # cockpit never blocks; prod dispatch does not read
+                    # es_nq_rs onto market, so live gating is unchanged.
+                    self.bot._latest_intel = intel
                     im_data = {}
                     vix_raw = intel.get("vix")
                     if isinstance(vix_raw, dict):

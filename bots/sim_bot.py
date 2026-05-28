@@ -590,6 +590,76 @@ class SimBot(BaseBot):
         except Exception:
             pass
 
+        # ── 2026-05-28: SIM/PROD ENRICHMENT PARITY (freeze-permitted) ──────
+        # The reconciliation harness reads SIM trades and BLOCKS any whose
+        # market_snapshot is missing the four strategy-branching fields:
+        # day_type, cr_verdict, cvd_health, es_nq_rs. This override historically
+        # skipped the enrichment that base's _strategy_dispatch performs, so sim
+        # strategies evaluated WITHOUT these fields (diverging from prod + the
+        # backtester) and every sim trade was recorded without them. Mirror
+        # base's enrichment so sim runs the same branch logic the backtester
+        # replays against. Detectors below are updated on every bar in _on_bar,
+        # identical to the prod path — so this only surfaces values that already
+        # exist, it does not compute anything new.
+        try:
+            market["cvd_health"] = self.cvd_health.assess("LONG")
+            market["cvd_health_short"] = self.cvd_health.assess("SHORT")
+        except Exception as _cvd_err:
+            logger.debug(f"[SIM CVD] health assess failed: {_cvd_err!r}")
+            market["cvd_health"] = {"veto": False, "agreement": 0.0, "reason": "assess error"}
+            market["cvd_health_short"] = {"veto": False, "agreement": 0.0, "reason": "assess error"}
+
+        try:
+            market["intermarket"] = self.intermarket.get_risk_signal()
+        except Exception:
+            pass
+
+        # es_nq_rs (NQ-vs-ES relative strength): top-level key because the
+        # reconcile harness and confluence_gates read market["es_nq_rs"]
+        # directly. Sourced from the news-scanner intel poll
+        # (core/market_intel.get_full_intel → nq_es_relative_strength),
+        # stashed on self._latest_intel every ~2 min. Absent until the first
+        # poll completes — those early trades stay BLOCKED, which is honest.
+        try:
+            _intel = self._latest_intel or {}
+            _rs = (_intel.get("nq_es_relative_strength") or {}).get("relative_strength")
+            if _rs is not None:
+                market["es_nq_rs"] = _rs
+        except Exception:
+            pass
+
+        # Continuation/Reversal assessment (mirror base _strategy_dispatch).
+        try:
+            from core.continuation_reversal import assess as cr_assess
+            from core.momentum_score import get_trajectory
+            _cr = cr_assess(market, None, get_trajectory(10))
+            market["cr_verdict"]    = _cr.verdict
+            market["cr_confidence"] = _cr.confidence
+            market["cr_direction"]  = _cr.direction_bias
+            market["cr_mom_score"]  = _cr.momentum_score
+            market["cr_at_resistance"] = _cr.at_call_resistance or _cr.at_day_max
+            market["cr_at_support"]    = _cr.at_put_support or _cr.at_day_min
+            self._last_cr = _cr
+        except Exception as _cr_err:
+            logger.warning(f"[SIM CR] assess failed (non-blocking): {_cr_err!r}")
+            market["cr_verdict"] = "UNKNOWN"
+            self._last_cr = None
+
+        # Day-Type classification (snapshot field only — unlike base we do NOT
+        # mutate risk trade-spacing here, to keep sim's risk path unchanged).
+        try:
+            _day = self._day_classifier.classify(
+                market.get("cr_verdict", "UNKNOWN"),
+                market.get("cr_mom_score", 0) or 0,
+                market.get("atr_5m", 0) or 0,
+                market.get("vix", 0) or 0,
+            )
+            market["day_type"] = _day.day_type
+            market["day_type_reason"] = _day.reason
+        except Exception as _day_err:
+            logger.debug(f"[SIM DAY TYPE] classification error: {_day_err}")
+            market["day_type"] = "UNKNOWN"
+
         # Bot-wide kill switch still honored (emergency halt).
         if self.risk.state.killed:
             self._last_eval["risk_blocked"] = f"Kill switch: {self.risk.state.kill_reason}"
@@ -712,6 +782,11 @@ class SimBot(BaseBot):
                 "reason": best_signal.reason,
                 "confluences": best_signal.confluences,
             }
+            # 2026-05-28: stash the fully-enriched market dict so _enter_trade
+            # merges day_type/cr_verdict/cvd_health/es_nq_rs into the persisted
+            # market_snapshot (mirrors _strategy_dispatch.py:911 on the base
+            # path). Without this the reconcile harness BLOCKS every sim trade.
+            self._last_enriched_market = dict(market)
 
             # Queue every eligible signal for live execution. Sim mode is for
             # per-strategy validation, so letting only the single "best" signal
