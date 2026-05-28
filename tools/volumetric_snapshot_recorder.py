@@ -108,25 +108,56 @@ def _read_latest_snapshot(logger: logging.Logger) -> Optional[dict]:
 
 
 def _last_recorded_ts(today_file: Path) -> Optional[str]:
-    """Return the inner 'ts' of the last recorded snapshot today, or None."""
+    """Return the inner 'ts' of the last recorded snapshot today, or None.
+
+    2026-05-27 fix: the old 2048-byte tail-read was smaller than a single
+    JSONL line (each volumetric_bar is ~5000 bytes due to the imbalances
+    array), so json.loads() of the truncated tail always raised and the
+    bare except returned None. Result: dedup never fired and 144 duplicate
+    stale-snapshot writes per day. Now we walk backwards from EOF in 4 KB
+    chunks to find the previous newline, then take everything after it as
+    the complete last line — robust to any line length.
+    """
     if not today_file.exists():
         return None
     try:
-        # Read last line (tail-style; daily files won't be huge)
         with open(today_file, "rb") as f:
             f.seek(0, 2)  # end
-            file_size = f.tell()
-            if file_size == 0:
+            size = f.tell()
+            if size == 0:
                 return None
-            # Read last ~2KB and split lines
-            f.seek(max(0, file_size - 2048))
-            tail = f.read().decode("utf-8", errors="ignore")
-        lines = [ln for ln in tail.strip().split("\n") if ln.strip()]
-        if not lines:
+            # Skip a single trailing newline if present.
+            pos = size - 1
+            f.seek(pos)
+            if f.read(1) == b"\n":
+                pos -= 1
+            # Walk backwards in chunks until we find the newline that
+            # begins the last line (or run off the front of the file).
+            chunk_size = 4096
+            buf = b""
+            last_line = b""
+            while pos >= 0:
+                start = max(0, pos - chunk_size + 1)
+                f.seek(start)
+                buf = f.read(pos - start + 1) + buf
+                nl = buf.rfind(b"\n")
+                if nl >= 0:
+                    last_line = buf[nl + 1:]
+                    break
+                pos = start - 1
+            else:
+                # Loop exhausted without a newline: whole file is one line.
+                last_line = buf
+        if not last_line.strip():
             return None
-        last = json.loads(lines[-1])
+        last = json.loads(last_line.decode("utf-8", errors="strict"))
         return last.get("ts")
-    except Exception:
+    except Exception as e:
+        # Log instead of silently swallowing — a future regression here
+        # must be visible, not invisible like the 2048-byte bug was.
+        logging.getLogger("vol_recorder").warning(
+            f"_last_recorded_ts: parse failed ({e!r}); dedup disabled this cycle"
+        )
         return None
 
 
@@ -143,6 +174,29 @@ def _append_snapshot(today_file: Path, snapshot: dict, logger: logging.Logger) -
         return False
 
 
+# 2026-05-27: staleness guard. The 8-day silent freeze (frozen TickStreamer
+# feed, 2026-05-19 -> 2026-05-27) went undetected because the recorder logged
+# "captured"/"dedup skip" happily while the underlying bar never changed.
+# Now we compare the snapshot's OWN ts against wall-clock and warn LOUDLY if
+# the feed looks frozen, so the next freeze is caught in minutes, not days.
+STALENESS_WARN_HOURS = 2.0
+
+
+def _snapshot_age_hours(inner_ts: str) -> Optional[float]:
+    """Age (hours) of the snapshot's own ts vs wall clock. TickStreamer ts is
+    local naive time, e.g. '2026-05-27T22:56:14.8720000' (7-digit fractional
+    seconds). Returns None if unparseable."""
+    try:
+        s = str(inner_ts).replace("Z", "")
+        if "." in s:
+            head, frac = s.split(".", 1)
+            s = f"{head}.{frac[:6]}"  # Python parses <=6 fractional digits
+        bar_dt = datetime.fromisoformat(s)
+        return (datetime.now() - bar_dt).total_seconds() / 3600.0
+    except Exception:
+        return None
+
+
 def capture_once(logger: logging.Logger) -> str:
     """Single-shot capture. Returns one of: 'captured', 'duplicate',
     'no_source', 'error'."""
@@ -154,6 +208,15 @@ def capture_once(logger: logging.Logger) -> str:
     if not inner_ts:
         logger.warning(f"snapshot missing 'ts' field: {list(snapshot.keys())[:5]}")
         return "error"
+
+    # Staleness guard — flag a frozen feed without changing capture behavior.
+    age_h = _snapshot_age_hours(inner_ts)
+    if age_h is not None and age_h >= STALENESS_WARN_HOURS:
+        logger.warning(
+            f"STALE FEED: volumetric snapshot ts={inner_ts} is {age_h:.1f}h old "
+            f"(threshold {STALENESS_WARN_HOURS}h) — TickStreamer feed may be frozen. "
+            f"Check the NT8 chart's data connection."
+        )
 
     today_str = datetime.now().strftime("%Y-%m-%d")
     today_file = OUTPUT_DIR / f"{today_str}.jsonl"
