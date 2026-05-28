@@ -448,6 +448,24 @@ def _tf_bias(ema9: float, ema21: float) -> str:
     return "NEUTRAL"
 
 
+def _vote_tf_bias(bars: list) -> str:
+    """Live-parity TF bias: 2-of-3 vote on the last 3 completed bars' closes,
+    matching core/tick_aggregator.py:574-599. The default _tf_bias() above uses
+    an ema9-ema21 spread, a DIFFERENT algorithm that diverges from live on
+    essentially every bar — so the de-stub path recomputes tf_bias this way to
+    reconcile bias_momentum's tf_bias gate (1m/5m) with what the live bot saw."""
+    if not bars or len(bars) < 3:
+        return "NEUTRAL"
+    closes = [b.close for b in bars[-3:]]
+    rises = sum(1 for i in range(len(closes) - 1) if closes[i + 1] > closes[i])
+    falls = sum(1 for i in range(len(closes) - 1) if closes[i + 1] < closes[i])
+    if rises >= 2:
+        return "BULLISH"
+    if falls >= 2:
+        return "BEARISH"
+    return "NEUTRAL"
+
+
 class CSVEnrichmentPipeline:
     """Loads MNQ + MES CSVs and yields per-minute enriched market snapshots
     in the format Phoenix strategies expect.
@@ -855,6 +873,21 @@ class CSVEnrichmentPipeline:
                 market.update(day_fn(market))  # day_type, cr_verdict, cr_*
             except Exception:
                 pass
+        # tf_bias: recompute live-style (2-of-3 bar vote) instead of the default
+        # ema-spread proxy, which diverges from live on ~every bar. 1m/5m/15m use
+        # real per-TF bars; 60m proxies from 15m (context-only, not a gate).
+        try:
+            b1 = market.get("_bars_1m") or []
+            b5 = market.get("_bars_5m") or []
+            b15 = market.get("_bars_15m") or []
+            tf = {"1m": _vote_tf_bias(b1), "5m": _vote_tf_bias(b5),
+                  "15m": _vote_tf_bias(b15), "60m": _vote_tf_bias(b15)}
+            market["tf_bias"] = tf
+            market["tf_bias_tick"] = tf["1m"]
+            market["tf_votes_bullish"] = sum(1 for v in tf.values() if v == "BULLISH")
+            market["tf_votes_bearish"] = sum(1 for v in tf.values() if v == "BEARISH")
+        except Exception:
+            pass
 
     # ── Public iterator ───────────────────────────────────────────
 

@@ -96,6 +96,10 @@ def main():
     ap.add_argument("--strategy", default="bias_momentum")
     ap.add_argument("--start", required=True, help="YYYY-MM-DD (CT, inclusive)")
     ap.add_argument("--end", required=True, help="YYYY-MM-DD (CT, inclusive)")
+    ap.add_argument("--warmup-days", type=int, default=20,
+                    help="Calendar days of bars BEFORE --start to replay so the "
+                         "strategy's rolling internal tables (e.g. noise_area's "
+                         "sigma_open) warm up. Only [start,end] minutes are compared.")
     args = ap.parse_args()
     strategy = args.strategy
 
@@ -107,8 +111,12 @@ def main():
         print("No prod eval logs in range.")
         return
 
-    start = pd.Timestamp(f"{args.start}T00:00:00Z") - pd.Timedelta(hours=8)
+    # Replay extra days BEFORE --start so rolling strategy tables warm up; the
+    # comparison still only matches minutes that exist in the live-eval dict
+    # ([start,end]), so warmup bars never enter the scored set.
+    start = pd.Timestamp(f"{args.start}T00:00:00Z") - pd.Timedelta(days=args.warmup_days)
     end = pd.Timestamp(f"{args.end}T00:00:00Z") + pd.Timedelta(days=1, hours=8)
+    print(f"pipeline window (incl. {args.warmup_days}d warmup): {start.date()} -> {end.date()}")
 
     def slc(df):
         return df[(df.ts >= start) & (df.ts <= end)].reset_index(drop=True)
@@ -131,6 +139,21 @@ def main():
     pipe.enable_real_enrichment(prov)
 
     strat = instantiate_strategies([strategy])[strategy]
+    # Replicate the live bot's startup warmup (base_bot.py:1759-1764): seed
+    # noise_area's sigma_open_table from data/sigma_open_table.json. No-op for
+    # strategies without seed_history. This is the live-parity seed; continuous
+    # accrual then happens via evaluate() every cycle below.
+    if hasattr(strat, "seed_history"):
+        try:
+            from tools.load_sigma_open_warmup import load_sigma_open_warmup
+            _warm = load_sigma_open_warmup()
+            if _warm:
+                strat.seed_history(_warm)
+                print(f"seeded {len(_warm)} minute-buckets via load_sigma_open_warmup (live-parity)")
+            else:
+                print("seed_history: loader returned None (will self-accrue during warmup)")
+        except Exception as _se:
+            print(f"seed_history skipped: {_se!r}")
 
     matched = 0
     decision = Counter()
@@ -140,16 +163,22 @@ def main():
     bt_only_examples = []
 
     for eval_ts, market, b1, b5, sess in pipe.iter_eval_cycles():
+        # Evaluate EVERY cycle so the strategy's rolling internal state (e.g.
+        # noise_area.sigma_open_table) warms up continuously, exactly like a
+        # live run. Only minutes with a live eval record are scored below.
+        try:
+            sig = strat.evaluate(market, list(b5), list(b1), sess)
+            _errored = False
+        except Exception:
+            sig = None
+            _errored = True
         key = _minute_key_ct(eval_ts)
         lv = live.get(key)
         if lv is None:
             continue
         matched += 1
-        try:
-            sig = strat.evaluate(market, list(b5), list(b1), sess)
-        except Exception:
+        if _errored:
             bt_eval_errors += 1
-            sig = None
         live_sig = (lv["result"] == "SIGNAL")
         bt_sig = sig is not None
         if live_sig and bt_sig:
