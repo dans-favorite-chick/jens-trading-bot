@@ -927,6 +927,34 @@ class TradeResult:
     hold_min: float = 0.0
 
 
+# ── Execution-friction model (2026-05-27, operator-approved, flag-gated) ──
+# When APPLY_EXECUTION_DECAY is True, simulate_trade() deducts conservative
+# round-turn friction from each trade's net P&L:
+#   - commission + exchange fees : 2*(COMMISSION_PER_SIDE+EXCHANGE_FEES_PER_SIDE)
+#   - adverse slippage           : 2 sides * SLIPPAGE_TICKS_PER_SIDE ticks
+# Operator decision 2026-05-27: use the CONSERVATIVE config penalty, NOT the
+# TBBO-measured slippage (which was favorable but is a bar-close-reference
+# artifact — see out/_baseline_2026-05-27/friction/friction_profile.json).
+# Default OFF so canonical no-friction reproductions stay byte-identical.
+APPLY_EXECUTION_DECAY = False
+try:
+    from config.settings import (
+        COMMISSION_PER_SIDE as _COMM_SIDE,
+        EXCHANGE_FEES_PER_SIDE as _EXCH_SIDE,
+        SLIPPAGE_TICKS_PER_SIDE as _SLIP_SIDE,
+    )
+except Exception:
+    _COMM_SIDE, _EXCH_SIDE, _SLIP_SIDE = 0.86, 0.55, 2
+
+
+def _round_turn_friction_dollars(tick_value: float = 0.50) -> float:
+    """Conservative round-turn friction per 1 contract: commission + exchange
+    fees + adverse slippage (both sides)."""
+    fees = 2.0 * (_COMM_SIDE + _EXCH_SIDE)
+    slip = 2.0 * _SLIP_SIDE * tick_value
+    return fees + slip
+
+
 def simulate_trade(signal_strategy: str, signal_direction: str,
                     entry_ts: pd.Timestamp, entry_price: float,
                     stop_price: float, target_price: float,
@@ -1006,6 +1034,10 @@ def simulate_trade(signal_strategy: str, signal_direction: str,
                   else (entry_price - res.exit_price) / tick_size)
         res.pnl_ticks = int(round(ticks))
         res.pnl_dollars = res.pnl_ticks * tick_value
+        # Flag-gated execution friction: net the round-turn cost out of
+        # pnl_dollars (pnl_ticks remains the GROSS tick count).
+        if APPLY_EXECUTION_DECAY:
+            res.pnl_dollars -= _round_turn_friction_dollars(tick_value)
         res.hold_min = (res.exit_ts - entry_ts).total_seconds() / 60.0
     return res
 
@@ -1281,7 +1313,20 @@ def main():
     ap.add_argument("--out", default="backtest_results/phoenix_real_trades.csv")
     ap.add_argument("--warmup", type=int, default=300,
                      help="Warmup minutes before evaluating (default: 300)")
+    ap.add_argument("--apply-decay", action="store_true",
+                     help="Apply conservative round-turn execution friction "
+                          "(commission + exchange fees + adverse slippage) to "
+                          "each trade's net P&L. Default off (canonical run).")
     args = ap.parse_args()
+
+    if args.apply_decay:
+        global APPLY_EXECUTION_DECAY
+        APPLY_EXECUTION_DECAY = True
+        logger.info(
+            f"[main] EXECUTION DECAY ON: -${_round_turn_friction_dollars():.2f}"
+            f"/round-turn/contract (fees 2*({_COMM_SIDE}+{_EXCH_SIDE}) + "
+            f"slip 2*{_SLIP_SIDE}t)"
+        )
 
     data_dir = ROOT / "data" / "historical"
     pipeline = CSVEnrichmentPipeline(
