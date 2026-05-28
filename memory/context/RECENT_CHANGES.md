@@ -5,6 +5,13 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+### 2026-05-28 14:41 Central Daylight Time — Session changes: 2 files modified
+
+**Files changed:**
+- `data/historical/volumetric/2026-05-27.jsonl`
+- `data/historical/volumetric/_recorder.log`
+
+---
 ### 2026-05-28 01:31 Central Daylight Time — Session changes: 3 files modified
 
 **Files changed:**
