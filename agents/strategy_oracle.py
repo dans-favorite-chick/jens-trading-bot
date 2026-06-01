@@ -802,7 +802,9 @@ PROPOSAL GATES (ALL must pass before propose_change)
 - BHY-adjusted p <= 0.05
 - MinTRL met (n_trades >= compute_min_trl)
 - WFA pass
-- Regime stable (z_score within +/-1.5)
+- Regime stable (per the mode-specific z_threshold reported in the
+  Regime section of the user message; if Regime says STABLE the gate
+  passes regardless of the raw z-score number)
 A proposal failing ANY gate is logged as a finding but NOT staged.
 """
 
@@ -898,28 +900,39 @@ def _build_initial_user_message(facts: dict) -> str:
         delta.get("summary", {}), default=str,
     )
 
-    # Regime block. When unstable but we did not halt (research/daily modes),
-    # surface the warning so the LLM treats recent-month signal cautiously.
+    # Regime block. The actual z-threshold this run is using comes from
+    # MODE_CONFIG so the prompt accurately reflects whether STABLE/UNSTABLE
+    # is being judged against the default 1.5 (weekly) or a mode-specific
+    # override (research = 3.0).
     regime = facts.get("regime") or {}
+    mode = facts.get("run_mode", "")
+    mode_cfg = MODE_CONFIG.get(mode, {})
+    z_threshold_active = mode_cfg.get("z_threshold")
+    if z_threshold_active is None:
+        z_threshold_active = 1.5  # regime_gate.Z_THRESHOLD_DEFAULT
+    threshold_text = f"+/- {z_threshold_active:.2f}"
+
     if regime.get("mode_skipped"):
         regime_block = (
             "Daily mode -- regime gate skipped (1-day window too noisy for the z-test)."
         )
     elif regime.get("stable"):
         regime_block = (
-            f"STABLE. Latest-month sharpe-proxy z-score = "
-            f"{regime.get('z_score', 0):+.2f} (threshold +/- 1.50)."
+            f"STABLE for this run mode. Latest-month sharpe-proxy z-score = "
+            f"{regime.get('z_score', 0):+.2f}; threshold for this mode is "
+            f"{threshold_text}. Proposal regime gate PASSES -- propose_change is "
+            f"unblocked for strategies that clear all other gates."
         )
     else:
         regime_block = (
-            f"**INFORMATIONAL WARNING -- regime is UNSTABLE.** "
-            f"Latest month ({regime.get('latest_month')}) sharpe-proxy "
-            f"z-score = {regime.get('z_score', 0):+.2f} vs the trailing 6-mo "
-            f"baseline (threshold +/- 1.50). Analysis is proceeding because "
-            f"this run mode treats regime instability as informational, not "
-            f"blocking. Treat any recent-month-driven signal with extra "
-            f"caution. Prefer findings supported by data spanning multiple "
-            f"regimes, not just the latest month."
+            f"**REGIME UNSTABLE.** Latest month ({regime.get('latest_month')}) "
+            f"sharpe-proxy z-score = {regime.get('z_score', 0):+.2f} vs the "
+            f"trailing 6-mo baseline; threshold for this mode is {threshold_text}. "
+            f"Analysis is proceeding because this run mode treats regime "
+            f"instability as informational. The proposal regime gate FAILS "
+            f"(no propose_change calls allowed this run). Treat any "
+            f"recent-month-driven signal with extra caution. Prefer findings "
+            f"supported by data spanning multiple regimes."
         )
 
     return (
