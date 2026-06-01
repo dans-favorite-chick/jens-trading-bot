@@ -44,7 +44,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 import numpy as np
 import pandas as pd
@@ -94,7 +94,30 @@ def _as_1d_array(returns: Any) -> np.ndarray:
     if arr.size == 0:
         return arr
     mask = np.isfinite(arr)
+    n_dropped = int((~mask).sum())
+    if n_dropped > 0:
+        logger.debug("_as_1d_array: dropped %d non-finite values", n_dropped)
     return arr[mask]
+
+
+def _sanitize_for_json(d: Any) -> Any:
+    """Replace non-finite floats with None for JSON-RFC-8259 compliance.
+
+    Python's json module emits literal 'Infinity' / 'NaN' tokens which
+    downstream consumers (orjson, ujson, JavaScript JSON.parse) reject.
+    This helper recursively walks dicts and lists and replaces any
+    non-finite float (inf, -inf, NaN) with None. Other types pass through
+    unchanged.
+    """
+    if isinstance(d, float):
+        if math.isnan(d) or math.isinf(d):
+            return None
+        return d
+    if isinstance(d, dict):
+        return {k: _sanitize_for_json(v) for k, v in d.items()}
+    if isinstance(d, list):
+        return [_sanitize_for_json(v) for v in d]
+    return d
 
 
 def _sample_sr_and_moments(returns: np.ndarray) -> tuple[float, float, float, int] | None:
@@ -118,6 +141,11 @@ def _psr_z(sr_hat: float, sk: float, kt: float, n: int,
     """Compute the PSR z-statistic. Returns None if degenerate."""
     denom_sq = (1.0 - sk * sr_hat + (kt / 4.0) * sr_hat * sr_hat) / (n - 1)
     if denom_sq <= 0 or not math.isfinite(denom_sq):
+        logger.warning(
+            "_psr_z: non-positive denominator (denom_sq=%r) for "
+            "sr_hat=%r, skew=%r, kurt=%r, n=%d; returning None",
+            denom_sq, sr_hat, sk, kt, n,
+        )
         return None
     return (sr_hat - sr_benchmark) / math.sqrt(denom_sq)
 
@@ -303,9 +331,9 @@ def compute_effective_n(trial_returns: Sequence[np.ndarray]) -> int:
 
     Build the pairwise Pearson correlation matrix between trials, convert
     to distance d_ij = 1 - |corr_ij|, and apply average-linkage hierarchical
-    clustering with distance threshold 0.5 (corresponds to |corr| >= 0.5
-    collapsing into the same cluster). The number of resulting clusters is
-    the effective N.
+    clustering with distance threshold 0.5 (approximate threshold of
+    |corr| >= 0.5 under average linkage; exact behavior depends on cluster
+    composition). The number of resulting clusters is the effective N.
 
     Edge cases:
     - len(trial_returns) == 0 -> returns 1 (BHY adjustment uses c(1) = 1).
@@ -398,15 +426,31 @@ def _profit_factor(pnls: np.ndarray) -> float:
 
 
 def _sortino(pnls: np.ndarray) -> float:
+    """Sortino ratio using the standard (Sortino & Price 1994) convention.
+
+    Denominator is the RMS of min(returns, 0) computed over the FULL series
+    (positive returns are replaced by zero, not dropped):
+
+        dd = sqrt( mean( min(returns, 0) ** 2 ) )   # mean over all n
+
+    This matches FactSet, Bloomberg, and the original 1994 paper. The
+    alternative convention (mean over downside observations only) yields a
+    systematically smaller denominator and a larger Sortino; switching
+    between the two diverges by ~37% at 60% win-rate and ~68% at 90%
+    win-rate, so external comparisons require the standard form.
+
+    Returns 0.0 for empty input. Returns float('inf') if all returns are
+    non-negative and mean > 0; returns 0.0 if all returns are non-negative
+    and mean <= 0.
+    """
     if pnls.size == 0:
         return 0.0
-    downside = pnls[pnls < 0]
-    if downside.size == 0:
-        return float("inf") if pnls.mean() > 0 else 0.0
+    mean_return = float(pnls.mean())
+    downside = np.minimum(pnls, 0.0)
     dd = float(math.sqrt(np.mean(downside ** 2)))
-    if dd == 0:
-        return 0.0
-    return float(pnls.mean() / dd)
+    if dd == 0.0:
+        return float("inf") if mean_return > 0 else 0.0
+    return mean_return / dd
 
 
 def _max_drawdown(pnls: np.ndarray) -> float:
@@ -440,6 +484,15 @@ def compute_strategy_metrics(trades_df: pd.DataFrame,
     Uses `pnl_dollars` as the returns vector. Trade-level returns are used
     directly per the B-LdP convention for trade-based Sharpe analysis (no
     per-day aggregation).
+
+    Conventions used here (important for cross-tool comparison):
+
+    - Sortino ratio: standard Sortino & Price 1994 convention. The downside
+      deviation denominator is RMS of min(returns, 0) over the FULL series
+      with zeros substituted for positive returns. See ``_sortino``.
+    - JSON safety: non-finite floats (inf, -inf, NaN) in the output are
+      replaced with None via ``_sanitize_for_json`` so the panel is
+      RFC-8259 compliant and survives orjson / JavaScript consumers.
 
     The output structure exactly matches the spec's facts.json schema and
     is the ground truth used by the verifier (Task 4).
@@ -490,11 +543,11 @@ def compute_strategy_metrics(trades_df: pd.DataFrame,
         "oos_pf": float(oos_pf) if oos_pf is not None else float("nan"),
         "is_pf": float(is_pf) if is_pf is not None else float("nan"),
         "wfe_ratio": float(wfe_ratio),
-        "wfa_pass": bool(wfa_pass),
         "win_rate": float(win_rate),
     }
 
-    # Gates per spec sec 7.
+    # Gates per spec sec 7. `wfa_pass` lives only in `gates` to avoid
+    # duplication between metrics and gates (single source of truth).
     gates = {
         "n_floor": n >= 30,
         "n_medium": n >= 100,
@@ -515,7 +568,8 @@ def compute_strategy_metrics(trades_df: pd.DataFrame,
     gates["all_pass_for_proposal"] = (len(failed) == 0)
     gates["failed_gates"] = failed
 
-    return {"metrics": metrics, "gates": gates}
+    panel = {"metrics": metrics, "gates": gates}
+    return _sanitize_for_json(panel)
 
 
 # ---------------------------------------------------------------------------
@@ -535,18 +589,34 @@ def _sharpe_proxy(pnls: np.ndarray) -> float:
 
 def compute_proximity(neighbor_pnls: dict[str, np.ndarray],
                       center_metric: float,
-                      tolerance_pct: float = 0.10) -> dict:
+                      tolerance_pct: float = 0.10,
+                      metric_fn: Callable[[np.ndarray], float] | None = None
+                      ) -> dict:
     """Parameter-proximity plateau test.
 
     `neighbor_pnls` maps a parameter-variation label to the pnl_dollars
     array for that variation. The same metric is computed on each
-    neighbor (Sharpe proxy = mean / std) and compared to `center_metric`.
-    The test passes (plateau=True) iff every neighbor's metric is within
-    +/- `tolerance_pct` of the center.
+    neighbor and compared to `center_metric`. The test passes
+    (plateau=True) iff every neighbor's metric is within +/-
+    `tolerance_pct` of the center.
 
     If the center metric is exactly zero, we fall back to an absolute
     tolerance equal to `tolerance_pct`.
+
+    Parameters
+    ----------
+    metric_fn:
+        Callable used to compute each neighbor's metric. **It must be the
+        SAME function the caller used to compute `center_metric`.** If you
+        compute `center_metric` with PSR (a probability in [0, 1]) and the
+        neighbors with Sharpe (an unbounded real), the drift comparison is
+        meaningless. Defaults to the per-step Sharpe proxy ``_sharpe_proxy``
+        (mean / std); if you computed `center_metric` with anything else
+        you must pass that function here.
     """
+    if metric_fn is None:
+        metric_fn = _sharpe_proxy
+
     neighbor_drift: dict[str, float] = {}
     max_drift_pct = 0.0
     plateau = True
@@ -554,7 +624,7 @@ def compute_proximity(neighbor_pnls: dict[str, np.ndarray],
     denom = abs(float(center_metric)) if center_metric != 0 else 1.0
 
     for label, pnls in neighbor_pnls.items():
-        metric = _sharpe_proxy(np.asarray(pnls, dtype=float))
+        metric = float(metric_fn(np.asarray(pnls, dtype=float)))
         drift = abs(metric - float(center_metric))
         neighbor_drift[label] = float(drift)
         drift_pct = drift / denom
@@ -603,6 +673,49 @@ def _strategy_all_pass(facts: dict, strategy: str) -> bool:
                     ["all_pass_for_proposal"])
     except (KeyError, TypeError):
         return False
+
+
+def _tier_change(current_facts: dict, prior_facts: dict, strat: str) -> str | None:
+    """Best-effort tier-flip detector. Returns 'UP', 'DOWN', or None.
+
+    Reads `wfa_pass` from the strategy's `gates` block (single source of
+    truth). Falls back to the legacy `metrics['wfa_pass']` location if
+    present, for compatibility with prior_facts written before the
+    duplication was removed.
+    """
+    def _wfa_pass(facts: dict) -> bool:
+        try:
+            strat_block = facts["strategies"][strat]
+        except (KeyError, TypeError):
+            return False
+        gates = strat_block.get("gates") if isinstance(strat_block, dict) else None
+        if isinstance(gates, dict) and "wfa_pass" in gates:
+            return bool(gates["wfa_pass"])
+        metrics = strat_block.get("metrics") if isinstance(strat_block, dict) else None
+        if isinstance(metrics, dict) and "wfa_pass" in metrics:
+            return bool(metrics["wfa_pass"])
+        return False
+
+    try:
+        cur_n = _strategy_int_metric(current_facts, strat, "n_trades")
+        pri_n = _strategy_int_metric(prior_facts, strat, "n_trades")
+        cur_wfa = _wfa_pass(current_facts)
+        pri_wfa = _wfa_pass(prior_facts)
+    except (KeyError, TypeError):
+        return None
+    cur_tier = classify_confidence_tier(cur_n, cur_wfa)
+    pri_tier = classify_confidence_tier(pri_n, pri_wfa)
+    order = ["INSUFFICIENT", "LOW", "MEDIUM", "HIGH"]
+    try:
+        ci = order.index(cur_tier)
+        pi = order.index(pri_tier)
+    except ValueError:
+        return None
+    if ci > pi:
+        return "UP"
+    if ci < pi:
+        return "DOWN"
+    return None
 
 
 def compute_delta_vs_prior(current_facts: dict,
@@ -680,29 +793,3 @@ def compute_delta_vs_prior(current_facts: dict,
             "n_newly_failing": n_newly_failing,
         },
     }
-
-
-def _tier_change(current_facts: dict, prior_facts: dict, strat: str) -> str | None:
-    """Best-effort tier-flip detector. Returns 'UP', 'DOWN', or None."""
-    try:
-        cur_n = _strategy_int_metric(current_facts, strat, "n_trades")
-        pri_n = _strategy_int_metric(prior_facts, strat, "n_trades")
-        cur_wfa = bool(current_facts["strategies"][strat]["metrics"].get(
-            "wfa_pass", False))
-        pri_wfa = bool(prior_facts["strategies"][strat]["metrics"].get(
-            "wfa_pass", False))
-    except (KeyError, TypeError):
-        return None
-    cur_tier = classify_confidence_tier(cur_n, cur_wfa)
-    pri_tier = classify_confidence_tier(pri_n, pri_wfa)
-    order = ["INSUFFICIENT", "LOW", "MEDIUM", "HIGH"]
-    try:
-        ci = order.index(cur_tier)
-        pi = order.index(pri_tier)
-    except ValueError:
-        return None
-    if ci > pi:
-        return "UP"
-    if ci < pi:
-        return "DOWN"
-    return None

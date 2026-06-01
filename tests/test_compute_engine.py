@@ -105,6 +105,29 @@ class TestPSR:
         psr_neg = ce.compute_psr(r, sr_benchmark=-0.01)
         assert psr_neg > psr_0
 
+    def test_psr_negative_denominator_returns_zero_and_warns(self, caplog):
+        """A degenerate small-sample series can drive the PSR denominator
+        term `1 - skew*SR + (kurt/4)*SR^2` non-positive (e.g. a 4-point
+        bimodal series at {1, 2} with two of each: sk=0, excess
+        kurt=-6, sr_hat~2.6 -> denom ~-9.1). The implementation must
+        fall back to 0.0 and emit a warning."""
+        import logging
+        arr = np.array([1.0, 2.0, 1.0, 2.0])
+        sk = float(stats.skew(arr, bias=False))
+        sr_hat = arr.mean() / arr.std(ddof=1)
+        kt = float(stats.kurtosis(arr, fisher=True, bias=False))
+        denom_sq = (1.0 - sk * sr_hat + (kt / 4.0) * sr_hat * sr_hat)
+        assert denom_sq <= 0, (
+            "test fixture should produce a non-positive PSR denominator; "
+            f"got {denom_sq}"
+        )
+        with caplog.at_level(logging.WARNING, logger="analytics.compute_engine"):
+            val = ce.compute_psr(arr)
+        assert val == 0.0
+        # And the warning was actually emitted.
+        assert any("non-positive denominator" in rec.message
+                   for rec in caplog.records)
+
 
 # ---------------------------------------------------------------------------
 # DSR tests
@@ -205,6 +228,25 @@ class TestHLZTStat:
         plain_t = r.mean() / (r.std(ddof=1) / math.sqrt(len(r)))
         hlz_t = ce.compute_hlz_tstat(r, lag=0)
         assert abs(hlz_t - plain_t) / abs(plain_t) < 0.05
+
+    def test_hlz_autocorrelated_returns_correction_is_material(self):
+        """AR(1) returns should produce an HLZ t-stat noticeably smaller
+        than the plain t-stat. A sign-flipped Newey-West weight loop would
+        pass all the iid tests but fail catastrophically here."""
+        rng = np.random.default_rng(42)
+        n = 500
+        rho = 0.5
+        noise = rng.normal(0.0, 1.0, n)
+        series = np.zeros(n)
+        series[0] = noise[0] + 0.05  # small positive drift
+        for i in range(1, n):
+            series[i] = rho * series[i - 1] + noise[i] + 0.05
+
+        plain_t = series.mean() / (series.std(ddof=1) / np.sqrt(n))
+        hlz_t = ce.compute_hlz_tstat(series)
+
+        # NW correction must materially shrink the t-stat for autocorr returns.
+        assert abs(hlz_t) < 0.80 * abs(plain_t)
 
 
 # ---------------------------------------------------------------------------
@@ -307,8 +349,10 @@ class TestStrategyMetrics:
         for key in ("n_trades", "psr", "dsr", "min_trl", "hlz_t_stat",
                     "bhy_p_adjusted", "profit_factor", "sortino", "calmar",
                     "max_drawdown_dollars", "oos_pf", "is_pf", "wfe_ratio",
-                    "wfa_pass"):
+                    "win_rate"):
             assert key in m, f"missing metric: {key}"
+        # wfa_pass lives only in gates now (single source of truth).
+        assert "wfa_pass" not in m, "wfa_pass should not be duplicated in metrics"
         g = panel["gates"]
         for key in ("n_floor", "n_medium", "n_high", "psr_0_90", "dsr_0_90",
                     "dsr_0_95", "hlz_3_0", "min_trl_met", "wfa_pass",
@@ -341,8 +385,9 @@ class TestStrategyMetrics:
         wfa_fail = {"mean_is_pf": 2.0, "mean_oos_pf": 1.0}  # ratio 0.5
         p1 = ce.compute_strategy_metrics(df, wfa_pass, n_trials_effective=1)
         p2 = ce.compute_strategy_metrics(df, wfa_fail, n_trials_effective=1)
-        assert p1["metrics"]["wfa_pass"] is True
-        assert p2["metrics"]["wfa_pass"] is False
+        # wfa_pass lives only in gates (single source of truth).
+        assert p1["gates"]["wfa_pass"] is True
+        assert p2["gates"]["wfa_pass"] is False
 
     def test_n_floor_gates_below_30(self):
         pnls = [1.0] * 10
@@ -365,6 +410,57 @@ class TestStrategyMetrics:
         panel = ce.compute_strategy_metrics(df, {}, n_trials_effective=1)
         assert panel["metrics"]["n_trades"] == 0
         assert panel["gates"]["all_pass_for_proposal"] is False
+
+    def test_sortino_standard_formula_hand_calc(self):
+        """Standard Sortino & Price 1994 convention: denominator is the RMS
+        of min(returns, 0) computed over the FULL series with zeros for
+        positive returns.
+
+        Hand calc for series [3, 4, -2, -1]:
+            mean = 1.0
+            min(., 0) = [0, 0, -2, -1] -> squares [0, 0, 4, 1]
+            mean of squares over n=4 = 5/4 = 1.25
+            dd = sqrt(1.25) ~= 1.1180339887
+            sortino = 1.0 / 1.1180339887 ~= 0.8944271910
+        """
+        pnls = [3.0, 4.0, -2.0, -1.0]
+        df = _build_trades_df(pnls)
+        panel = ce.compute_strategy_metrics(df, {}, n_trials_effective=1)
+        expected = 1.0 / math.sqrt(1.25)
+        assert abs(panel["metrics"]["sortino"] - expected) < 1e-9
+
+    def test_sortino_diverges_from_downside_only_convention(self):
+        """At high win-rate the standard convention should give a
+        materially smaller Sortino than the alternative (mean over
+        downside observations only). This guards against regressing
+        back to the non-standard form."""
+        # 9 wins of +1, 1 loss of -1 (90% WR).
+        pnls = np.array([1.0] * 9 + [-1.0])
+        df = _build_trades_df(pnls.tolist())
+        panel = ce.compute_strategy_metrics(df, {}, n_trials_effective=1)
+        # Standard convention: mean=0.8, dd=sqrt(1/10)=0.3162..., S=2.5298...
+        standard = 0.8 / math.sqrt(0.1)
+        # Non-standard (mean over downside only): dd=sqrt(1)=1, S=0.8.
+        non_standard = 0.8 / 1.0
+        assert abs(panel["metrics"]["sortino"] - standard) < 1e-9
+        # The two conventions diverge by >50% at this WR.
+        assert panel["metrics"]["sortino"] > 1.5 * non_standard
+
+    def test_panel_is_json_safe_no_inf_or_nan(self):
+        """All-positive trades produce inf Sortino; the panel must
+        sanitize that to None so the result is RFC 8259 compliant."""
+        import json
+        pnls = [10.0] * 50  # all positive -> inf Sortino, inf PF, inf Calmar
+        df = _build_trades_df(pnls)
+        panel = ce.compute_strategy_metrics(df, {}, n_trials_effective=1)
+        # The fields that would otherwise be inf must be None.
+        assert panel["metrics"]["sortino"] is None
+        assert panel["metrics"]["profit_factor"] is None
+        assert panel["metrics"]["calmar"] is None
+        # wfe_ratio was nan (no wfa summary) -> None.
+        assert panel["metrics"]["wfe_ratio"] is None
+        # Must serialize via strict JSON (no allow_nan).
+        json.dumps(panel, allow_nan=False)
 
 
 # ---------------------------------------------------------------------------
@@ -443,14 +539,42 @@ class TestProximity:
         assert result["plateau"] is True
         assert result["max_drift_pct"] == 0.0
 
+    def test_proximity_custom_metric_fn_is_called(self):
+        """When caller supplies a custom metric_fn (e.g. they computed the
+        center with PSR), it must be used to evaluate every neighbor so
+        center and neighbors live in the same metric space."""
+        calls: list[int] = []
+
+        def constant_metric(arr: np.ndarray) -> float:
+            calls.append(int(arr.size))
+            return 0.5  # fixed value - drift from center=0.5 is exactly 0
+
+        neighbors = {
+            "a": np.array([1.0, 2.0, 3.0]),
+            "b": np.array([10.0, 20.0]),
+        }
+        result = ce.compute_proximity(
+            neighbors, center_metric=0.5,
+            tolerance_pct=0.01, metric_fn=constant_metric,
+        )
+        # Custom fn was invoked once per neighbor with the right sizes.
+        assert sorted(calls) == [2, 3]
+        # And because the fn returned exactly the center, drift is 0 ->
+        # plateau holds even with a strict tolerance.
+        assert result["plateau"] is True
+        assert result["max_drift_pct"] == 0.0
+        assert result["neighbor_drift"] == {"a": 0.0, "b": 0.0}
+
 
 # ---------------------------------------------------------------------------
 # Delta vs prior tests
 # ---------------------------------------------------------------------------
 
 class TestDeltaVsPrior:
-    def _facts(self, dsr, psr=0.9, wr=0.5, pf=1.5, n=100, gates_pass=True):
-        gates = {"all_pass_for_proposal": gates_pass}
+    def _facts(self, dsr, psr=0.9, wr=0.5, pf=1.5, n=100,
+               gates_pass=True, wfa_pass=True):
+        gates = {"all_pass_for_proposal": gates_pass,
+                 "wfa_pass": wfa_pass}
         return {
             "strategies": {
                 "bias_momentum": {
@@ -520,6 +644,30 @@ class TestDeltaVsPrior:
         out = ce.compute_delta_vs_prior(cur, prior)
         delta = out["strategies"]["bias_momentum"]
         assert delta["materially_changed"] is True
+
+    def test_tier_change_up_when_n_crosses_low_to_medium(self):
+        """n: 50 -> 150 with wfa_pass=True flips LOW to MEDIUM."""
+        prior = self._facts(0.7, n=50, wfa_pass=True)
+        cur = self._facts(0.7, n=150, wfa_pass=True)
+        out = ce.compute_delta_vs_prior(cur, prior)
+        delta = out["strategies"]["bias_momentum"]
+        assert delta["tier_change"] == "UP"
+
+    def test_tier_change_down_when_n_crosses_medium_to_low(self):
+        """n: 150 -> 50 with wfa_pass=True flips MEDIUM to LOW."""
+        prior = self._facts(0.7, n=150, wfa_pass=True)
+        cur = self._facts(0.7, n=50, wfa_pass=True)
+        out = ce.compute_delta_vs_prior(cur, prior)
+        delta = out["strategies"]["bias_momentum"]
+        assert delta["tier_change"] == "DOWN"
+
+    def test_tier_change_none_when_same_tier(self):
+        """Same tier before/after -> tier_change is None."""
+        prior = self._facts(0.7, n=120, wfa_pass=True)
+        cur = self._facts(0.7, n=180, wfa_pass=True)  # both MEDIUM
+        out = ce.compute_delta_vs_prior(cur, prior)
+        delta = out["strategies"]["bias_momentum"]
+        assert delta["tier_change"] is None
 
 
 # ---------------------------------------------------------------------------
