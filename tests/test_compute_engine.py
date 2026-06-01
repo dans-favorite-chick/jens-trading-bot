@@ -196,6 +196,32 @@ class TestMinTRL:
         v_tight = ce.compute_min_trl(r, target_sr=1.0, alpha=0.01)
         assert v_tight > v_loose
 
+    def test_min_trl_default_target_is_zero_per_unit(self):
+        """Default target_sr is 0.0 (matches PSR/DSR's sr_benchmark=0.0 default).
+
+        With a profitable per-trade return series (mean=2.0, std=10.0 -> SR~0.2),
+        the gate must be FINITE under the new default; the old default of 1.0
+        would have returned the infeasibility sentinel.
+        """
+        rng = np.random.default_rng(11)
+        r = rng.normal(2.0, 10.0, size=500)  # per-trade SR ~ 0.2 > 0 but < 1
+        v_default = ce.compute_min_trl(r, alpha=0.05)
+        assert 1 < v_default < 10**9, (
+            f"Default target_sr should be 0.0 not 1.0; got MinTRL={v_default}"
+        )
+        # Also confirm explicit target_sr=0.0 matches default
+        v_explicit = ce.compute_min_trl(r, target_sr=0.0, alpha=0.05)
+        assert v_default == v_explicit
+
+    def test_min_trl_explicit_target_one_remains_infeasible_for_small_sr(self):
+        """Callers passing target_sr=1.0 explicitly against per-trade returns
+        with SR < 1 still get the infeasibility sentinel - the function's
+        math is unchanged, only the default."""
+        rng = np.random.default_rng(13)
+        r = rng.normal(2.0, 10.0, size=500)  # SR ~ 0.2
+        v = ce.compute_min_trl(r, target_sr=1.0, alpha=0.05)
+        assert v >= 10**9
+
 
 # ---------------------------------------------------------------------------
 # HLZ t-stat tests

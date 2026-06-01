@@ -253,7 +253,7 @@ def compute_dsr(returns: np.ndarray, n_trials_effective: int,
 # Min Track Record Length
 # ---------------------------------------------------------------------------
 
-def compute_min_trl(returns: np.ndarray, target_sr: float = 1.0,
+def compute_min_trl(returns: np.ndarray, target_sr: float = 0.0,
                     alpha: float = 0.05) -> int:
     """Minimum Track Record Length (Bailey & Lopez de Prado 2012, Eq. 8).
 
@@ -266,6 +266,24 @@ def compute_min_trl(returns: np.ndarray, target_sr: float = 1.0,
 
     Returns the ceiling of that bound. If SR_hat <= target_sr, the test is
     infeasible and we return a large sentinel (10**9).
+
+    Convention note (default target_sr changed 2026-06-01):
+    --------------------------------------------------------
+    `returns` is interpreted in the SAME time unit the caller supplies --
+    typically per-trade P&L in this codebase. `target_sr` MUST be expressed
+    in matching units.
+
+    The default is 0.0 ("minimum trades to prove SR > 0"), matching the
+    convention used by compute_psr (sr_benchmark=0.0). The earlier default
+    of 1.0 silently assumed annualized Sharpe ratios; passing per-trade
+    returns against an annualized target made the gate always-infeasible,
+    so every strategy failed `min_trl_met` regardless of edge.
+
+    Callers wanting an "annualized SR > 1" question must annualize the
+    returns first (e.g. multiply trade SR by sqrt(trades_per_year)) or
+    pass target_sr explicitly in the same units as the returns. See the
+    Hillsdale 2024 "Three Types of Backtests" paper for the practical
+    application of MinTRL with SR* = 0 in trading-system evaluation.
     """
     r = _as_1d_array(returns)
     moments = _sample_sr_and_moments(r)
