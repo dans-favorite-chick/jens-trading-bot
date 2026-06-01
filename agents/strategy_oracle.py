@@ -652,6 +652,28 @@ def _build_facts(conn, mode: str, regime: dict, root: Path) -> dict:
             splits["mae_mfe_short"] = prepared_queries.mae_mfe_distribution(
                 conn, strat, "SHORT", window,
             ).to_dict("records")
+            # 2026-06-01 master fix Phase 6 — distil the raw MAE/MFE
+            # bucket distributions into the elbow + p90 summary that
+            # the Oracle's stop/target guidance (Phase 5.4) actually
+            # cites. compute_mae_elbow finds the first bucket where WR
+            # drops below 90%; compute_mfe_percentile finds the
+            # cumulative-90% MFE bucket. Both return a structured dict
+            # with "found"/"elbow_found" sentinels so the LLM can tell
+            # "no clean elbow" from "insufficient_sample" -- it should
+            # cite the elbow only when found and skip stop-tightening
+            # proposals otherwise.
+            splits["mae_elbow_long"] = compute_engine.compute_mae_elbow(
+                splits["mae_mfe_long"]
+            )
+            splits["mae_elbow_short"] = compute_engine.compute_mae_elbow(
+                splits["mae_mfe_short"]
+            )
+            splits["mfe_p90_long"] = compute_engine.compute_mfe_percentile(
+                splits["mae_mfe_long"]
+            )
+            splits["mfe_p90_short"] = compute_engine.compute_mfe_percentile(
+                splits["mae_mfe_short"]
+            )
             splits["confluence_lift"] = prepared_queries.confluence_lift(
                 conn, strat, window,
             ).to_dict("records")

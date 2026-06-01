@@ -65,6 +65,9 @@ __all__ = [
     "compute_delta_vs_prior",
     "classify_confidence_tier",
     "compute_bhy_p_adjusted",
+    # 2026-06-01 master fix Phase 6 — MAE/MFE elbow analysis.
+    "compute_mae_elbow",
+    "compute_mfe_percentile",
 ]
 
 # Materially-changed thresholds per spec sec 13.
@@ -400,6 +403,190 @@ def compute_effective_n(trial_returns: Sequence[np.ndarray]) -> int:
     z = linkage(condensed, method="average")
     clusters = fcluster(z, t=0.5, criterion="distance")
     return int(len(set(clusters.tolist())))
+
+
+# ---------------------------------------------------------------------------
+# MAE/MFE elbow + MFE percentile (Phase 6 — 2026-06-01)
+# ---------------------------------------------------------------------------
+# These helpers consume the bucketed MAE/MFE distributions emitted by
+# prepared_queries.mae_mfe_distribution(). The orchestrator wires them
+# into facts.json under splits.mae_elbow_long / mae_elbow_short and
+# splits.mfe_p90_long / mfe_p90_short so the Oracle prompt's stop /
+# target guidance has concrete numbers to cite (Phase 5.4).
+
+_DEFAULT_MAE_WR_THRESHOLD = 0.90  # WR floor before "elbow" fires
+_DEFAULT_MAE_MIN_BUCKET_N = 5     # bucket must have >= N trades to count
+_DEFAULT_MAE_MIN_TOTAL_N = 50     # full distribution must have >= N trades
+_DEFAULT_MFE_PERCENTILE = 0.90
+
+
+def compute_mae_elbow(buckets: list[dict],
+                       wr_threshold: float = _DEFAULT_MAE_WR_THRESHOLD,
+                       min_bucket_n: int = _DEFAULT_MAE_MIN_BUCKET_N,
+                       min_total_n: int = _DEFAULT_MAE_MIN_TOTAL_N) -> dict:
+    """Find the MAE elbow -- the adverse-excursion bucket where win
+    rate first drops below ``wr_threshold``.
+
+    Args:
+      buckets: rows from prepared_queries.mae_mfe_distribution(), each
+        a dict with keys at least {"bucket_ticks", "n_trades",
+        "win_rate"}. Order does NOT matter -- sorted internally by
+        bucket_ticks ascending.
+      wr_threshold: WR floor below which a bucket counts as "past the
+        elbow" (default 0.90).
+      min_bucket_n: per-bucket sample-size floor (default 5).
+      min_total_n: full-distribution sample-size floor (default 50).
+
+    Returns:
+      {
+        "elbow_found": bool,
+        "elbow_ticks": int | None,         # the BUCKET at the elbow
+        "wr_at_elbow": float | None,       # WR observed at that bucket
+        "n_above_elbow": int,              # cumulative trades >= elbow
+        "n_total": int,                    # all trades in the distribution
+        "reason": str | None,              # "insufficient_sample" |
+                                           # "no_elbow_found" | None
+      }
+
+    Cases:
+      (a) Clean cliff: WR stays >= threshold through K, drops below at
+          K+1 -> elbow_ticks = K+1, wr_at_elbow = WR_{K+1}.
+      (b) WR never drops below threshold across the whole distribution
+          -> elbow_found=False, reason="no_elbow_found".
+      (c) Total sample too small (n_total < min_total_n)
+          -> elbow_found=False, reason="insufficient_sample".
+      (d) Buckets are too sparse individually -> filtered out before
+          evaluation; if nothing survives, treated as case (c).
+    """
+    if not buckets:
+        return {
+            "elbow_found": False, "elbow_ticks": None,
+            "wr_at_elbow": None, "n_above_elbow": 0,
+            "n_total": 0, "reason": "insufficient_sample",
+        }
+
+    # Normalize, drop sparse buckets.
+    rows = []
+    for b in buckets:
+        try:
+            n = int(b.get("n_trades") or 0)
+            wr = float(b.get("win_rate") or 0.0)
+            tick = int(b.get("bucket_ticks") or 0)
+        except (TypeError, ValueError):
+            continue
+        if n < min_bucket_n:
+            continue
+        rows.append({"bucket_ticks": tick, "n_trades": n, "win_rate": wr})
+
+    n_total = sum(r["n_trades"] for r in rows)
+    if n_total < min_total_n:
+        return {
+            "elbow_found": False, "elbow_ticks": None,
+            "wr_at_elbow": None, "n_above_elbow": n_total,
+            "n_total": n_total, "reason": "insufficient_sample",
+        }
+
+    rows.sort(key=lambda r: r["bucket_ticks"])
+
+    # Walk ascending. The elbow is the FIRST bucket whose WR < threshold
+    # after the distribution has been seeing >= threshold up to that
+    # point. If the FIRST bucket already < threshold, there is no
+    # actual "elbow" structure (the strategy doesn't have a clean
+    # high-WR shelf to begin with).
+    seen_above = False
+    cum_n_above = 0
+    for r in rows:
+        if r["win_rate"] >= wr_threshold:
+            seen_above = True
+            cum_n_above += r["n_trades"]
+        elif seen_above:
+            return {
+                "elbow_found": True,
+                "elbow_ticks": int(r["bucket_ticks"]),
+                "wr_at_elbow": float(r["win_rate"]),
+                "n_above_elbow": int(cum_n_above),
+                "n_total": int(n_total),
+                "reason": None,
+            }
+
+    # Either WR stayed >= threshold the whole way (case b) or never
+    # got above it (gradual decay -- also case b).
+    return {
+        "elbow_found": False, "elbow_ticks": None,
+        "wr_at_elbow": None, "n_above_elbow": cum_n_above,
+        "n_total": n_total, "reason": "no_elbow_found",
+    }
+
+
+def compute_mfe_percentile(buckets: list[dict],
+                            percentile: float = _DEFAULT_MFE_PERCENTILE,
+                            min_total_n: int = _DEFAULT_MAE_MIN_TOTAL_N) -> dict:
+    """Return the favorable-excursion bucket at the given percentile.
+
+    The MAE/MFE distribution from prepared_queries bins trades by their
+    adverse-excursion bucket. We re-use the same bucketing as a coarse
+    proxy for favorable excursion: the bucket where the CUMULATIVE
+    trade-count fraction crosses ``percentile``. This is approximate
+    (MAE and MFE distributions differ in general) but the bucket data
+    in the warehouse today is MAE-keyed; an MFE-keyed bucket emitter
+    is a follow-up.
+
+    Args:
+      buckets: same shape as compute_mae_elbow.
+      percentile: e.g. 0.90 -> the bucket where 90% of trades have
+        accumulated (the right tail of MFE).
+      min_total_n: full-distribution sample-size floor.
+
+    Returns:
+      {
+        "found": bool,
+        "percentile": float,
+        "p_ticks": int | None,    # bucket value at the percentile
+        "n_total": int,
+        "reason": str | None,
+      }
+    """
+    if not buckets:
+        return {
+            "found": False, "percentile": percentile, "p_ticks": None,
+            "n_total": 0, "reason": "insufficient_sample",
+        }
+
+    rows = []
+    for b in buckets:
+        try:
+            n = int(b.get("n_trades") or 0)
+            tick = int(b.get("bucket_ticks") or 0)
+        except (TypeError, ValueError):
+            continue
+        if n > 0:
+            rows.append({"bucket_ticks": tick, "n_trades": n})
+
+    n_total = sum(r["n_trades"] for r in rows)
+    if n_total < min_total_n:
+        return {
+            "found": False, "percentile": percentile, "p_ticks": None,
+            "n_total": n_total, "reason": "insufficient_sample",
+        }
+
+    rows.sort(key=lambda r: r["bucket_ticks"])
+    threshold = percentile * n_total
+    cum = 0
+    for r in rows:
+        cum += r["n_trades"]
+        if cum >= threshold:
+            return {
+                "found": True, "percentile": percentile,
+                "p_ticks": int(r["bucket_ticks"]),
+                "n_total": int(n_total), "reason": None,
+            }
+
+    # Should be unreachable (sum equals n_total at end) but kept for
+    # belt-and-suspenders.
+    return {
+        "found": False, "percentile": percentile, "p_ticks": None,
+        "n_total": int(n_total), "reason": "no_bucket_at_percentile",
+    }
 
 
 # ---------------------------------------------------------------------------
