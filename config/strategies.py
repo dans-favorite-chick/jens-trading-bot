@@ -728,7 +728,17 @@ STRATEGIES = {
         # F-002 + F-003 in OPERATOR_MORNING_BRIEF_PT2). The naked strategy
         # is -$6,491 / 5y per backtest; with both deferred items shipped
         # it becomes +$4,256. Demote until F-002 + F-003 land, then revert.
-        "enabled": True,
+        # 2026-06-01 DISABLED — Oracle 5y verdict
+        # n=2,733, t-stat=-3.75, PF 0.845, max DD -$16,206, WR 36.7%.
+        # Negative both directions (LONG PF 0.85, SHORT PF 0.84).
+        # WFA gate FAIL. Per Oracle: "consistent loser across regimes."
+        # 2nd-largest 5y absolute loss in the warehouse (after spring_setup
+        # and vwap_pullback_v2). The F-002/F-003 deferred items remain
+        # outstanding; even WITH them shipped, the +$4,256 figure relied
+        # on the contaminated bench math, not the current Oracle gates.
+        # Re-evaluate after F-002 + F-003 land AND a fresh WFA.
+        # OPERATOR-APPROVED: 2026-06-01
+        "enabled": False,
         "validated": False,
         "sigma": 2.1,                    # entry-band sigma
         "outer_sigma": 2.5,              # stop is just beyond this
