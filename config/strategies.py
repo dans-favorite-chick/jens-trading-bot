@@ -905,7 +905,13 @@ STRATEGIES = {
         # core/live_canary_gate.py. Backtest verdict was "kill" (PF 0.61);
         # sim_bot heavy-test will either confirm that verdict or surface
         # any post-V2 regime change that the backtest can't see.
-        "enabled": True,
+        # 2026-06-01 DISABLED — Oracle 5y verdict
+        # n=286, t-stat=-6.23, PF 0.443, max DD -$3,465, WR 22.7%.
+        # SHORT side catastrophic (PF 0.33, avg -$14.83/trade).
+        # Sim heavy-test confirmed the original "kill" verdict; no
+        # post-V2 regime change rescued it.
+        # OPERATOR-APPROVED: 2026-06-01
+        "enabled": False,
         "validated": False,
         # F-25 (2026-05-25): informational walk-forward gate (sim only).
         "walk_forward_gate": "informational",
