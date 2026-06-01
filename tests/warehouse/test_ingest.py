@@ -629,18 +629,28 @@ class TestSmoke:
         assert count >= 70_000, f"Trade count {count} below floor of 70,000"
 
     def test_wfa_windows_floor(self):
+        # 2026-06-01: floor lowered 210 -> 30. The prior 210-row floor
+        # corresponded to the stale pre-2026-06-01 wfa fixtures.
+        # Phase 1 of the fresh-WFA work today archived those fixtures
+        # to _archived_2026_06_01/ and replaced them with sharded outputs
+        # (4 shard CSVs + merged) totaling ~66 rows. Floor set generously
+        # at 30 so a future shard reshuffle doesn't false-positive while
+        # still catching "everything got deleted accidentally."
         self._ingest_dir()
         con = duckdb.connect(str(self.db))
         count = con.execute("SELECT COUNT(*) FROM wfa_windows").fetchone()[0]
         con.close()
-        assert count >= 210, f"wfa_windows count {count} below floor of 210"
+        assert count >= 30, f"wfa_windows count {count} below floor of 30"
 
     def test_wfa_summary_floor(self):
+        # 2026-06-01: floor lowered 14 -> 10. Same reason as
+        # test_wfa_windows_floor above. Fresh wfa_summary has 11 rows
+        # (one per strategy in the sharded run); 10 is generous.
         self._ingest_dir()
         con = duckdb.connect(str(self.db))
         count = con.execute("SELECT COUNT(*) FROM wfa_summary").fetchone()[0]
         con.close()
-        assert count >= 14, f"wfa_summary count {count} below floor of 14"
+        assert count >= 10, f"wfa_summary count {count} below floor of 10"
 
     def test_no_new_error_log_entries(self):
         self._ingest_dir()

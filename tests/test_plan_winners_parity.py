@@ -41,7 +41,12 @@ import pytest
 # one that appears in STRATEGIES / STRATEGY_ACCOUNT_MAP.
 WINNERS_PHASE13 = (
     "bias_momentum",
-    "spring_setup",
+    # 2026-06-01: spring_setup REMOVED from §1.1 winners pool.
+    # Oracle 5y verdict: n=20,567, t=-7.77, max DD -$83,614, PF 0.884.
+    # All proposal gates FAIL (PSR/DSR/HLZ/MinTRL/WFA). The 2026-05-17
+    # V2 un-retirement did not rescue the structural mismatch.
+    # OPERATOR-APPROVED disable: 2026-06-01 (commit efc6d5e).
+    # Now listed in ALLOWED_DISABLED_LEGACIES below.
     "vwap_pullback_v2",
     "opening_session",          # parent for 4 enabled subs + orb
     "raschke_baseline",
@@ -57,6 +62,14 @@ WINNERS_PHASE13 = (
 # explicitly per-strategy-specced. Considered an OK validated=True.
 WINNERS_BEYOND_PLAN = (
     "vwap_band_reversion",  # §1.2 row 12 (retest, scale_out_1r + filter)
+    # 2026-06-01: spring_setup tombstone. Disabled by Oracle 5y verdict
+    # (commit efc6d5e, OPERATOR-APPROVED) but validated=True preserved
+    # in config/strategies.py as audit history of its prior status.
+    # The enabled=False is the operative kill switch; the validated flag
+    # is a documentation tag here. Allowed in this list specifically as
+    # "validated for the record, but not shipping" and exempt from the
+    # silent-override guardrail.
+    "spring_setup",
     # Future legitimate promotions land here with a citation comment.
 )
 
@@ -71,6 +84,7 @@ ALLOWED_DISABLED_LEGACIES = (
     "compression_breakout",  # superseded by compression_breakout_v2 (which was then KILLED)
     "noise_area",         # retired 2026-05-15 (target=entry bug + anti-edge)
     "high_precision_only", # retired 2026-05-13 (557 trades / 29% WR / -$1,082)
+    "spring_setup",       # 2026-06-01 Oracle verdict t=-7.77, MaxDD -$83k (commit efc6d5e)
     # 2026-05-22 pt8 (per agent ac705046): cover all the disabled legacies
     # so a "promote-by-vibes" PR can't silently flip enabled=True without
     # tripping CI. Each of these has empirical evidence supporting the
