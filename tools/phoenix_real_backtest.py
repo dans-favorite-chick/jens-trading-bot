@@ -1064,6 +1064,70 @@ def _round_turn_friction_dollars(tick_value: float = 0.50) -> float:
     return fees + slip
 
 
+def _resolve_stop_and_target(sig, entry_price: float) -> tuple[float, float]:
+    """Resolve a Signal into concrete (stop_price, target_price) pair.
+
+    2026-06-01 (Phase 1.5B): replaces inline target-synthesis logic that
+    previously rewrote target_price to entry_price when the strategy
+    emitted target_rr=0.0 AND target_price=None (the canonical
+    managed-exit pattern -- noise_area). That synthesis caused every such
+    trade to "hit target" on the entry bar for 0 ticks of P&L; the
+    warehouse showed 0/9,467 win rate for noise_area as a direct result.
+
+    Rules:
+      - If the strategy provides BOTH stop_price and target_price,
+        pass through unchanged.
+      - If the strategy provides stop_price but no target_price:
+        * positive target_rr -> synthesize target at RR multiple of stop.
+        * zero / missing target_rr -> use +inf (LONG) / -inf (SHORT) so
+          the simulator's target-hit check never fires. Trade exits on
+          stop, max-hold, or EoD.
+      - If the strategy provides neither stop_price nor target_price,
+        fall back to legacy stop_ticks-based synthesis (rare today; most
+        strategies have computes_own_stop=True).
+
+    See logs/oracle/research/2026-06-01_noise_area_investigation.md and
+    logs/oracle/research/2026-06-01_harness_contamination_audit.md for
+    the root-cause walkthrough and the cross-strategy audit.
+    """
+    _LONG_INF = float("inf")
+    _SHORT_INF = float("-inf")
+
+    if sig.stop_price is not None and sig.target_price is not None:
+        return float(sig.stop_price), float(sig.target_price)
+
+    target_rr = sig.target_rr if sig.target_rr is not None else 0.0
+    has_positive_target_rr = target_rr > 0
+
+    if sig.stop_price is not None:
+        stop_price = float(sig.stop_price)
+        if has_positive_target_rr:
+            stop_dist = abs(entry_price - stop_price)
+            if sig.direction == "LONG":
+                target_price = entry_price + stop_dist * target_rr
+            else:
+                target_price = entry_price - stop_dist * target_rr
+        else:
+            target_price = _LONG_INF if sig.direction == "LONG" else _SHORT_INF
+        return stop_price, target_price
+
+    # Legacy fallback: neither stop_price nor target_price provided.
+    stop_dist = sig.stop_ticks * 0.25 if sig.stop_ticks else 0.0
+    if sig.direction == "LONG":
+        stop_price = entry_price - stop_dist
+        target_price = (
+            entry_price + stop_dist * target_rr if has_positive_target_rr
+            else _LONG_INF
+        )
+    else:
+        stop_price = entry_price + stop_dist
+        target_price = (
+            entry_price - stop_dist * target_rr if has_positive_target_rr
+            else _SHORT_INF
+        )
+    return stop_price, target_price
+
+
 def simulate_trade(signal_strategy: str, signal_direction: str,
                     entry_ts: pd.Timestamp, entry_price: float,
                     stop_price: float, target_price: float,
@@ -1312,19 +1376,9 @@ def run_backtest(pipeline: CSVEnrichmentPipeline, strategies: dict,
             if sig is None:
                 continue
             signal_count_by_strat[name] += 1
-            # Resolve entry/stop/target prices
+            # Resolve entry/stop/target prices via the helper below.
             entry_price = sig.entry_price if sig.entry_price else market["price"]
-            if sig.stop_price is not None and sig.target_price is not None:
-                stop_price = sig.stop_price
-                target_price = sig.target_price
-            else:
-                stop_dist = sig.stop_ticks * 0.25
-                if sig.direction == "LONG":
-                    stop_price = entry_price - stop_dist
-                    target_price = entry_price + stop_dist * sig.target_rr
-                else:
-                    stop_price = entry_price + stop_dist
-                    target_price = entry_price - stop_dist * sig.target_rr
+            stop_price, target_price = _resolve_stop_and_target(sig, entry_price)
             # Simulate
             tr = simulate_trade(
                 signal_strategy=name,
