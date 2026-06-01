@@ -154,3 +154,58 @@ NOTES:              Warehouse is fully functional for the canonical portfolio
                     agent items 4 (multi_day sidecar + wfa_summary refresh) and 5
                     (filename stability) are now fully resolved.
 ```
+
+## Step 8 — Gap closure (same-day follow-up, 2026-05-31)
+
+Operator requested full coverage of the 18 reject errors above. Implemented:
+
+- **`tools/warehouse/sniff.py`** — expanded `DERIVED_PATTERNS` regex to also match
+  `phoenix_*`, `backtest_v3_sweep_results`, `backtest_v3_*`, `exit_methodology_*`,
+  `_dom_*`, `opening_session_sub_*`. Catches the 14 unknown-header files via
+  filename precedence; the existing content-based kinds still win when the
+  header matches a known shape.
+- **`tools/warehouse/ingest.py`** — `strategy_from_filename()` helper +
+  `_ingest_trades` fallback: if a CSV has the trade-shape signature but lacks
+  the `strategy` column, derive it from the filename (`opening_session_sub_*`
+  → `opening_session`, `backtest_v3_trades*` → `backtest_v3`,
+  `phoenix_sr_confluence_per_trade*` → `sr_confluence`); splice as a literal
+  into the SELECT. Closes the 4 BinderException files.
+- **Empty-file guard** in `_ingest_derived`: files < 16 bytes (e.g.,
+  `_dom_pullback_5y_verdict.csv` is just `\r`) record `empty_file=true` in
+  `runs.sidecar_raw.meta` and no `import_*` table is created.
+- **+7 fixture CSVs + 1 test file** (`test_ingest_18csv_coverage.py`) covering
+  each new path.
+
+**Post-closure totals (2026-05-31 re-runbook):**
+
+```
+runs:                                            68  (+18)
+trades:                                     552,770  (+31,561, from 3 missing-strategy files)
+wfa_windows:                                    540
+wfa_summary:                                     18
+run_metrics:                                  2,160
+import_backtest_v3_sweep_results:               108
+import_exit_methodology_v3_results:              30
+import_phoenix_compounding_summary:               8
+import_phoenix_compounding_tier_1500:        34,547
+import_phoenix_compounding_tier_3000:        40,697
+import_phoenix_compounding_tier_dates:           30
+import_phoenix_early_reversal_per_trade:      1,640
+import_phoenix_entry_retest_per_trade:        2,141
+import_phoenix_es_nq_attribution:            46,299
+import_phoenix_mean_reversion_summary:           17
+import_phoenix_sr_confluence_summary:             5
+import_phoenix_sr_veto_summary:                  16
+import_phoenix_tick_entry_slippage:           1,441
+```
+
+**errors=0** across both `portfolio_framework` and recursive `backtest_results`
+scans.
+
+**Pytest:** 141 passed, 1 skipped (was 118 / 1).
+
+**Still NOT in warehouse scope (intentional):**
+`data/historical/backtest_results.csv` (header `ts,nq_close,es_close,smt_bullish,
+smt_bearish,spread_z,beta,...`) is market data + SMT signal feed, not backtest
+output. Belongs in the future Phase 3 market data store per spec §13. Not
+touched.
