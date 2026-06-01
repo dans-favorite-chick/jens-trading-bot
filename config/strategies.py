@@ -619,6 +619,13 @@ STRATEGIES = {
         "stage": "lab",
         "validated": True,  # 2026-05-17: was False — operator override (V2 deployment)
 
+        # Oracle 2026-06-01 proposal #6 (finding_id: opening_session_confirmed_2026-06-01):
+        # Hour 8 CT (n=1,290, PF 1.52) and Hour 9 (n=1,827, PF 1.41) carry
+        # the strategy. Hour 11 (n=119, PF 1.07) is near-breakeven. Block
+        # the Hour-11 slot specifically. Hours 12-13 also show profitable
+        # PF on small n; left untouched pending more data.
+        "session_block_windows": [("11:00", "11:59")],
+
         # Universal guards
         "max_trades_per_day": 4,  # 2026-05-17: was 2 (V2 deployment PATCH 2)
         "day_flat_time_ct": "14:30",
