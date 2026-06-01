@@ -526,17 +526,21 @@ class TestRegimeHalt:
         result = so.run("daily", client=client)
         assert result["status"] == "complete"
 
-    def test_research_does_not_halt_on_unstable(self, monkeypatch,
-                                                  tmp_logs_root, synth_facts,
-                                                  tmp_path):
-        """Research mode treats regime instability as INFORMATIONAL.
+    def test_research_threshold_passes_at_z_2_97(self, monkeypatch,
+                                                    tmp_logs_root, synth_facts,
+                                                    tmp_path):
+        """Research mode uses a LOOSER z-threshold of 3.0. At z=2.97 (today's
+        actual reading on 2026-06-01) the gate reports STABLE and analysis
+        proceeds normally -- no halt, no special warning needed.
 
-        Operator-authorized 2026-06-01: research is a manual deep-dive over the
-        full 5-year window; recent-month volatility should not block discovery.
-        The regime warning still surfaces in facts.json and the LLM prompt.
+        Operator-authorized 2026-06-01 (second pass): preferred over the
+        prior halt_on_unstable_regime=False approach because it surfaces
+        false-stable warnings only when z really crosses 3 sigma.
         """
-        unstable = {
-            "stable": False, "z_score": 2.97, "warning": "regime shift",
+        # Stub returns the verdict the real regime gate would return at
+        # z=2.97 with threshold=3.0: stable=True.
+        stable_under_3 = {
+            "stable": True, "z_score": 2.97, "warning": None,
             "mode_skipped": False, "baseline_n_months": 6,
             "latest_month": "2026-05", "latest_sharpe_proxy": 0.115,
         }
@@ -546,11 +550,10 @@ class TestRegimeHalt:
                                             str(tmp_path / "warehouse.duckdb")})
         monkeypatch.setattr(so, "_open_warehouse_conn",
                              lambda path: _StubConn())
-        monkeypatch.setattr(so, "_check_regime_gate", lambda conn, mode: unstable)
-        # synth_facts already carries the regime in its top-level dict via
-        # _build_facts; ensure the prompt path sees the warning.
+        monkeypatch.setattr(so, "_check_regime_gate",
+                             lambda conn, mode: stable_under_3)
         facts_with_regime = dict(synth_facts)
-        facts_with_regime["regime"] = unstable
+        facts_with_regime["regime"] = stable_under_3
         monkeypatch.setattr(
             so, "_build_facts",
             lambda conn, mode, regime, root=None: facts_with_regime,
@@ -558,21 +561,71 @@ class TestRegimeHalt:
 
         client = _StubAnthropicClient([
             _StubMessage([{"type": "text",
-                             "text": "Research narrative respecting regime warning."}],
+                             "text": "Research narrative on stable regime."}],
                           stop_reason="end_turn"),
         ])
         result = so.run("research", client=client)
-        # Does not halt despite unstable regime
         assert result["status"] == "complete"
-        assert result["regime"]["stable"] is False
+        assert result["regime"]["stable"] is True
         assert result["regime"]["z_score"] == 2.97
 
-    def test_mode_config_halt_flags_are_correct(self):
-        """Pin the per-mode halt configuration so a refactor can't silently
-        change which modes halt on regime instability."""
-        assert so.MODE_CONFIG["research"]["halt_on_unstable_regime"] is False
+    def test_research_halts_at_z_4(self, monkeypatch,
+                                    tmp_logs_root, synth_facts, tmp_path):
+        """Research mode still halts at extreme z. With threshold 3.0,
+        z=4.0 triggers the halt path -- the gate hasn't been declawed."""
+        unstable_extreme = {
+            "stable": False, "z_score": 4.0, "warning": "extreme regime shift",
+            "mode_skipped": False, "baseline_n_months": 6,
+            "latest_month": "2026-05", "latest_sharpe_proxy": 0.2,
+        }
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-fake")
+        monkeypatch.setattr(so, "_run_preflight",
+                             lambda mode: {"ok": True, "warehouse_path":
+                                            str(tmp_path / "warehouse.duckdb")})
+        monkeypatch.setattr(so, "_open_warehouse_conn",
+                             lambda path: _StubConn())
+        monkeypatch.setattr(so, "_check_regime_gate",
+                             lambda conn, mode: unstable_extreme)
+        monkeypatch.setattr(
+            so, "_build_facts",
+            lambda conn, mode, regime, root=None: synth_facts,
+        )
+        result = so.run("research", client=_StubAnthropicClient())
+        assert result["status"] == "halted_regime_unstable"
+        assert result["regime"]["z_score"] == 4.0
+
+    def test_check_regime_gate_passes_z_threshold_for_research(self, monkeypatch):
+        """The _check_regime_gate wrapper must thread MODE_CONFIG's
+        z_threshold override down to check_regime_stability."""
+        captured = {}
+
+        def fake_check(conn, mode, **kwargs):
+            captured["mode"] = mode
+            captured["kwargs"] = kwargs
+            return {"stable": True, "z_score": 0.0, "warning": None,
+                    "mode_skipped": False, "baseline_n_months": 6,
+                    "latest_month": "2026-05", "latest_sharpe_proxy": 0.0}
+
+        monkeypatch.setattr(so.regime_gate, "check_regime_stability", fake_check)
+
+        so._check_regime_gate(None, "research")
+        assert captured["kwargs"].get("z_threshold") == 3.0
+
+        captured.clear()
+        so._check_regime_gate(None, "weekly")
+        # weekly has z_threshold=None -> wrapper omits the kwarg so the
+        # default (1.5) inside check_regime_stability is used
+        assert "z_threshold" not in captured["kwargs"]
+
+    def test_mode_config_thresholds_and_halts(self):
+        """Pin the per-mode configuration so a refactor cannot silently
+        change which modes halt or what their z-thresholds are."""
+        assert so.MODE_CONFIG["research"]["halt_on_unstable_regime"] is True
         assert so.MODE_CONFIG["weekly"]["halt_on_unstable_regime"] is True
         assert so.MODE_CONFIG["daily"]["halt_on_unstable_regime"] is False
+        assert so.MODE_CONFIG["research"]["z_threshold"] == 3.0
+        assert so.MODE_CONFIG["weekly"]["z_threshold"] is None
+        assert so.MODE_CONFIG["daily"]["z_threshold"] is None
 
 
 # ===========================================================================

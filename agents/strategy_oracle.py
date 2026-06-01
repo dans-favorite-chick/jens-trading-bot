@@ -91,23 +91,24 @@ MODE_CONFIG: dict[str, dict] = {
         "token_budget": 200_000,
         "can_propose": True,
         "skip_regime_gate": False,
-        # Operator-authorized 2026-06-01: research mode treats regime
-        # instability as INFORMATIONAL, not blocking. Rationale: research
-        # mode is a manual deep-dive over the FULL 5-year window where the
-        # operator wants the analysis regardless of recent-month volatility.
-        # All proposals still flow through pending_changes.json for human
-        # review, so no parameter changes can be auto-applied during a
-        # regime transition. The regime warning is injected into the LLM
-        # prompt and the debrief so the operator sees it.
-        "halt_on_unstable_regime": False,
+        # Operator-authorized 2026-06-01 (second pass): research mode uses a
+        # LOOSER z-threshold of 3.0 instead of the default 1.5. Rationale:
+        # research mode is a manual deep-dive over 5 years; rejecting it
+        # because the latest month is +2.97 sigma above baseline blocks
+        # useful narrative work. At z > 3.0 the instability is severe
+        # enough that even research halts -- the gate still bites for
+        # genuinely extreme conditions.
+        "z_threshold": 3.0,
+        "halt_on_unstable_regime": True,
     },
     "weekly": {
         "window_days": 7,
         "token_budget": 80_000,
         "can_propose": True,
         "skip_regime_gate": False,
-        # Weekly DOES halt on regime instability. Tuning parameters during
-        # a regime transition is the dominant overfitting trap.
+        # Weekly keeps the tight default threshold (1.5). Parameter tuning
+        # during a regime transition is the dominant overfitting trap.
+        "z_threshold": None,  # use regime_gate.Z_THRESHOLD_DEFAULT (1.5)
         "halt_on_unstable_regime": True,
     },
     "daily": {
@@ -115,6 +116,7 @@ MODE_CONFIG: dict[str, dict] = {
         "token_budget": 15_000,
         "can_propose": False,
         "skip_regime_gate": True,
+        "z_threshold": None,  # gate is short-circuited via mode_skipped
         "halt_on_unstable_regime": False,
     },
 }
@@ -568,7 +570,16 @@ def _open_warehouse_conn(path: str):
 
 
 def _check_regime_gate(conn, mode: str) -> dict:
-    """Thin wrapper so tests can substitute the regime verdict."""
+    """Thin wrapper so tests can substitute the regime verdict.
+
+    Looks up the per-mode `z_threshold` override in MODE_CONFIG and passes
+    it to ``regime_gate.check_regime_stability`` when set; otherwise the
+    regime gate's default (1.5) is used.
+    """
+    cfg = MODE_CONFIG.get(mode, {})
+    z_threshold = cfg.get("z_threshold")
+    if z_threshold is not None:
+        return regime_gate.check_regime_stability(conn, mode, z_threshold=z_threshold)
     return regime_gate.check_regime_stability(conn, mode)
 
 
