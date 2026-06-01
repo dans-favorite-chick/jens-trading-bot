@@ -1085,7 +1085,12 @@ STRATEGIES = {
         # limit_5s (Section U.2 RTH-open breakout slippage).
         "enabled": True,
         "validated": True,
-        "window_start_ct": "08:45",
+        # Oracle 2026-06-01 proposal #3 (finding_id: e_multi_day_breakout_confirmed_2026-06-01):
+        # Hours 10-12 CT are dramatically better than 8-9: PF 7.75 / 8.50 / 3.98
+        # at hours 10 / 12 / 11 vs PF 3.12 / 2.95 at hours 8 / 9.
+        # Narrow window 08:45-13:00 -> 10:00-13:00 concentrates the strategy
+        # on the strongest 3-hour block.
+        "window_start_ct": "10:00",
         "window_end_ct": "13:00",
         "lookback_days": 3,
         "break_buffer_ticks": 1,
