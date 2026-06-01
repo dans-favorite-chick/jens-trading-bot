@@ -158,7 +158,13 @@ STRATEGIES = {
         # bias_momentum will trade during the historically-losing windows
         # on real money. Operator should restore the windows above before
         # going live, or explicitly accept the risk.
-        "session_block_windows": [],
+        # Oracle 2026-06-01 proposal #2 (finding_id: bias_momentum_confirmed_2026-06-01):
+        # Hour 4 CT is the ONLY breakeven hour across 28,531 trades.
+        # PF=0.995, avg PnL -$0.14, n=642. Every other active hour is
+        # profitable. Block it so the strategy stops bleeding on that slot.
+        # NOT a walk_forward_gate flip; session_block_windows edit is allowed
+        # under the protected-file policy.
+        "session_block_windows": [("04:00", "04:59")],
         # 2026-05-03 fix B: SHORT-asymmetric quality requirement.
         # Bot-wide SHORT WR was 9% over 11 trades (NQ structural long-bias drift
         # makes symmetric momentum strategies underperform on the short side).
