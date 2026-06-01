@@ -1214,6 +1214,14 @@ def instantiate_strategies(strategy_names: list[str]) -> dict:
     from strategies.compression_breakout_micro import CompressionBreakoutMicro
     from strategies.vwap_pullback_v2 import VWAPPullbackV2
     from strategies.es_nq_confluence import ESNQConfluence
+    # 2026-06-01 fresh-WFA gap-fix: TESTABLE_STRATEGIES listed these but
+    # class_map didn't, causing wfa.py to silently skip them with
+    # "no class for strategy" warnings.
+    from strategies.a_asian_continuation import AsianContinuation
+    from strategies.e_multi_day_breakout import MultiDayBreakout
+    from strategies.g_inside_bar_breakout import InsideBarBreakout
+    from strategies.raschke_baseline import RaschkeBaseline
+    from strategies.dom_pullback import DOMPullback
 
     class_map = {
         "bias_momentum": BiasMomentumFollow,
@@ -1232,6 +1240,12 @@ def instantiate_strategies(strategy_names: list[str]) -> dict:
         "compression_breakout_micro": CompressionBreakoutMicro,
         "vwap_pullback_v2": VWAPPullbackV2,
         "es_nq_confluence": ESNQConfluence,
+        # 2026-06-01 fresh-WFA gap-fix:
+        "a_asian_continuation": AsianContinuation,
+        "e_multi_day_breakout": MultiDayBreakout,
+        "g_inside_bar_breakout": InsideBarBreakout,
+        "raschke_baseline": RaschkeBaseline,
+        "dom_pullback": DOMPullback,
     }
 
     out = {}
