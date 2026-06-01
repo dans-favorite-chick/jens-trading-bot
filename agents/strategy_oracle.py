@@ -817,6 +817,68 @@ TOOL SURFACE (5 tools exactly)
 - propose_change(...)           : stage a parameter proposal (HUMAN review)
 """
 
+# 2026-06-01 master fix Phase 5.3 — proposal vocabulary the LLM is
+# allowed to draw from. This is the CANONICAL list of parameter names
+# the Oracle may propose changes to. Any name OUTSIDE this list (and
+# also outside the per-strategy schema injected into the user message
+# at run time) must be emitted as a finding with
+# proposed_parameter_name="NEW:<descriptive_name>" so the operator
+# knows infrastructure is needed.
+_PROPOSAL_VOCABULARY = """\
+PROPOSAL VOCABULARY (use ONLY these parameter names or names listed in
+the per-strategy schema in the user message)
+- Stop/target geometry: stop_atr_mult, target_rr, min_stop_ticks,
+  max_stop_ticks, stop_ticks, target_ticks, atr_stop_multiplier
+- Session shape:        session_block_windows, window_start_ct,
+                        window_end_ct, day_flat_time_ct, max_hold_min,
+                        max_trades_per_day
+- Direction:            allowed_directions   (None | ["LONG"] | ["SHORT"])
+- Confluence:           min_confluences, min_tf_votes, require_*
+- Regime:               allowed_regimes      (list[str])
+- Time-of-day:          allowed_hours_ct     (list[int 0-23])
+If the change you want does not map to one of the above AND the
+per-strategy schema doesn't list it either, emit a finding with
+proposed_parameter_name="NEW:<descriptive_name>" -- DO NOT invent a
+parameter name the operator can't apply.
+"""
+
+# 2026-06-01 master fix Phase 5.4 — stop/target optimization guidance.
+_STOP_TARGET_GUIDANCE = """\
+STOP / TARGET OPTIMIZATION (when to propose)
+- splits.mae_elbow_long / splits.mae_elbow_short carry the empirical
+  MAE elbow (the adverse-excursion bucket where win rate first drops
+  below 90%). If the elbow is MATERIALLY TIGHTER than the strategy's
+  current implicit stop (stop_atr_mult * mean ATR, OR min_stop_ticks,
+  whichever is larger), propose tightening the stop. Cite the elbow
+  bucket explicitly: e.g. "LONG MAE elbow at 8 ticks vs current
+  ~12-tick stop -> propose stop_ticks=8."
+- splits.mfe_p90_long / splits.mfe_p90_short carry the 90th-percentile
+  favorable excursion. If MFE p90 is MATERIALLY ABOVE the current
+  target distance (target_rr * stop_distance), propose loosening
+  target_rr. Cite the percentile: "LONG MFE p90 = 28 ticks vs current
+  target ~16 ticks -> propose target_rr=2.5."
+- Direction- or hour-specific tightening is OK -- emit one
+  propose_change per actionable cell. Up to 3 proposals per strategy
+  per run, ranked by confidence; one big proposal is preferred over
+  three speculative ones when their evidence overlaps.
+"""
+
+# 2026-06-01 master fix Phase 5.5 — safety guards.
+_SAFETY_GUARDS = """\
+SAFETY GUARDS (hard floors on any propose_change you emit)
+- NEVER propose a stop tighter than the strategy's current
+  min_stop_ticks (look it up in the per-strategy schema).
+- NEVER propose target_rr below 1.0. A target tighter than the stop
+  is structurally a guaranteed-loss order shape.
+- NEVER propose a window_start_ct >= window_end_ct.
+- NEVER propose an empty allowed_hours_ct list (that disables the
+  strategy entirely -- if you want to disable, emit a finding with
+  verdict=REFUTED and let the operator flip enabled=False).
+If the data suggests something outside these bounds, emit a finding
+for human review rather than a proposal. The finding rationale should
+include "guard:<which_one>" so the operator can grep for them.
+"""
+
 _REQUIRED_OUTPUTS = """\
 REQUIRED OUTPUTS (your turn is NOT done until these are produced)
 1. For every strategy you fetch_strategy_stats on, you MUST call
@@ -827,11 +889,10 @@ REQUIRED OUTPUTS (your turn is NOT done until these are produced)
    n_findings=0 is a wasted run.
 2. For every CONFIRMED finding whose strategy has all_pass_for_proposal=
    TRUE AND the Regime section says STABLE, you MUST also call
-   propose_change at least once. Direction- or hour-specific proposals
-   are encouraged; otherwise propose a small-touch parameter (e.g.
-   confirming a current setting is right by proposing it unchanged with
-   a "validated" rationale). Skipping propose_change when gates pass and
-   regime is stable is the second-most-common failure.
+   propose_change at least once. UP TO 3 PROPOSALS PER STRATEGY per
+   run, ranked by confidence (direction tilt, hour priority, stop/target
+   geometry are all valid axes). Skipping propose_change when gates
+   pass and regime is stable is the second-most-common failure.
 3. Only end your turn after both (1) and (2) are satisfied for the
    strategies you investigated. Do NOT end your turn after only fetching
    data -- fetches without write_finding are wasted tokens.
@@ -848,6 +909,9 @@ SYSTEM_PROMPT_RESEARCH = (
     + _STRUCTURAL_RULES + "\n"
     + _CONFIDENCE_RUBRIC + "\n"
     + _PROPOSAL_GATES + "\n"
+    + _PROPOSAL_VOCABULARY + "\n"
+    + _STOP_TARGET_GUIDANCE + "\n"
+    + _SAFETY_GUARDS + "\n"
     + _TOOL_SURFACE + "\n"
     + _REQUIRED_OUTPUTS
 )
@@ -859,6 +923,9 @@ SYSTEM_PROMPT_WEEKLY = (
     + _STRUCTURAL_RULES + "\n"
     + _CONFIDENCE_RUBRIC + "\n"
     + _PROPOSAL_GATES + "\n"
+    + _PROPOSAL_VOCABULARY + "\n"
+    + _STOP_TARGET_GUIDANCE + "\n"
+    + _SAFETY_GUARDS + "\n"
     + _TOOL_SURFACE + "\n"
     + _REQUIRED_OUTPUTS
 )
@@ -908,8 +975,76 @@ def _fmt_num(v: Any) -> str:
         return str(v)
 
 
+def _build_strategy_schema_block(facts: dict) -> str:
+    """2026-06-01 master fix Phase 5.1 — schema injection.
+
+    Reflect the LIVE STRATEGIES dict at prompt-build time and emit a
+    per-strategy "allowed parameter names" block. This eliminates the
+    LLM-hallucinated parameter names problem observed in the 2026-06-01
+    research run (the LLM invented "direction_filter" and
+    "active_hours_filter" because the prompt never showed it the real
+    config schema). Helper is called at prompt-build time -- the list
+    is NOT hardcoded, so any future config additions show up
+    automatically.
+    """
+    # Lazy import to keep test fixtures free of config side effects.
+    try:
+        from config.strategies import STRATEGIES
+    except Exception as e:  # noqa: BLE001
+        return f"_(schema unavailable: {e!r})_"
+
+    lines = [
+        "Each strategy carries its OWN parameter set in config/strategies.py.",
+        "When you propose_change you MUST use a parameter name that appears",
+        "in that strategy's row below. If you need a parameter the schema",
+        "doesn't expose, emit a finding with proposed_parameter_name=",
+        '"NEW:<descriptive_name>" instead (operator wires the infra).',
+        "",
+        "| Strategy | Parameters (top-level keys only) |",
+        "|---|---|",
+    ]
+    # Stable iteration order: prefer the order of strategies in this
+    # run's facts panel so the LLM sees them in the same order it sees
+    # them in the compact summary table.
+    panel = facts.get("strategies", {}) or {}
+    seen = set()
+    for name in panel.keys():
+        cfg = STRATEGIES.get(name) or {}
+        seen.add(name)
+        # Drop the obvious meta keys; the LLM doesn't propose changes to
+        # `enabled` (operator-only) or `validated` (operator-only) or
+        # `walk_forward_gate` (PROTECTED).
+        params = sorted(
+            k for k in cfg.keys()
+            if k not in {"enabled", "validated", "walk_forward_gate", "stage"}
+        )
+        # Cap per-strategy at 30 keys for prompt-budget hygiene; if a
+        # strategy has more, list the first 30 and append "+N more".
+        n_total = len(params)
+        shown = params[:30]
+        if n_total > 30:
+            shown_str = ", ".join(shown) + f", ... +{n_total - 30} more"
+        else:
+            shown_str = ", ".join(shown)
+        if not shown_str:
+            shown_str = "_(no tunable params in config)_"
+        lines.append(f"| `{name}` | {shown_str} |")
+
+    # If facts had strategies the schema doesn't, note them.
+    missing_in_schema = [n for n in panel.keys() if n not in STRATEGIES]
+    if missing_in_schema:
+        lines.append("")
+        lines.append(
+            "_NOTE: these facts.json strategies have no config block "
+            f"(likely deleted/renamed): {missing_in_schema}_"
+        )
+
+    return "\n".join(lines)
+
+
 def _build_initial_user_message(facts: dict) -> str:
     summary = _build_compact_summary(facts)
+    schema_block = _build_strategy_schema_block(facts)
     prior = facts.get("prior_findings_loaded") or []
     prior_block = "_(no prior findings in last 30 days)_"
     if prior:
@@ -970,6 +1105,8 @@ def _build_initial_user_message(facts: dict) -> str:
         f"{regime_block}\n\n"
         f"## Compact Summary (full panels available via fetch_strategy_stats)\n"
         f"{summary}\n\n"
+        f"## Available Parameter Schema (per strategy)\n"
+        f"{schema_block}\n\n"
         f"## Prior findings (last 30 days)\n"
         f"{prior_block}\n\n"
         f"## Delta vs prior run\n"
