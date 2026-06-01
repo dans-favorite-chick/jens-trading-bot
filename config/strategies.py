@@ -940,7 +940,13 @@ STRATEGIES = {
         # re-enabled for sim_bot. Live mode protected by
         # core/live_canary_gate.py. Backtest was marginal (PF 0.97);
         # sim_bot accumulates the data needed for an honest verdict.
-        "enabled": True,
+        # 2026-06-01 DISABLED — Oracle 5y verdict
+        # n=248, t-stat=-6.14, PF 0.464, max DD -$1,248, WR 39.9%.
+        # Negative both directions (LONG PF 0.45 / SHORT PF 0.48).
+        # The PF=0.97 marginal backtest was a small-sample artifact;
+        # the 5y picture is unambiguously losing.
+        # OPERATOR-APPROVED: 2026-06-01
+        "enabled": False,
         "validated": False,
         # F-25 (2026-05-25): informational walk-forward gate (sim only).
         "walk_forward_gate": "informational",
