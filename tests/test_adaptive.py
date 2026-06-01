@@ -192,6 +192,111 @@ def test_process_pending_handles_malformed(tmp_path: Path):
     assert result.accepted == []
 
 
+# ─── Oracle schema migration (Task 8, 2026-06-01) ───────────────────────
+
+def test_process_pending_reads_oracle_schema(tmp_path: Path):
+    """process_pending must accept the new Oracle shape:
+       {"pending": [ ... ]} with verbose field names (parameter_name,
+       current_value, proposed_value, expected_improvement).
+    """
+    pending = tmp_path / "pending_changes.json"
+    proposals_dir = tmp_path / "proposals"
+    rejected_log = tmp_path / "rejected.jsonl"
+
+    oracle_payload = {
+        "pending": [
+            {
+                "proposed_at": "2026-06-01",
+                "run_mode": "weekly",
+                "strategy": "bias_momentum",
+                "direction": "LONG",
+                "parameter_name": "stop_atr_mult",
+                "current_value": 2.0,
+                "proposed_value": 1.8,
+                "rationale": "n=122 DSR=0.76",
+                "confidence": "HIGH",
+                "sample_size": 122,
+                "finding_id": "bm_finding_2",
+                "expected_improvement": "+0.15 PF",
+                "metrics": {"dsr": 0.76, "n_trades": 122},
+                "status": "PENDING_HUMAN_REVIEW",
+                "approved": False,
+                "applied": False,
+            },
+            {
+                # Unsafe Oracle item -- 999 > $100 cap. Must be rejected.
+                "run_mode": "weekly",
+                "strategy": "bias_momentum",
+                "parameter_name": "risk_per_trade",
+                "current_value": 15,
+                "proposed_value": 999,
+                "rationale": "stress",
+                "confidence": "MEDIUM",
+                "sample_size": 50,
+            },
+        ]
+    }
+    pending.write_text(json.dumps(oracle_payload), encoding="utf-8")
+
+    result = process_pending(
+        pending_file=pending,
+        proposals_dir=proposals_dir,
+        rejected_log=rejected_log,
+    )
+    assert len(result.accepted) == 1, f"got rejected={result.rejected}"
+    assert len(result.rejected) == 1
+    # The accepted proposal renders the resolved param/current/proposed.
+    md = result.accepted[0].read_text(encoding="utf-8")
+    assert "stop_atr_mult" in md
+    assert "1.8" in md
+
+
+def test_pending_file_default_points_at_logs_oracle():
+    """The module-level PENDING_FILE constant must point at the new
+    logs/oracle/pending_changes.json path, not the deleted
+    logs/ai_learner/pending_recommendations.json path."""
+    from agents.adaptive_params import PENDING_FILE, PENDING_KEY
+    p = str(PENDING_FILE).replace("\\", "/")
+    assert p.endswith("logs/oracle/pending_changes.json"), p
+    assert PENDING_KEY == "pending"
+
+
+def test_normalize_oracle_item_idempotent_with_legacy_shape():
+    """If a fixture already uses legacy (short) field names, the
+    normalizer must NOT clobber them with the (potentially absent)
+    Oracle aliases."""
+    from agents.adaptive_params import _normalize_oracle_item
+    legacy = {
+        "strategy": "bias_momentum",
+        "param": "stop_atr_mult",
+        "current": 2.0,
+        "proposed": 1.8,
+    }
+    out = _normalize_oracle_item(legacy)
+    assert out["param"] == "stop_atr_mult"
+    assert out["current"] == 2.0
+    assert out["proposed"] == 1.8
+
+
+def test_normalize_oracle_item_legacy_wins_on_collision():
+    """If BOTH names are present, legacy short name wins (so a hand-written
+    test fixture keeps working even if it accidentally carries both)."""
+    from agents.adaptive_params import _normalize_oracle_item
+    rec = {
+        "strategy": "x",
+        "param": "legacy_param",
+        "parameter_name": "oracle_param",
+        "current": 1.0,
+        "current_value": 999.0,
+        "proposed": 1.5,
+        "proposed_value": 999.0,
+    }
+    out = _normalize_oracle_item(rec)
+    assert out["param"] == "legacy_param"
+    assert out["current"] == 1.0
+    assert out["proposed"] == 1.5
+
+
 # ─── approve_proposal.py dry-run (does not corrupt strategies.py) ──────
 
 def test_approve_dry_run_preserves_strategies(tmp_path: Path):

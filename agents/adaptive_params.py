@@ -1,9 +1,24 @@
 """
 S9 — 4E Adaptive Params (Phase E-H, Wave 2)
 
-Deterministic, safety-validated proposal generator. Consumes S8's learner
-output (``logs/ai_learner/pending_recommendations.json``) and emits
-human-readable proposal Markdown files — NEVER auto-applies config.
+Deterministic, safety-validated proposal generator. Consumes the Strategy
+Oracle's output (``logs/oracle/pending_changes.json``) under the ``pending``
+key and emits human-readable proposal Markdown files — NEVER auto-applies
+config.
+
+Schema notes (migrated 2026-06-01, Task 8):
+  - Path moved from ``logs/ai_learner/pending_recommendations.json`` (the
+    deleted ``historical_learner.py`` output) to ``logs/oracle/pending_changes.json``.
+  - Top-level key renamed: ``pending_recommendations`` -> ``pending``.
+  - The Oracle uses verbose per-item field names (``parameter_name``,
+    ``current_value``, ``proposed_value``, ``expected_improvement``); we
+    normalize them to the legacy short names (``param``, ``current``,
+    ``proposed``, ``expected_impact``) at the boundary so the rest of the
+    pipeline (and existing safety-bounds tests) keeps working. New fields
+    ``metrics``, ``run_mode``, ``direction`` are passed through unchanged
+    and surface in the rendered proposal where useful.
+  - The historical ``logs/ai_learner/`` folder is preserved as an immutable
+    archive — nothing is migrated automatically.
 
 Design rules
 ------------
@@ -67,10 +82,45 @@ BOUNDS = SafetyBounds()
 # ─── Paths ──────────────────────────────────────────────────────────────
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# Output dir for Adaptive Params (proposals + rejected log) -- kept under
+# logs/ai_learner/ so the existing reviewer flow and dashboard route are
+# undisturbed. The INPUT source moved to logs/oracle/pending_changes.json
+# in the Task 8 migration; see PENDING_FILE below.
 LEARNER_DIR = _PROJECT_ROOT / "logs" / "ai_learner"
-PENDING_FILE = LEARNER_DIR / "pending_recommendations.json"
+ORACLE_DIR = _PROJECT_ROOT / "logs" / "oracle"
+PENDING_FILE = ORACLE_DIR / "pending_changes.json"
+PENDING_KEY = "pending"  # top-level JSON key the Oracle writes
 PROPOSALS_DIR = LEARNER_DIR / "proposals"
 REJECTED_LOG = LEARNER_DIR / "rejected.jsonl"
+
+# Map of Oracle (verbose) field names -> legacy (short) field names expected
+# by validate_recommendation() and the rendered proposal Markdown. The
+# normalizer is idempotent: if both names are present, the legacy name wins
+# (so a hand-written test fixture using the old shape still works).
+_ORACLE_FIELD_ALIASES: dict[str, str] = {
+    "parameter_name":       "param",
+    "current_value":        "current",
+    "proposed_value":       "proposed",
+    "expected_improvement": "expected_impact",
+}
+
+
+def _normalize_oracle_item(rec: dict) -> dict:
+    """Map Oracle-schema field names to the legacy adaptive-params schema.
+
+    Always returns a NEW dict (caller may mutate). New Oracle-only fields
+    (``metrics``, ``run_mode``, ``direction``, ``confidence``, ``sample_size``,
+    ``finding_id``, ``status``, ``approved``, ``applied``, ``proposed_at``)
+    are preserved verbatim — they are ignored by ``validate_recommendation``
+    but surfaced where useful.
+    """
+    if not isinstance(rec, dict):
+        return rec  # type: ignore[return-value]
+    out = dict(rec)
+    for src, dst in _ORACLE_FIELD_ALIASES.items():
+        if src in out and dst not in out:
+            out[dst] = out[src]
+    return out
 
 
 # ─── Validation result ──────────────────────────────────────────────────
@@ -286,19 +336,37 @@ def process_pending(
         return result
 
     try:
-        recs = json.loads(pf.read_text(encoding="utf-8"))
+        raw = json.loads(pf.read_text(encoding="utf-8"))
     except Exception as e:
         logger.warning("failed to parse %s: %s", pf, e)
         return result
 
-    if not isinstance(recs, list):
-        logger.warning("pending recommendations not a list")
+    # Accept three shapes:
+    #   1. NEW Oracle shape: {"pending": [ ... ]}
+    #   2. LEGACY top-level list (kept for in-memory test fixtures)
+    #   3. LEGACY dict-wrapper: {"recommendations": [...]} or
+    #      {"pending_recommendations": [...]}
+    if isinstance(raw, list):
+        recs = raw
+    elif isinstance(raw, dict):
+        recs = (
+            raw.get(PENDING_KEY)
+            or raw.get("pending_recommendations")
+            or raw.get("recommendations")
+            or []
+        )
+        if not isinstance(recs, list):
+            logger.warning("pending file %s key not a list", pf)
+            return result
+    else:
+        logger.warning("pending file %s not a list or dict", pf)
         return result
 
     for rec in recs:
         if not isinstance(rec, dict):
             result.rejected.append(({"raw": rec}, "not a dict"))
             continue
+        rec = _normalize_oracle_item(rec)
         v = validate_recommendation(rec)
         if not v.accepted:
             # Inline rejected-log write using provided path
@@ -858,6 +926,8 @@ __all__ = [
     "write_proposal",
     "process_pending",
     "PENDING_FILE",
+    "PENDING_KEY",
+    "ORACLE_DIR",
     "PROPOSALS_DIR",
     "REJECTED_LOG",
     # Phase 3 (warehouse advisor):

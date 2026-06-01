@@ -139,7 +139,7 @@ Config: [`config/strategies.py`](../config/strategies.py).
   hard-timeout LLM sanity check before entry. Default `advisory` (log-only) —
   AI cannot block trades.
 - [`agents/session_debriefer.py`](../agents/session_debriefer.py) — end-of-session coaching.
-- [`agents/historical_learner.py`](../agents/historical_learner.py) — daily 23:30 CT.
+- [`agents/strategy_oracle.py`](../agents/strategy_oracle.py) — Phase 4D successor (replaced `agents/historical_learner.py` on 2026-06-01). Runs via `python -m tools.run_oracle <mode>` (research / weekly / daily). Outputs land under `logs/oracle/` with the proposal queue at `logs/oracle/pending_changes.json` (consumed by `agents/adaptive_params.py`).
 - [`core/sentiment_finbert.py`](../core/sentiment_finbert.py) — FinBERT INT8 ONNX. `SENTIMENT_FLOW_ACTIVE=false` — installed, not active.
 - [`core/hmm_regime.py`](../core/hmm_regime.py) — Hidden Markov regime classifier.
 
