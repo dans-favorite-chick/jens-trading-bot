@@ -1,4 +1,4 @@
 strategy,window_idx,is_start,is_end,oos_start,oos_end,best_params,is_pf,is_trades,oos_pf,oos_trades,oos_net,wfe,degraded
 inside_bar,0,2021-01-01,2022-12-31,2023-01-01,2023-06-30,"{""min_body_pct"": 0.3}",1.31,188,1.15,52,210.50,0.878,False
 inside_bar,1,2021-07-01,2023-06-30,2023-07-01,2023-12-31,"{""min_body_pct"": 0.3}",1.28,201,1.08,61,90.20,0.844,False
-inside_bar,2,2022-01-01,2023-12-31,2024-01-01,2024-06-30,"{""min_body_pct"": 0.35}",1.42,215,0.88,58,-120.60
+inside_bar,2,2022-01-01,2023-12-31,2024-01-01,2024-06-30,"{""min_body_pct"": 0.35}",1.42,215,0.88,58,-120.60,0.620,True

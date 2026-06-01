@@ -61,4 +61,7 @@ def test_derived_destructive_drift_rejected(db, tmp_path):
     _ingest(db, csv1)
     tmp2 = tmp_path / "round2"
     tmp2.mkdir()
- 
+    csv2 = tmp2 / "phase1_destr.csv"
+    csv2.write_text("strat_key,n\nbar,200\n")
+    with pytest.raises(ValueError, match="column.s. removed"):
+        _ingest(db, csv2)

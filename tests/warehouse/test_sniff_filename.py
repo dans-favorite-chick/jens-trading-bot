@@ -79,4 +79,7 @@ def test_safe_import_table_handles_leading_digit():
 )
 def test_safe_import_table_rejects_unrecoverable(monkeypatch):
     # Force the defense-in-depth check by monkeypatching SAFE_IDENT.sub to a no-op.
-    import tools.warehou
+    import tools.warehouse.sniff as sniff_mod
+    monkeypatch.setattr(sniff_mod.SAFE_IDENT, "sub", lambda repl, s: s)
+    with pytest.raises(ValueError, match="not a safe"):
+        safe_import_table_name(Path("bad name with spaces.csv"))

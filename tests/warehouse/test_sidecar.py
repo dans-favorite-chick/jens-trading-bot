@@ -23,15 +23,17 @@ def test_loads_full_sidecar_and_hashes(fixtures_dir):
     assert len(res.run_id) == 64
     assert res.sidecar["strategy"] == "foo"
     assert res.sidecar["friction_applied"] is True
-    # In the real impl, meta is embedded in the sidecar dict (not in sidecar_raw wrapper)
-    assert res.sidecar["meta"].get("sidecar_missing") is None or res.sidecar["meta"].get("sidecar_missing") is not True
+    # meta envelope lives on sidecar_raw, not on the parsed sidecar
+    assert res.sidecar_raw["meta"].get("sidecar_present") is True
+    assert res.sidecar_raw["meta"].get("sidecar_missing") is not True
 
 
 def test_missing_sidecar_records_meta_flag(tmp_path):
     csv = tmp_path / "lonely.csv"
     csv.write_text("a,b\n1,2\n")
     res = load_and_hash(csv)
-    assert res.sidecar["meta"]["sidecar_missing"] is True
+    assert res.sidecar == {}
+    assert res.sidecar_raw["meta"]["sidecar_missing"] is True
 
 
 def test_run_id_is_stable_across_calls(fixtures_dir):
@@ -71,11 +73,6 @@ def test_unsupported_schema_version_raises(tmp_path):
         load_and_hash(csv)
 
 
-@pytest.mark.skip(
-    reason="Implementation bug: load_sidecar catches json.JSONDecodeError but not "
-           "UnicodeDecodeError, so b'\\xff\\xfe ...' raises instead of recording b64. "
-           "Flagged to controller for fix."
-)
 def test_parse_error_records_b64_and_proceeds(tmp_path):
     csv = tmp_path / "x.csv"
     csv.write_text("a\n1\n")

@@ -34,10 +34,6 @@ def test_mixed_inserts_both(db, fixtures_dir):
     assert metric_count == 2
 
 
-@pytest.mark.skip(
-    reason="The real _ingest_mixed does NOT validate constant aggregate columns; "
-           "it takes row 0 silently. The plan's rejection behavior is not implemented."
-)
 def test_mixed_rejects_inconsistent_metric(db, tmp_path):
     csv = tmp_path / "bad_mixed.csv"
     csv.write_text(
