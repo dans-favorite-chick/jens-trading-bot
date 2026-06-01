@@ -28,3 +28,7 @@ reportlab>=4.0   # Phoenix routines PDF assembly (post-2026-04-25 §3.6)
 # Verified incident: 2026-05-17 21:08 → 2 duplicates; 2026-05-20 23:30
 # → 3 duplicates (test of the falsely-confident fallback path).
 portalocker>=3.0  # OS-level file locks for run/<bot>.pid
+
+# 2026-05-31 — backtest warehouse (DuckDB analytics store).
+# See docs/superpowers/specs/2026-05-31-backtest-warehouse-design.md.
+duckdb>=1.1

@@ -190,3 +190,12 @@ run/
 # operator runtime state, not source.
 data/equity_state.json
 _commit_msg.tmp
+
+# === 2026-05-31 — backtest warehouse runtime artifacts ===
+# DuckDB file, WAL, PID lock, and JSONL error log are all per-operator
+# runtime state; rebuildable from CSVs via `python -m tools.warehouse ingest`.
+data/warehouse/phoenix.duckdb
+data/warehouse/phoenix.duckdb.wal
+data/warehouse/.ingest.lock
+data/warehouse/ingest_errors.log
+.tmp/
