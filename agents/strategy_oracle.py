@@ -65,6 +65,20 @@ MODEL_ID = "claude-sonnet-4-6"
 TEMPERATURE = 0.0
 MAX_TOOL_ITERATIONS = 25  # hard ceiling on loop length
 
+# Canonical terminal stop_reason values per the Anthropic messages API.
+# Any of these means "no further turn possible" -- the loop must exit
+# regardless of whether tool_use blocks are still present, otherwise a
+# max_tokens response carrying a partial tool_use will spin until the
+# hard ceiling, burning tokens.
+TERMINAL_STOP_REASONS = (
+    "end_turn", "max_tokens", "stop_sequence", "pause_turn", "refusal",
+)
+
+# Training cutoff used to gate the "look-ahead" downgrade note in the
+# debrief. Windows ending after this date no longer overlap the model's
+# training data, so the note should be suppressed.
+LOOKAHEAD_CUTOFF_DATE = "2026-01-31"
+
 # Forbidden module roots -- the CI invariant scanner refuses these.
 _FORBIDDEN_ROOTS = ("bots", "core", "bridge", "data_feeds")
 
@@ -285,8 +299,9 @@ def _write_audit(fh: TextIO | None, event: dict) -> None:
         return
     try:
         fh.write(json.dumps(event, default=str) + "\n")
-    except (TypeError, ValueError) as e:
-        # An unserializable input should never crash the orchestrator.
+    except (TypeError, ValueError, OSError) as e:
+        # An unserializable input or disk/IO failure should never crash
+        # the orchestrator. Log and continue.
         logger.warning("audit write failed: %s; skipping", e)
 
 
@@ -492,33 +507,44 @@ def _check_regime_gate(conn, mode: str) -> dict:
 # Facts builder (deterministic compute layer)
 # ---------------------------------------------------------------------------
 
-def _build_facts(conn, mode: str, regime: dict) -> dict:
+def _build_facts(conn, mode: str, regime: dict, root: Path) -> dict:
     """Build the immutable facts panel for this run.
 
     For each strategy with >= 30 friction-applied trades in the window,
     compute the full risk-metric panel via ``compute_engine``. Also loads
     prior findings (last 30 days) and computes delta vs the most recent
-    facts.json.
+    facts.json under ``root``.
+
+    `root` is threaded explicitly so test fixtures and callers can
+    redirect the prior-findings/prior-facts lookup without relying on
+    the module-level LOGS_ORACLE_ROOT.
     """
     cfg = MODE_CONFIG[mode]
     window = int(cfg["window_days"])
 
     strategies = prepared_queries.strategies_with_trades(conn, window, min_n=30)
-    panel: dict[str, dict] = {}
-    trial_returns: list = []
+
+    # Single pass: pull each strategy's trades exactly once and reuse the
+    # cached DataFrame for both the effective-N calculation and the
+    # per-strategy metric panel. This halves warehouse round-trips and
+    # eliminates a TOCTOU window where a concurrent ingest could change
+    # the data between the two scans.
+    strategy_trades: dict[str, Any] = {}
     for strat in strategies:
         trades_df = prepared_queries.trades_for_strategy(conn, strat, window)
         if trades_df.empty:
             continue
+        strategy_trades[strat] = trades_df
+
+    trial_returns: list = []
+    for trades_df in strategy_trades.values():
         if "pnl_dollars" in trades_df.columns:
             arr = trades_df["pnl_dollars"].to_numpy(dtype=float)
             trial_returns.append(arr)
     n_eff = compute_engine.compute_effective_n(trial_returns) if trial_returns else 1
 
-    for strat in strategies:
-        trades_df = prepared_queries.trades_for_strategy(conn, strat, window)
-        if trades_df.empty:
-            continue
+    panel: dict[str, dict] = {}
+    for strat, trades_df in strategy_trades.items():
         wfa = prepared_queries.wfa_summary_for_strategy(conn, strat)
         panel[strat] = compute_engine.compute_strategy_metrics(
             trades_df, wfa, n_eff,
@@ -537,9 +563,9 @@ def _build_facts(conn, mode: str, regime: dict) -> dict:
         "n_trials_effective": int(n_eff),
         "strategies": panel,
         "findings": [],
-        "prior_findings_loaded": _load_prior_findings(),
+        "prior_findings_loaded": _load_prior_findings(root),
     }
-    prior = _load_prior_facts(mode)
+    prior = _load_prior_facts(mode, root)
     facts["delta_vs_prior"] = compute_engine.compute_delta_vs_prior(
         facts, prior,
     )
@@ -554,15 +580,19 @@ def _today_str() -> str:
 # Prior findings memory load (spec sec 13)
 # ---------------------------------------------------------------------------
 
-def _load_prior_findings(max_age_days: int = 30,
+def _load_prior_findings(root: Path,
+                         max_age_days: int = 30,
                          cap: int = 10) -> list[dict]:
-    """Walk ``logs/oracle/*/<date>_facts.json``, gather findings within
+    """Walk ``<root>/*/<date>_facts.json``, gather findings within
     `max_age_days`, drop expired ones, cap at `cap` most recent rows.
+
+    `root` is the oracle logs root; callers (notably `_build_facts` and
+    `run`) thread the value through so test fixtures can redirect it
+    without monkey-patching the module-level constant.
 
     Best-effort. Any unparseable file is skipped with a debug log.
     """
     out: list[dict] = []
-    root = LOGS_ORACLE_ROOT
     if not root.exists():
         return out
     today = _dt.date.today()
@@ -600,12 +630,12 @@ def _load_prior_findings(max_age_days: int = 30,
     return out[:cap]
 
 
-def _load_prior_facts(mode: str) -> dict | None:
+def _load_prior_facts(mode: str, root: Path) -> dict | None:
     """Return the most recent prior facts.json for delta computation.
 
     Looks first in `<mode>/` then `research/` as a fallback baseline.
+    `root` is threaded in so the lookup respects test redirection.
     """
-    root = LOGS_ORACLE_ROOT
     for sub in (mode, "research"):
         d = root / sub
         if not d.exists():
@@ -821,6 +851,7 @@ def _run_llm_loop(client: Anthropic,
     messages: list[dict] = [{"role": "user", "content": user_msg}]
     total_tokens = 0
     final_text = ""
+    budget_nudge_sent = False
 
     for iteration in range(MAX_TOOL_ITERATIONS):
         resp = client.messages.create(
@@ -844,8 +875,20 @@ def _run_llm_loop(client: Anthropic,
         tool_uses = _extract_tool_uses(blocks)
         stop_reason = getattr(resp, "stop_reason", "")
 
-        if not tool_uses or stop_reason == "end_turn":
-            # No more tool calls. We're done.
+        # Exit on any canonical terminal stop_reason BEFORE dispatching
+        # further tool calls. This prevents a max_tokens-truncated turn
+        # (which can still carry partial tool_use blocks) from spinning
+        # the loop until MAX_TOOL_ITERATIONS.
+        if stop_reason in TERMINAL_STOP_REASONS:
+            return final_text, total_tokens
+        if not tool_uses:
+            # stop_reason was something non-terminal (e.g. "tool_use")
+            # but the response carries no tool_use blocks. That's a
+            # malformed response shape -- bail out rather than loop.
+            logger.warning(
+                "LLM returned stop_reason=%r with no tool_uses; exiting loop",
+                stop_reason,
+            )
             return final_text, total_tokens
 
         # Echo the assistant content (text + tool_use blocks) into the
@@ -868,21 +911,27 @@ def _run_llm_loop(client: Anthropic,
                 "content": json.dumps(result, default=str),
                 "is_error": not bool(result.get("ok")),
             })
-        messages.append({"role": "user", "content": tool_result_blocks})
 
-        # Soft token-budget enforcement: nudge the LLM to wrap up.
-        if total_tokens >= token_budget:
+        # Soft token-budget enforcement: append the nudge as an extra
+        # text block INSIDE the tool_result user message (not as a second
+        # user message). The Anthropic API requires strict
+        # user/assistant alternation -- appending a second consecutive
+        # user message returns 400 on the next call.
+        if total_tokens >= token_budget and not budget_nudge_sent:
             logger.warning(
                 "token budget %d exceeded (used %d); requesting wrap",
                 token_budget, total_tokens,
             )
-            messages.append({
-                "role": "user",
-                "content": (
-                    "Token budget exceeded. Stop calling tools and produce a "
-                    "concise final narrative now."
+            tool_result_blocks.append({
+                "type": "text",
+                "text": (
+                    "Token budget exceeded. Stop calling tools and "
+                    "produce a concise final narrative on your next turn."
                 ),
             })
+            budget_nudge_sent = True
+
+        messages.append({"role": "user", "content": tool_result_blocks})
 
     logger.warning("MAX_TOOL_ITERATIONS (%d) reached; returning latest text",
                     MAX_TOOL_ITERATIONS)
@@ -960,18 +1009,32 @@ def _write_debrief(mode: str, today: str, narrative: str,
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{today}_debrief.md"
 
-    n_proposals = sum(
-        1 for f in facts.get("findings", []) or []
-    )  # number of findings; proposals tracked separately
     report_card = _render_report_card(facts)
     regime_section = _render_regime_section(regime)
 
-    lookahead_note = (
-        "## Look-Ahead Note\n"
-        "Analysis window overlaps Claude's training cutoff. "
-        "Interpretive findings downgraded one tier per spec sec 9. "
-        "Fact transcription unaffected."
-    )
+    # Gate the look-ahead note on a date comparison: only render it when
+    # the analysis window actually overlaps Claude's training cutoff.
+    # Windows that end strictly after the cutoff don't need the
+    # confidence downgrade warning.
+    lookahead_note: str | None = None
+    window_end = facts.get("window_end")
+    if window_end:
+        try:
+            window_end_dt = _dt.date.fromisoformat(window_end)
+            cutoff_dt = _dt.date.fromisoformat(LOOKAHEAD_CUTOFF_DATE)
+            if window_end_dt <= cutoff_dt:
+                lookahead_note = (
+                    "## Look-Ahead Note\n"
+                    f"Analysis window overlaps Claude's training cutoff "
+                    f"(~{LOOKAHEAD_CUTOFF_DATE}). Interpretive findings "
+                    f"have confidence downgraded one tier per spec sec 9. "
+                    f"Fact transcription unaffected."
+                )
+        except (TypeError, ValueError):
+            # Malformed dates -- skip the note rather than crash.
+            lookahead_note = None
+
+    lookahead_block = f"{lookahead_note}\n" if lookahead_note else ""
 
     if halted:
         body = (
@@ -979,7 +1042,7 @@ def _write_debrief(mode: str, today: str, narrative: str,
             f"## Status\nThis run halted before producing a narrative.\n\n"
             f"{regime_section}\n\n"
             f"{report_card}\n\n"
-            f"{lookahead_note}\n"
+            f"{lookahead_block}"
         )
     else:
         rej_note = ""
@@ -996,7 +1059,7 @@ def _write_debrief(mode: str, today: str, narrative: str,
             f"## Narrative\n{narrative}\n{rej_note}\n"
             f"{regime_section}\n\n"
             f"{report_card}\n\n"
-            f"{lookahead_note}\n"
+            f"{lookahead_block}"
         )
 
     out_path.write_text(body, encoding="utf-8")
@@ -1056,10 +1119,21 @@ def run(mode: Mode, save_baseline: bool = True,
     Returns a dict with the four output paths plus run-summary counts.
     """
     if mode not in MODE_CONFIG:
+        # Use the same full 11-key shape every other halt branch returns
+        # so downstream consumers can treat the result dict uniformly.
         return {
             "status": "halted_preflight_failure",
             "mode": mode,
             "reason": f"unknown mode {mode!r}",
+            "facts_path": None,
+            "debrief_path": None,
+            "audit_path": None,
+            "pending_changes_path": None,
+            "n_findings": 0,
+            "n_proposals_staged": 0,
+            "n_findings_rejected_by_verifier": 0,
+            "regime": {},
+            "verifier_result": None,
         }
 
     # Pre-flight #1: API key.
@@ -1106,7 +1180,7 @@ def run(mode: Mode, save_baseline: bool = True,
         try:
             regime = _check_regime_gate(conn, mode)
             # Phase 2: deterministic compute layer.
-            facts = _build_facts(conn, mode, regime)
+            facts = _build_facts(conn, mode, regime, root)
         finally:
             try:
                 conn.close()
@@ -1230,5 +1304,7 @@ __all__ = [
     "WAREHOUSE_PATH",
     "LOGS_ORACLE_ROOT",
     "MODEL_ID",
+    "TERMINAL_STOP_REASONS",
+    "LOOKAHEAD_CUTOFF_DATE",
     "__no_trade_path_imports__",
 ]

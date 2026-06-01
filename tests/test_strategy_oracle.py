@@ -487,7 +487,10 @@ class TestRegimeHalt:
         monkeypatch.setattr(so, "_open_warehouse_conn",
                              lambda path: _StubConn())
         monkeypatch.setattr(so, "_check_regime_gate", lambda conn, mode: unstable)
-        monkeypatch.setattr(so, "_build_facts", lambda conn, mode, regime: synth_facts)
+        monkeypatch.setattr(
+            so, "_build_facts",
+            lambda conn, mode, regime, root=None: synth_facts,
+        )
 
         result = so.run("weekly", client=_StubAnthropicClient())
         assert result["status"] == "halted_regime_unstable"
@@ -511,8 +514,10 @@ class TestRegimeHalt:
                              lambda path: _StubConn())
         monkeypatch.setattr(so, "_check_regime_gate",
                              lambda conn, mode: skipped)
-        monkeypatch.setattr(so, "_build_facts",
-                             lambda conn, mode, regime: synth_facts)
+        monkeypatch.setattr(
+            so, "_build_facts",
+            lambda conn, mode, regime, root=None: synth_facts,
+        )
 
         client = _StubAnthropicClient([
             _StubMessage([{"type": "text", "text": "Daily preliminary scan."}],
@@ -575,8 +580,13 @@ class _StubConn:
         self.close()
 
 
-def _stub_build_facts(_conn, mode, regime):
-    """Synthesize a minimal facts dict for pipeline tests."""
+def _stub_build_facts(_conn, mode, regime, _root=None):
+    """Synthesize a minimal facts dict for pipeline tests.
+
+    Accepts an optional ``_root`` argument to match the production
+    signature (which threads the logs root in for prior-findings lookup).
+    Tests ignore it -- the stub returns a synthetic panel directly.
+    """
     return {
         "run_mode": mode,
         "run_date": "2026-05-31",
@@ -811,3 +821,345 @@ class TestPublicSurface:
         for t in so.TOOLS:
             assert "input_schema" in t
             assert t["input_schema"]["type"] == "object"
+
+
+# ===========================================================================
+# TestCodeReviewFixes -- regression coverage for Task 5 code review fixes
+# ===========================================================================
+
+class _OSErrorAuditStub:
+    """Stub audit handle that raises OSError on every write.
+
+    Simulates disk-full / closed-handle / permission-revoked conditions.
+    """
+
+    def __init__(self):
+        self.closed = False
+
+    def write(self, _payload):
+        raise OSError("simulated audit IO failure")
+
+    def flush(self):
+        return None
+
+    def close(self):
+        self.closed = True
+
+
+class TestCodeReviewFixes:
+    """Regression tests for the Task 5 code review fixes."""
+
+    # --- Critical 1: _write_audit must swallow OSError --------------------
+
+    def test_write_audit_swallows_oserror(self):
+        """OSError from the fh.write must not propagate -- the orchestrator
+        catches it and logs a warning so the LLM loop survives."""
+        fh = _OSErrorAuditStub()
+        # Must not raise.
+        so._write_audit(fh, {"tool": "think", "input": {"reasoning": "x"}})
+
+    def test_dispatch_tool_survives_audit_oserror(self, synth_facts):
+        """Even when the audit handle is broken, dispatching a tool must
+        still return the tool's normal result dict."""
+        ctx = so._RunCtx(
+            mode="weekly",
+            facts=synth_facts,
+            audit_fh=_OSErrorAuditStub(),
+            run_date="2026-05-31",
+            pending_proposals=[],
+        )
+        result = so._dispatch_tool("think", {"reasoning": "ok"}, ctx)
+        assert result["ok"] is True
+
+    # --- Critical 2: max_tokens must terminate the loop -------------------
+
+    def test_max_tokens_exits_loop_after_one_turn(self, monkeypatch,
+                                                    tmp_logs_root, tmp_path):
+        """A max_tokens response (even with a tool_use block) must terminate
+        the LLM loop immediately rather than spinning for 25 iterations."""
+        regime = {
+            "stable": True, "z_score": 0.42, "warning": None,
+            "mode_skipped": False, "baseline_n_months": 6,
+            "latest_month": "2026-05", "latest_sharpe_proxy": 0.12,
+        }
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-fake")
+        monkeypatch.setattr(so, "_run_preflight",
+                             lambda mode: {"ok": True, "warehouse_path":
+                                            str(tmp_path / "wh.duckdb")})
+        monkeypatch.setattr(so, "_open_warehouse_conn",
+                             lambda path: _StubConn())
+        monkeypatch.setattr(so, "_check_regime_gate",
+                             lambda conn, mode: regime)
+        monkeypatch.setattr(so, "_build_facts", _stub_build_facts)
+
+        client = _StubAnthropicClient([
+            _StubMessage(
+                [
+                    {"type": "text", "text": "Partial narrative truncated."},
+                    {"type": "tool_use", "name": "think", "id": "tu1",
+                     "input": {"reasoning": "more to think"}},
+                ],
+                stop_reason="max_tokens",
+            ),
+        ])
+        result = so.run("weekly", client=client)
+        # Run completes (not halted) and only one API call was made.
+        assert result["status"] == "complete"
+        assert len(client.messages.calls) == 1
+
+    def test_stop_sequence_also_exits_loop(self, monkeypatch,
+                                             tmp_logs_root, tmp_path):
+        """Any canonical terminal stop_reason should exit -- spot-check
+        stop_sequence."""
+        regime = {
+            "stable": True, "z_score": 0.42, "warning": None,
+            "mode_skipped": False, "baseline_n_months": 6,
+            "latest_month": "2026-05", "latest_sharpe_proxy": 0.12,
+        }
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-fake")
+        monkeypatch.setattr(so, "_run_preflight",
+                             lambda mode: {"ok": True, "warehouse_path":
+                                            str(tmp_path / "wh.duckdb")})
+        monkeypatch.setattr(so, "_open_warehouse_conn",
+                             lambda path: _StubConn())
+        monkeypatch.setattr(so, "_check_regime_gate",
+                             lambda conn, mode: regime)
+        monkeypatch.setattr(so, "_build_facts", _stub_build_facts)
+
+        client = _StubAnthropicClient([
+            _StubMessage(
+                [{"type": "text", "text": "Stopped at sequence."}],
+                stop_reason="stop_sequence",
+            ),
+        ])
+        result = so.run("weekly", client=client)
+        assert result["status"] == "complete"
+        assert len(client.messages.calls) == 1
+
+    def test_terminal_stop_reasons_constant_includes_required_values(self):
+        """The exported constant must include max_tokens at minimum."""
+        for required in ("end_turn", "max_tokens", "stop_sequence",
+                          "pause_turn", "refusal"):
+            assert required in so.TERMINAL_STOP_REASONS
+
+    # --- Critical 3: TOCTOU single-pass strategy_trades --------------------
+
+    def test_build_facts_calls_trades_for_strategy_once_per_strategy(
+            self, monkeypatch, tmp_path):
+        """Single warehouse round-trip per strategy -- no double scan."""
+        import pandas as pd
+
+        # Tally how many times trades_for_strategy is asked for each strat.
+        call_counts: dict[str, int] = {}
+
+        def fake_trades(_conn, strat, _window):
+            call_counts[strat] = call_counts.get(strat, 0) + 1
+            return pd.DataFrame({
+                "pnl_dollars": [10.0, -5.0, 3.0] * 15,  # 45 rows
+            })
+
+        def fake_strategies(_conn, _window, min_n=30):
+            return ["a", "b", "c"]
+
+        def fake_wfa(_conn, _strat):
+            return {"mean_oos_pf": 1.0, "mean_is_pf": 1.0,
+                    "wfa_pass": True}
+
+        def fake_metrics(_trades, _wfa, _n_eff):
+            return {"metrics": {"n_trades": 45}, "gates": {}}
+
+        def fake_eff_n(_returns):
+            return 5
+
+        def fake_delta(_facts, _prior):
+            return {"is_baseline": True}
+
+        monkeypatch.setattr(so.prepared_queries, "strategies_with_trades",
+                             fake_strategies)
+        monkeypatch.setattr(so.prepared_queries, "trades_for_strategy",
+                             fake_trades)
+        monkeypatch.setattr(so.prepared_queries, "wfa_summary_for_strategy",
+                             fake_wfa)
+        monkeypatch.setattr(so.compute_engine, "compute_effective_n",
+                             fake_eff_n)
+        monkeypatch.setattr(so.compute_engine, "compute_strategy_metrics",
+                             fake_metrics)
+        monkeypatch.setattr(so.compute_engine, "compute_delta_vs_prior",
+                             fake_delta)
+
+        regime = {"stable": True}
+        facts = so._build_facts(_StubConn(), "weekly", regime, tmp_path)
+
+        # Each strategy queried exactly once (TOCTOU fix).
+        assert call_counts == {"a": 1, "b": 1, "c": 1}
+        assert set(facts["strategies"].keys()) == {"a", "b", "c"}
+
+    # --- Important 4: unknown-mode early return has full 11-key shape -----
+
+    def test_unknown_mode_returns_full_shape(self, monkeypatch, tmp_logs_root):
+        """run('bogus') must return the same 11 keys every other halt
+        branch returns so callers can treat the dict uniformly."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-fake")
+        result = so.run("bogus")
+        expected = {
+            "status", "mode", "reason",
+            "facts_path", "debrief_path", "audit_path",
+            "pending_changes_path",
+            "n_findings", "n_proposals_staged",
+            "n_findings_rejected_by_verifier",
+            "regime", "verifier_result",
+        }
+        missing = expected - set(result.keys())
+        assert not missing, f"unknown-mode return missing keys: {missing}"
+        assert result["status"] == "halted_preflight_failure"
+
+    # --- Important 5: budget nudge merged into single user message --------
+
+    def test_budget_nudge_does_not_duplicate_user_message(
+            self, monkeypatch, tmp_logs_root, tmp_path):
+        """When the token budget is exceeded, the wrap-up nudge must be
+        merged into the existing tool_result user message (not appended
+        as a second consecutive user message, which would 400 the API)."""
+        regime = {
+            "stable": True, "z_score": 0.42, "warning": None,
+            "mode_skipped": False, "baseline_n_months": 6,
+            "latest_month": "2026-05", "latest_sharpe_proxy": 0.12,
+        }
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-fake")
+        monkeypatch.setattr(so, "_run_preflight",
+                             lambda mode: {"ok": True, "warehouse_path":
+                                            str(tmp_path / "wh.duckdb")})
+        monkeypatch.setattr(so, "_open_warehouse_conn",
+                             lambda path: _StubConn())
+        monkeypatch.setattr(so, "_check_regime_gate",
+                             lambda conn, mode: regime)
+        monkeypatch.setattr(so, "_build_facts", _stub_build_facts)
+        # Force the budget to be exceeded after the first turn.
+        monkeypatch.setitem(so.MODE_CONFIG["weekly"], "token_budget", 100)
+
+        client = _StubAnthropicClient([
+            # Turn 1: emit a tool_use with HUGE usage to blow the budget.
+            _StubMessage(
+                [{"type": "tool_use", "name": "think", "id": "tu1",
+                  "input": {"reasoning": "step 1"}}],
+                stop_reason="tool_use",
+                input_tokens=500, output_tokens=500,
+            ),
+            # Turn 2: respond with a terminal stop_reason so the loop exits.
+            _StubMessage(
+                [{"type": "text", "text": "Wrapping up."}],
+                stop_reason="end_turn",
+                input_tokens=10, output_tokens=10,
+            ),
+        ])
+        result = so.run("weekly", client=client)
+        assert result["status"] == "complete"
+        # Inspect the messages array on the SECOND API call -- it should
+        # have valid alternation (no two consecutive user messages).
+        second_call = client.messages.calls[1]
+        msgs = second_call["messages"]
+        roles = [m["role"] for m in msgs]
+        for i in range(1, len(roles)):
+            assert roles[i] != roles[i - 1], (
+                f"consecutive same-role messages at {i}: {roles}"
+            )
+        # And the merged user message must contain BOTH a tool_result
+        # block AND the budget-nudge text block.
+        user_after_assist = msgs[2]  # user, assistant, user(tool_result+nudge)
+        assert user_after_assist["role"] == "user"
+        types_in_user = [b["type"] for b in user_after_assist["content"]]
+        assert "tool_result" in types_in_user
+        assert "text" in types_in_user
+
+    # --- Important 8: _load_prior_findings reads `root` parameter --------
+
+    def test_load_prior_findings_uses_root_param(self, tmp_path):
+        """_load_prior_findings must read from the explicit `root`
+        argument, not the module-level LOGS_ORACLE_ROOT."""
+        # Build a synthetic logs/oracle/weekly/<date>_facts.json under a
+        # path that is NOT the module-level constant.
+        custom_root = tmp_path / "alt_logs" / "oracle"
+        (custom_root / "weekly").mkdir(parents=True)
+        facts_path = custom_root / "weekly" / "2026-05-30_facts.json"
+        facts_path.write_text(json.dumps({
+            "run_mode": "weekly",
+            "run_date": "2026-05-30",
+            "findings": [
+                {"id": "test_finding_1", "strategy": "x",
+                 "rationale": "test rationale",
+                 "confidence": "MEDIUM",
+                 "expires_after_days": 30},
+            ],
+        }), encoding="utf-8")
+
+        found = so._load_prior_findings(custom_root)
+        assert len(found) == 1
+        assert found[0]["id"] == "test_finding_1"
+
+    # --- Minor 11: lookahead note gated by date ---------------------------
+
+    def test_lookahead_note_suppressed_when_window_after_cutoff(
+            self, monkeypatch, tmp_logs_root, tmp_path):
+        """If the analysis window ends strictly after LOOKAHEAD_CUTOFF_DATE,
+        the lookahead note should NOT be emitted in the debrief."""
+        # Push the cutoff to a date BEFORE the stub's window_end of
+        # 2026-05-30 so the suppression branch fires.
+        monkeypatch.setattr(so, "LOOKAHEAD_CUTOFF_DATE", "2026-01-31")
+
+        regime = {
+            "stable": True, "z_score": 0.42, "warning": None,
+            "mode_skipped": False, "baseline_n_months": 6,
+            "latest_month": "2026-05", "latest_sharpe_proxy": 0.12,
+        }
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-fake")
+        monkeypatch.setattr(so, "_run_preflight",
+                             lambda mode: {"ok": True, "warehouse_path":
+                                            str(tmp_path / "wh.duckdb")})
+        monkeypatch.setattr(so, "_open_warehouse_conn",
+                             lambda path: _StubConn())
+        monkeypatch.setattr(so, "_check_regime_gate",
+                             lambda conn, mode: regime)
+        monkeypatch.setattr(so, "_build_facts", _stub_build_facts)
+
+        client = _StubAnthropicClient([
+            _StubMessage(
+                [{"type": "text", "text": "Narrative."}],
+                stop_reason="end_turn",
+            ),
+        ])
+        result = so.run("weekly", client=client)
+        text = Path(result["debrief_path"]).read_text(encoding="utf-8")
+        assert "Look-Ahead Note" not in text
+
+    def test_lookahead_note_present_when_window_overlaps_cutoff(
+            self, monkeypatch, tmp_logs_root, tmp_path):
+        """When window_end is at or before the cutoff, the note must
+        be rendered."""
+        # Cutoff set well after the stub's window_end of 2026-05-30
+        # -> window_end <= cutoff -> note SHOULD render.
+        monkeypatch.setattr(so, "LOOKAHEAD_CUTOFF_DATE", "2026-12-31")
+
+        regime = {
+            "stable": True, "z_score": 0.42, "warning": None,
+            "mode_skipped": False, "baseline_n_months": 6,
+            "latest_month": "2026-05", "latest_sharpe_proxy": 0.12,
+        }
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-fake")
+        monkeypatch.setattr(so, "_run_preflight",
+                             lambda mode: {"ok": True, "warehouse_path":
+                                            str(tmp_path / "wh.duckdb")})
+        monkeypatch.setattr(so, "_open_warehouse_conn",
+                             lambda path: _StubConn())
+        monkeypatch.setattr(so, "_check_regime_gate",
+                             lambda conn, mode: regime)
+        monkeypatch.setattr(so, "_build_facts", _stub_build_facts)
+
+        client = _StubAnthropicClient([
+            _StubMessage(
+                [{"type": "text", "text": "Narrative."}],
+                stop_reason="end_turn",
+            ),
+        ])
+        result = so.run("weekly", client=client)
+        text = Path(result["debrief_path"]).read_text(encoding="utf-8")
+        assert "Look-Ahead Note" in text
