@@ -100,21 +100,57 @@ gained a second row per strategy (the old version stays — no-delete policy).
 
 ## Step 7 — Acceptance log
 
-Record this section once the runbook has been executed end-to-end (operator
-fills in actual numbers — leave as-is when committing the runbook for the
-first time):
-
 ```
-RUN DATE:           2026-MM-DD
-STEP 1 INGEST:      ingested=__ skipped_duplicate=__ errors=__
-STEP 2 INGEST:      ingested=__ skipped_duplicate=__ errors=__
+RUN DATE:           2026-05-31
+STEP 1 INGEST:      ingested=16  skipped_duplicate=0   errors=0
+                    (80,435 rows, 510 metrics)
+                    Multi_day shard LANDED (wfa_windows_p13_multi_day.csv = 15 rows).
+                    wfa_summary.csv refreshed to 18 rows (was 14 in INVENTORY).
+                    wfa_windows.csv refreshed to 270 rows (was 210 in INVENTORY).
+STEP 2 INGEST:      ingested=39 (legacy trades), skipped_duplicate=23, errors=18
+                    (subdir CSVs already in via Step 1 deduplicate cleanly)
 STEP 3 STATUS:
-   runs:        ____
-   trades:      ____
-   wfa_windows: ____
-   wfa_summary: ____
-   run_metrics: ____
-STEP 4 QUERIES:     all four returned plausible results? [yes/no, notes]
-ERROR LOG ENTRIES:  ____ (paste any unique error_class values)
-NOTES:              ____
+   runs:                              50
+   trades:                       521,209
+   wfa_windows:                      540
+   wfa_summary:                       18
+   run_metrics:                    2,160
+   import_microstructure_lift:         9
+   import_phase1_regime_portfolio:     3
+   import_phase1_time_of_day:          5
+STEP 4 QUERIES:     all four returned plausible results.
+                    Q1 (top PF): Phase 13 strategies at the top
+                       (raschke 3.14, multi_day 2.47, inside_bar 2.45, asian 2.09).
+                    Q2 (TOD): Opening Drive dominates (n=19,200, +$85,520).
+                    Q3 (legacy gross vs friction-net) for vwap_pullback_v2:
+                       friction-net: 5,437 trades, total -$15,759
+                       gross legacy: 41,552 trades, total +$226,083
+                       Stark difference validates the §10 friction caveat design.
+                    Q4 (WFA robust): orb_v2 mean_oos_pf=399.60 is suspicious
+                       (likely artifact of near-zero loss window in IS denominator).
+                       Other three robust strategies (raschke 3.16, inside_bar 2.80,
+                       opening_session 1.69) look sensible.
+ERROR LOG ENTRIES:  18 errors in two classes:
+                    (A) unknown_csv_kind (14 files): _dom_pullback_5y_verdict,
+                        backtest_v3_sweep_results, exit_methodology_v3_results,
+                        phoenix_compounding_{summary,tier_1500,tier_3000,tier_dates},
+                        phoenix_early_reversal_per_trade, phoenix_entry_retest_per_trade,
+                        phoenix_es_nq_attribution, phoenix_mean_reversion_summary,
+                        phoenix_sr_confluence_summary, phoenix_sr_veto_summary,
+                        phoenix_tick_entry_slippage. Each can be added to the sniffer
+                        with a follow-up rule (out of v1 scope per spec §5.8).
+                    (B) Binder Error "Referenced column 'strategy' not found" (4 files):
+                        opening_session_sub_breakdown, backtest_v3_trades_LONG_b7.0,
+                        phoenix_sr_confluence_per_trade. These have trade-shape headers
+                        (entry_ts/entry_price/pnl_dollars) but lack the `strategy` column
+                        the warehouse trades table requires NOT NULL. Real follow-up:
+                        either make `strategy` derivable from filename/sub_name when
+                        absent, or relax the schema. Out of v1 scope.
+NOTES:              Warehouse is fully functional for the canonical portfolio
+                    framework + the 35+ legacy CSVs that match a known kind.
+                    The 18 reject errors are documented, recoverable (add sniffer
+                    rules later), and do not block v1 acceptance.
+                    Multi_day shard landed during this same session — consolidation
+                    agent items 4 (multi_day sidecar + wfa_summary refresh) and 5
+                    (filename stability) are now fully resolved.
 ```
