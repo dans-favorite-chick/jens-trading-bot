@@ -817,6 +817,30 @@ TOOL SURFACE (5 tools exactly)
 - propose_change(...)           : stage a parameter proposal (HUMAN review)
 """
 
+_REQUIRED_OUTPUTS = """\
+REQUIRED OUTPUTS (your turn is NOT done until these are produced)
+1. For every strategy you fetch_strategy_stats on, you MUST call
+   write_finding at least once before ending your turn. CONFIRMED for
+   gate-passing strategies, REFUTED for losing strategies (HLZ t < -3 or
+   PF < 1.0), INCONCLUSIVE for borderline. Skipping write_finding is the
+   number-one failure mode of this agent -- a run that returns
+   n_findings=0 is a wasted run.
+2. For every CONFIRMED finding whose strategy has all_pass_for_proposal=
+   TRUE AND the Regime section says STABLE, you MUST also call
+   propose_change at least once. Direction- or hour-specific proposals
+   are encouraged; otherwise propose a small-touch parameter (e.g.
+   confirming a current setting is right by proposing it unchanged with
+   a "validated" rationale). Skipping propose_change when gates pass and
+   regime is stable is the second-most-common failure.
+3. Only end your turn after both (1) and (2) are satisfied for the
+   strategies you investigated. Do NOT end your turn after only fetching
+   data -- fetches without write_finding are wasted tokens.
+4. After write_finding and propose_change calls are done, emit a short
+   final narrative summary (~200-500 words) covering: confirmed
+   strategies, refuted strategies, key proposals staged, and any open
+   questions. This narrative goes into the debrief.md.
+"""
+
 SYSTEM_PROMPT_RESEARCH = (
     "You are the Phoenix Strategy Oracle in RESEARCH mode. "
     "You are reviewing 5 years of trade data to (re-)establish ground "
@@ -824,7 +848,8 @@ SYSTEM_PROMPT_RESEARCH = (
     + _STRUCTURAL_RULES + "\n"
     + _CONFIDENCE_RUBRIC + "\n"
     + _PROPOSAL_GATES + "\n"
-    + _TOOL_SURFACE
+    + _TOOL_SURFACE + "\n"
+    + _REQUIRED_OUTPUTS
 )
 
 SYSTEM_PROMPT_WEEKLY = (
@@ -834,14 +859,16 @@ SYSTEM_PROMPT_WEEKLY = (
     + _STRUCTURAL_RULES + "\n"
     + _CONFIDENCE_RUBRIC + "\n"
     + _PROPOSAL_GATES + "\n"
-    + _TOOL_SURFACE
+    + _TOOL_SURFACE + "\n"
+    + _REQUIRED_OUTPUTS
 )
 
 SYSTEM_PROMPT_DAILY = (
     "You are the Phoenix Strategy Oracle in DAILY mode. "
     "This is a light pass over a single day. Output is preliminary and "
     "NOT actionable. propose_change is DISABLED. Confidence ceiling is "
-    "LOW. Your job is anomaly surfacing, nothing else.\n\n"
+    "LOW. Your job is anomaly surfacing, nothing else. write_finding is "
+    "still required for any strategy you fetch -- but proposals stay off.\n\n"
     + _STRUCTURAL_RULES + "\n"
     + _CONFIDENCE_RUBRIC + "\n"
     + _TOOL_SURFACE
