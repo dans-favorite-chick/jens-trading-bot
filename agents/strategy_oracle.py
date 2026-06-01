@@ -40,6 +40,7 @@ import datetime as _dt
 import json
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Any, Literal, TextIO
 
@@ -294,11 +295,17 @@ def _ci_invariant_check() -> None:
 # ---------------------------------------------------------------------------
 
 def _write_audit(fh: TextIO | None, event: dict) -> None:
-    """Append one JSON line to the audit handle (no-op when None)."""
+    """Append one JSON line to the audit handle (no-op when None).
+
+    Flushes immediately so a crash mid-run still leaves the event on disk
+    -- the audit is the operator's only record of what the LLM did before
+    the crash.
+    """
     if fh is None:
         return
     try:
         fh.write(json.dumps(event, default=str) + "\n")
+        fh.flush()
     except (TypeError, ValueError, OSError) as e:
         # An unserializable input or disk/IO failure should never crash
         # the orchestrator. Log and continue.
@@ -308,7 +315,10 @@ def _write_audit(fh: TextIO | None, event: dict) -> None:
 def _open_audit(mode: str, today: str, root: Path) -> TextIO:
     out_dir = root / mode
     out_dir.mkdir(parents=True, exist_ok=True)
-    return open(out_dir / f"{today}_audit.jsonl", "w", encoding="utf-8")
+    # Append mode so same-day re-runs (e.g. operator triggers weekly twice
+    # to debug something) don't truncate the prior audit. One audit file
+    # per (mode, date) accumulates events from every run that day.
+    return open(out_dir / f"{today}_audit.jsonl", "a", encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -335,6 +345,12 @@ def _tool_check_regime(_args: dict, ctx: _RunCtx) -> dict:
     return {"ok": True, "regime": ctx.facts.get("regime", {})}
 
 
+_VALID_CONFIDENCES_FINDING = ("LOW", "MEDIUM", "HIGH")
+_VALID_VERDICTS = (
+    "CONFIRMED", "REFUTED", "INCONCLUSIVE", "INSUFFICIENT_DATA",
+)
+
+
 def _tool_write_finding(args: dict, ctx: _RunCtx) -> dict:
     try:
         n = int(args.get("sample_size", 0))
@@ -345,17 +361,37 @@ def _tool_write_finding(args: dict, ctx: _RunCtx) -> dict:
             "ok": False,
             "error": f"sample_size={n} below floor (30 required)",
         }
-    verdict = args.get("verdict", "")
+    # Normalize verdict / confidence so LLM-supplied 'medium' / 'confirmed'
+    # don't slip through. FAILED is a legacy reject keyword caught here
+    # before the enum check so the operator sees a more specific message.
+    verdict = (args.get("verdict") or "").strip().upper()
     if verdict == "FAILED":
         return {
             "ok": False,
             "error": "verdict 'FAILED' is not an allowed finding verdict",
         }
+    if verdict not in _VALID_VERDICTS:
+        return {
+            "ok": False,
+            "error": (
+                f"verdict={verdict!r} not in "
+                f"{sorted(_VALID_VERDICTS)}"
+            ),
+        }
+    confidence = (args.get("confidence") or "").strip().upper()
+    if confidence not in _VALID_CONFIDENCES_FINDING:
+        return {
+            "ok": False,
+            "error": (
+                f"confidence={confidence!r} not in "
+                f"{sorted(_VALID_CONFIDENCES_FINDING)}"
+            ),
+        }
     finding = {
         "id": args.get("id"),
         "strategy": args.get("strategy"),
         "verdict": verdict,
-        "confidence": args.get("confidence"),
+        "confidence": confidence,
         "sample_size": n,
         "rationale": args.get("rationale", ""),
         "supporting_metrics": args.get("supporting_metrics", {}),
@@ -376,7 +412,9 @@ def _tool_propose_change(args: dict, ctx: _RunCtx) -> dict:
                 "findings only"
             ),
         }
-    confidence = args.get("confidence", "")
+    # Normalize confidence to upper-case so LLM variants like 'medium'
+    # don't slip through.
+    confidence = (args.get("confidence") or "").strip().upper()
     if confidence not in ("MEDIUM", "HIGH"):
         return {
             "ok": False,
@@ -399,20 +437,38 @@ def _tool_propose_change(args: dict, ctx: _RunCtx) -> dict:
             "ok": False,
             "error": "finding_id is required to link evidence",
         }
+    # Spec sec 12d: `current_value` MUST come from the compute layer via
+    # AST parse of config/strategies.py -- never from the LLM. Override
+    # whatever the model supplied with the real value; if the lookup
+    # fails (missing key, malformed config), fall back to the LLM-supplied
+    # value and log a warning so the auditor can spot the discrepancy.
+    strategy_name = args.get("strategy")
+    parameter_name = args.get("parameter_name")
+    current_value: Any = args.get("current_value")
+    try:
+        current_value = prepared_queries.current_param_value(
+            strategy_name, parameter_name,
+        )
+    except (KeyError, FileNotFoundError, ValueError) as e:
+        logger.warning(
+            "could not AST-parse current value for %s.%s: %s; "
+            "using LLM-supplied value",
+            strategy_name, parameter_name, e,
+        )
     proposal = {
         "proposed_at": ctx.run_date,
         "run_mode": ctx.mode,
-        "strategy": args.get("strategy"),
+        "strategy": strategy_name,
         "direction": args.get("direction"),
-        "parameter_name": args.get("parameter_name"),
-        "current_value": args.get("current_value"),
+        "parameter_name": parameter_name,
+        "current_value": current_value,
         "proposed_value": args.get("proposed_value"),
         "rationale": args.get("rationale", ""),
         "confidence": confidence,
         "sample_size": n,
         "finding_id": args.get("finding_id"),
         "expected_improvement": args.get("expected_improvement", ""),
-        "metrics": _proposal_metrics_snapshot(ctx, args.get("strategy")),
+        "metrics": _proposal_metrics_snapshot(ctx, strategy_name),
         "status": "PENDING_HUMAN_REVIEW",
         "approved": False,
         "applied": False,
@@ -549,6 +605,38 @@ def _build_facts(conn, mode: str, regime: dict, root: Path) -> dict:
         panel[strat] = compute_engine.compute_strategy_metrics(
             trades_df, wfa, n_eff,
         )
+        # Spec sec 8a-8f: per-strategy splits (hour-of-day, regime,
+        # direction, MAE/MFE distribution by direction, confluence lift).
+        # Aggregate-only -- no row-level data -- so the token budget for
+        # the LLM panel stays bounded. The 5-tool invariant is preserved:
+        # fetch_strategy_stats returns the full panel dict, which now
+        # includes a "splits" key.
+        splits: dict[str, Any] = {}
+        try:
+            splits["by_hour_ct"] = prepared_queries.panel_by_hour_ct(
+                conn, strat, window,
+            ).to_dict("records")
+            splits["by_regime"] = prepared_queries.panel_by_regime(
+                conn, strat, window,
+            ).to_dict("records")
+            splits["by_direction"] = prepared_queries.panel_by_direction(
+                conn, strat, window,
+            ).to_dict("records")
+            splits["mae_mfe_long"] = prepared_queries.mae_mfe_distribution(
+                conn, strat, "LONG", window,
+            ).to_dict("records")
+            splits["mae_mfe_short"] = prepared_queries.mae_mfe_distribution(
+                conn, strat, "SHORT", window,
+            ).to_dict("records")
+            splits["confluence_lift"] = prepared_queries.confluence_lift(
+                conn, strat, window,
+            ).to_dict("records")
+        except Exception as e:  # noqa: BLE001 -- query failures must not crash facts build
+            logger.warning(
+                "splits computation failed for strategy %s: %s", strat, e,
+            )
+            splits = {}
+        panel[strat]["splits"] = splits
 
     today = _today_str()
     window_start = (_dt.date.today() - _dt.timedelta(days=window)).isoformat()
@@ -999,11 +1087,67 @@ def _render_regime_section(regime: dict) -> str:
     )
 
 
+def _render_delta_section(facts: dict) -> str:
+    """Render the 'Delta vs Last Run' section per spec sec 12b.
+
+    Lists strategies whose materially_changed flag is set, with the
+    DSR/WR/n deltas and any tier flip. Returns an empty string if no
+    deltas are present (baseline or unchanged).
+    """
+    delta = facts.get("delta_vs_prior") or {}
+    if delta.get("is_baseline"):
+        return ""
+    strategies = delta.get("strategies") or {}
+    lines: list[str] = []
+    for strat, d in sorted(strategies.items()):
+        if not d.get("materially_changed"):
+            continue
+        tier_change = d.get("tier_change")
+        marker = f" ({tier_change})" if tier_change else ""
+        dsr_d = float(d.get("dsr_delta", 0) or 0)
+        wr_d = float(d.get("wr_delta", 0) or 0)
+        n_d = int(d.get("n_delta", 0) or 0)
+        lines.append(
+            f"- {strat}{marker}: DSR d={dsr_d:+.3f}, "
+            f"WR d={wr_d * 100:+.1f}%, n d={n_d:+d}"
+        )
+    if not lines:
+        return ""
+    return "## Delta vs Last Run\n" + "\n".join(lines) + "\n"
+
+
+def _render_proposals_section(pending_this_run: list[dict] | None) -> str:
+    """Render the 'Proposals' section listing this run's staged proposals.
+
+    Pulls from the in-memory list of proposals staged in THIS specific
+    run, not the full pending queue (which can accumulate across runs).
+    Returns an empty string if nothing was staged this run.
+    """
+    if not pending_this_run:
+        return ""
+    lines = ["## Proposals (review pending_changes.json before approving)"]
+    for i, p in enumerate(pending_this_run, 1):
+        strat = p.get("strategy")
+        param = p.get("parameter_name")
+        cur = p.get("current_value")
+        proposed = p.get("proposed_value")
+        conf = p.get("confidence")
+        n = p.get("sample_size")
+        why = p.get("rationale", "")
+        lines.append(
+            f"{i}. {strat}.{param}: {cur!r} -> {proposed!r}"
+        )
+        lines.append(f"   Confidence: {conf}; sample_size: {n}")
+        lines.append(f"   Why: {why}")
+    return "\n".join(lines) + "\n"
+
+
 def _write_debrief(mode: str, today: str, narrative: str,
                     verifier_result: dict | None,
                     facts: dict, regime: dict,
                     root: Path,
-                    halted: bool = False) -> Path:
+                    halted: bool = False,
+                    pending_this_run: list[dict] | None = None) -> Path:
     """Assemble logs/oracle/<mode>/<today>_debrief.md."""
     out_dir = root / mode
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1011,6 +1155,8 @@ def _write_debrief(mode: str, today: str, narrative: str,
 
     report_card = _render_report_card(facts)
     regime_section = _render_regime_section(regime)
+    delta_section = _render_delta_section(facts)
+    proposals_section = _render_proposals_section(pending_this_run)
 
     # Gate the look-ahead note on a date comparison: only render it when
     # the analysis window actually overlaps Claude's training cutoff.
@@ -1053,10 +1199,16 @@ def _write_debrief(mode: str, today: str, narrative: str,
                     f"\n_Note: {n_rej} finding(s) rejected by Phase 3 "
                     f"verifier; see audit.jsonl for details._\n"
                 )
+        # Order: narrative -> delta -> proposals -> regime -> report card
+        # -> lookahead. The delta + proposals sections are inserted
+        # BEFORE the report card per spec sec 12b so the operator sees
+        # the actionable diff and staged changes prominently near the top.
         body = (
             f"# Phoenix Strategy Oracle -- {mode} Debrief\n"
             f"## Run date: {today}\n\n"
             f"## Narrative\n{narrative}\n{rej_note}\n"
+            f"{delta_section}"
+            f"{proposals_section}"
             f"{regime_section}\n\n"
             f"{report_card}\n\n"
             f"{lookahead_block}"
@@ -1092,7 +1244,13 @@ def _save_pending_proposals(new_proposals: list[dict],
         except (OSError, json.JSONDecodeError):
             existing = {"pending": []}
     existing["pending"].extend(new_proposals)
-    tmp = out_path.with_suffix(".json.tmp")
+    # Per-process unique tmp filename so two concurrent oracle runs can't
+    # stomp on each other's .tmp file mid-rename. The atomic os.replace
+    # still serializes the visible state, but each writer now stages its
+    # work in a private location first.
+    tmp = out_path.with_name(
+        f".pending_changes.{os.getpid()}.{int(time.time() * 1000)}.tmp"
+    )
     tmp.write_text(json.dumps(existing, indent=2, default=str),
                     encoding="utf-8")
     os.replace(tmp, out_path)
@@ -1231,11 +1389,23 @@ def run(mode: Mode, save_baseline: bool = True,
         )
 
         # Phase 4: verifier.
+        # Compute lookahead_active from window vs cutoff so the per-finding
+        # downgrade only fires when the analysis window actually overlaps
+        # Claude's training data. Without this, runs whose window ends
+        # AFTER the cutoff still see surviving INTERPRETATION findings
+        # downgraded one tier with no explanation in the debrief (the
+        # debrief note IS conditional, but the downgrade logic was not).
+        try:
+            window_end_dt = _dt.date.fromisoformat(facts.get("window_end", ""))
+            cutoff_dt = _dt.date.fromisoformat(LOOKAHEAD_CUTOFF_DATE)
+            lookahead_active = window_end_dt <= cutoff_dt
+        except (TypeError, ValueError):
+            lookahead_active = True  # safe fallback
         vresult = verifier.verify_report(
             facts=facts,
             narrative_md=narrative,
             findings=list(facts.get("findings", []) or []),
-            lookahead_active=True,
+            lookahead_active=lookahead_active,
         )
         # Strip rejected findings + apply downgrades.
         facts, n_removed = _strip_rejected_findings(
@@ -1243,12 +1413,33 @@ def run(mode: Mode, save_baseline: bool = True,
         )
         _apply_downgrades(facts, vresult.get("downgrades", []))
 
+        # A proposal whose linked finding was rejected has lost its
+        # evidentiary basis -- drop it before persisting to
+        # pending_changes.json so an operator never sees an
+        # orphan-evidence proposal.
+        rejected_ids = set(vresult.get("rejected_findings", []) or [])
+        if rejected_ids:
+            filtered_proposals = [
+                p for p in ctx.pending_proposals
+                if p.get("finding_id") not in rejected_ids
+            ]
+            n_proposals_stripped = (
+                len(ctx.pending_proposals) - len(filtered_proposals)
+            )
+            if n_proposals_stripped > 0:
+                logger.info(
+                    "stripped %d proposals linked to rejected findings",
+                    n_proposals_stripped,
+                )
+            ctx.pending_proposals = filtered_proposals
+
         # Phase 5: write outputs.
         facts_path = _write_facts(mode, today, facts, root)
         debrief_path = _write_debrief(
             mode, today, narrative=narrative,
             verifier_result=vresult, facts=facts, regime=regime,
             root=root, halted=False,
+            pending_this_run=list(ctx.pending_proposals),
         )
         pending_path = _save_pending_proposals(ctx.pending_proposals, root)
         if mode == "research" and save_baseline:
@@ -1277,8 +1468,12 @@ def run(mode: Mode, save_baseline: bool = True,
             audit_fh.close()
         except Exception:  # noqa: BLE001
             pass
+        # An unhandled exception inside the post-preflight pipeline is a
+        # runtime error, NOT a preflight failure. Distinguish the two so
+        # operators can tell whether the system never started vs. crashed
+        # mid-flight.
         return {
-            "status": "halted_preflight_failure",
+            "status": "halted_runtime_error",
             "mode": mode,
             "reason": f"{type(e).__name__}: {e}",
             "facts_path": None,

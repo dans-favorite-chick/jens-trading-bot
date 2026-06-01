@@ -1163,3 +1163,565 @@ class TestCodeReviewFixes:
         result = so.run("weekly", client=client)
         text = Path(result["debrief_path"]).read_text(encoding="utf-8")
         assert "Look-Ahead Note" in text
+
+
+# ===========================================================================
+# TestFinalCritiqueFixes -- regression coverage for the final critique pass
+# ===========================================================================
+
+class TestFinalCritiqueFixes:
+    """Regression tests for the Phoenix Strategy Oracle final critique pass."""
+
+    # --- Critical 1: lookahead_active computed from window vs cutoff -----
+
+    def test_lookahead_downgrades_suppressed_post_cutoff(
+            self, monkeypatch, tmp_logs_root, tmp_path):
+        """With window_end strictly after LOOKAHEAD_CUTOFF_DATE, the verifier
+        is called with lookahead_active=False and no downgrades fire."""
+        captured: dict[str, Any] = {}
+
+        def fake_verify(*, facts, narrative_md, findings, lookahead_active):
+            captured["lookahead_active"] = lookahead_active
+            return {"ok": True, "rejected_findings": [], "downgrades": [],
+                    "numbers_check": {}, "lookahead_check": {},
+                    "causal_check": {}, "rejection_reasons": {}}
+
+        monkeypatch.setattr(so.verifier, "verify_report", fake_verify)
+        # Cutoff = 2026-01-31; stub window_end = 2026-05-30 (after cutoff)
+        monkeypatch.setattr(so, "LOOKAHEAD_CUTOFF_DATE", "2026-01-31")
+
+        regime = {
+            "stable": True, "z_score": 0.42, "warning": None,
+            "mode_skipped": False, "baseline_n_months": 6,
+            "latest_month": "2026-05", "latest_sharpe_proxy": 0.12,
+        }
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-fake")
+        monkeypatch.setattr(so, "_run_preflight",
+                             lambda mode: {"ok": True, "warehouse_path":
+                                            str(tmp_path / "wh.duckdb")})
+        monkeypatch.setattr(so, "_open_warehouse_conn",
+                             lambda path: _StubConn())
+        monkeypatch.setattr(so, "_check_regime_gate",
+                             lambda conn, mode: regime)
+        monkeypatch.setattr(so, "_build_facts", _stub_build_facts)
+
+        client = _StubAnthropicClient([
+            _StubMessage([{"type": "text", "text": "Done."}],
+                          stop_reason="end_turn"),
+        ])
+        result = so.run("weekly", client=client)
+        assert result["status"] == "complete"
+        assert captured["lookahead_active"] is False
+
+    def test_lookahead_downgrades_active_pre_cutoff(
+            self, monkeypatch, tmp_logs_root, tmp_path):
+        """With window_end at/before LOOKAHEAD_CUTOFF_DATE, the verifier
+        is called with lookahead_active=True so INTERPRETATION findings
+        are downgraded."""
+        captured: dict[str, Any] = {}
+
+        def fake_verify(*, facts, narrative_md, findings, lookahead_active):
+            captured["lookahead_active"] = lookahead_active
+            return {"ok": True, "rejected_findings": [], "downgrades": [],
+                    "numbers_check": {}, "lookahead_check": {},
+                    "causal_check": {}, "rejection_reasons": {}}
+
+        monkeypatch.setattr(so.verifier, "verify_report", fake_verify)
+        # Push cutoff past the stub's window_end (2026-05-30) so the
+        # condition window_end <= cutoff holds.
+        monkeypatch.setattr(so, "LOOKAHEAD_CUTOFF_DATE", "2026-12-31")
+
+        regime = {
+            "stable": True, "z_score": 0.42, "warning": None,
+            "mode_skipped": False, "baseline_n_months": 6,
+            "latest_month": "2026-05", "latest_sharpe_proxy": 0.12,
+        }
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-fake")
+        monkeypatch.setattr(so, "_run_preflight",
+                             lambda mode: {"ok": True, "warehouse_path":
+                                            str(tmp_path / "wh.duckdb")})
+        monkeypatch.setattr(so, "_open_warehouse_conn",
+                             lambda path: _StubConn())
+        monkeypatch.setattr(so, "_check_regime_gate",
+                             lambda conn, mode: regime)
+        monkeypatch.setattr(so, "_build_facts", _stub_build_facts)
+
+        client = _StubAnthropicClient([
+            _StubMessage([{"type": "text", "text": "Done."}],
+                          stop_reason="end_turn"),
+        ])
+        result = so.run("weekly", client=client)
+        assert result["status"] == "complete"
+        assert captured["lookahead_active"] is True
+
+    # --- Critical 2: splits dict populated per strategy -------------------
+
+    def test_build_facts_populates_splits(self, monkeypatch, tmp_path):
+        """_build_facts must emit a `splits` dict with all six T1 keys
+        for each strategy."""
+        import pandas as pd
+
+        def fake_strategies(_conn, _window, min_n=30):
+            return ["bias_momentum"]
+
+        def fake_trades(_conn, _strat, _window):
+            return pd.DataFrame({"pnl_dollars": [1.0] * 40})
+
+        def fake_wfa(_conn, _strat):
+            return {"mean_oos_pf": 1.0, "mean_is_pf": 1.0}
+
+        def fake_metrics(_trades, _wfa, _n_eff):
+            return {"metrics": {"n_trades": 40}, "gates": {}}
+
+        # All six split queries return small DataFrames.
+        def fake_hour(_conn, _strat, _window):
+            return pd.DataFrame({"hour_ct": [9, 10], "n_trades": [20, 20]})
+
+        def fake_regime(_conn, _strat, _window):
+            return pd.DataFrame({"regime": ["trending"], "n_trades": [40]})
+
+        def fake_direction(_conn, _strat, _window):
+            return pd.DataFrame({"direction": ["LONG"], "n_trades": [40]})
+
+        def fake_mae_mfe(_conn, _strat, _direction, _window):
+            return pd.DataFrame({"bucket_ticks": [0, 1], "n_trades": [20, 20]})
+
+        def fake_conflu(_conn, _strat, _window):
+            return pd.DataFrame({"confluence_count": [0], "n_trades": [40]})
+
+        monkeypatch.setattr(so.prepared_queries, "strategies_with_trades",
+                             fake_strategies)
+        monkeypatch.setattr(so.prepared_queries, "trades_for_strategy",
+                             fake_trades)
+        monkeypatch.setattr(so.prepared_queries, "wfa_summary_for_strategy",
+                             fake_wfa)
+        monkeypatch.setattr(so.prepared_queries, "panel_by_hour_ct",
+                             fake_hour)
+        monkeypatch.setattr(so.prepared_queries, "panel_by_regime",
+                             fake_regime)
+        monkeypatch.setattr(so.prepared_queries, "panel_by_direction",
+                             fake_direction)
+        monkeypatch.setattr(so.prepared_queries, "mae_mfe_distribution",
+                             fake_mae_mfe)
+        monkeypatch.setattr(so.prepared_queries, "confluence_lift",
+                             fake_conflu)
+        monkeypatch.setattr(so.compute_engine, "compute_strategy_metrics",
+                             fake_metrics)
+        monkeypatch.setattr(so.compute_engine, "compute_effective_n",
+                             lambda _r: 1)
+        monkeypatch.setattr(so.compute_engine, "compute_delta_vs_prior",
+                             lambda _f, _p: {"is_baseline": True})
+
+        regime = {"stable": True}
+        facts = so._build_facts(_StubConn(), "weekly", regime, tmp_path)
+        panel = facts["strategies"]["bias_momentum"]
+        assert "splits" in panel
+        for key in ("by_hour_ct", "by_regime", "by_direction",
+                    "mae_mfe_long", "mae_mfe_short", "confluence_lift"):
+            assert key in panel["splits"], f"splits missing {key}"
+        # Each split is a list of records (aggregate-only).
+        assert isinstance(panel["splits"]["by_hour_ct"], list)
+        assert isinstance(panel["splits"]["by_regime"], list)
+
+    def test_build_facts_splits_failure_recovers(self, monkeypatch, tmp_path):
+        """If a split query raises, splits is reset to {} but the rest of
+        the facts panel survives."""
+        import pandas as pd
+
+        monkeypatch.setattr(so.prepared_queries, "strategies_with_trades",
+                             lambda _c, _w, min_n=30: ["s1"])
+        monkeypatch.setattr(so.prepared_queries, "trades_for_strategy",
+                             lambda _c, _s, _w:
+                             pd.DataFrame({"pnl_dollars": [1.0] * 40}))
+        monkeypatch.setattr(so.prepared_queries, "wfa_summary_for_strategy",
+                             lambda _c, _s: {"mean_oos_pf": 1, "mean_is_pf": 1})
+
+        def boom(_conn, _strat, _window):
+            raise RuntimeError("DuckDB exploded")
+
+        monkeypatch.setattr(so.prepared_queries, "panel_by_hour_ct", boom)
+        monkeypatch.setattr(so.compute_engine, "compute_strategy_metrics",
+                             lambda _t, _w, _n: {"metrics": {"n_trades": 40},
+                                                  "gates": {}})
+        monkeypatch.setattr(so.compute_engine, "compute_effective_n",
+                             lambda _r: 1)
+        monkeypatch.setattr(so.compute_engine, "compute_delta_vs_prior",
+                             lambda _f, _p: {"is_baseline": True})
+
+        regime = {"stable": True}
+        facts = so._build_facts(_StubConn(), "weekly", regime, tmp_path)
+        assert facts["strategies"]["s1"]["splits"] == {}
+
+    # --- Critical 3: current_value pulled from AST parse ------------------
+
+    def test_propose_change_overrides_current_value_with_ast(
+            self, monkeypatch, ctx):
+        """The orchestrator must replace the LLM-supplied current_value
+        with the AST-parsed value from config/strategies.py."""
+        monkeypatch.setattr(
+            so.prepared_queries, "current_param_value",
+            lambda strat, param: "09:30",  # the real value per AST
+        )
+        result = so._dispatch_tool(
+            "propose_change",
+            {
+                "strategy": "bias_momentum", "direction": "BOTH",
+                "parameter_name": "session_end_time",
+                "current_value": "bogus_value",  # LLM lies
+                "proposed_value": "09:15",
+                "rationale": "decay observed",
+                "confidence": "MEDIUM", "sample_size": 122,
+                "finding_id": "bm_finding",
+            },
+            ctx,
+        )
+        assert result["ok"] is True
+        proposal = ctx.pending_proposals[0]
+        assert proposal["current_value"] == "09:30"
+
+    def test_propose_change_falls_back_on_ast_error(self, monkeypatch, ctx):
+        """If AST lookup raises KeyError / FileNotFoundError / ValueError,
+        fall back to the LLM-supplied value (with a warning log)."""
+        def boom(_strat, _param):
+            raise KeyError("not in STRATEGIES")
+
+        monkeypatch.setattr(so.prepared_queries, "current_param_value", boom)
+        result = so._dispatch_tool(
+            "propose_change",
+            {
+                "strategy": "bias_momentum", "direction": "BOTH",
+                "parameter_name": "session_end_time",
+                "current_value": "fallback_value",
+                "proposed_value": "09:15",
+                "rationale": "decay observed",
+                "confidence": "MEDIUM", "sample_size": 122,
+                "finding_id": "bm_finding",
+            },
+            ctx,
+        )
+        assert result["ok"] is True
+        proposal = ctx.pending_proposals[0]
+        assert proposal["current_value"] == "fallback_value"
+
+    # --- Important 1: audit.jsonl is append-only across opens -------------
+
+    def test_open_audit_appends_across_opens(self, tmp_path):
+        """Two consecutive opens of the same (mode, date) audit file
+        accumulate -- neither truncates the prior content."""
+        root = tmp_path / "logs" / "oracle"
+        root.mkdir(parents=True)
+
+        fh1 = so._open_audit("weekly", "2026-05-31", root)
+        fh1.write('{"event": "first"}\n')
+        fh1.flush()
+        fh1.close()
+
+        fh2 = so._open_audit("weekly", "2026-05-31", root)
+        fh2.write('{"event": "second"}\n')
+        fh2.flush()
+        fh2.close()
+
+        path = root / "weekly" / "2026-05-31_audit.jsonl"
+        lines = path.read_text(encoding="utf-8").strip().splitlines()
+        assert len(lines) == 2
+        assert '"first"' in lines[0]
+        assert '"second"' in lines[1]
+
+    # --- Important 2: _write_audit flushes after each write ---------------
+
+    def test_write_audit_flushes_immediately(self, tmp_path):
+        """Each event hits disk before the next dispatch call."""
+        path = tmp_path / "audit.jsonl"
+        fh = open(path, "a", encoding="utf-8")
+        try:
+            so._write_audit(fh, {"event": "alpha"})
+            # Read from a SECOND handle without closing fh: only works
+            # if fh.flush() pushed the buffer.
+            with open(path, "r", encoding="utf-8") as fh_r:
+                content = fh_r.read()
+            assert "alpha" in content
+        finally:
+            fh.close()
+
+    # --- Important 3: pending_changes.json tmp filename is per-process ---
+
+    def test_pending_changes_tmp_filename_is_unique(self, monkeypatch,
+                                                    tmp_path):
+        """Two concurrent saves must use distinct tmp paths so they
+        cannot race-overwrite each other before os.replace."""
+        captured_tmps: list[str] = []
+
+        real_write_text = Path.write_text
+
+        def tracking_write_text(self, *args, **kwargs):
+            if ".pending_changes." in self.name and self.name.endswith(".tmp"):
+                captured_tmps.append(self.name)
+            return real_write_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", tracking_write_text)
+
+        root = tmp_path / "logs" / "oracle"
+        root.mkdir(parents=True)
+        so._save_pending_proposals([{"strategy": "x", "p": 1}], root)
+        # Sleep 2ms so the time-based suffix changes.
+        import time as _t
+        _t.sleep(0.002)
+        so._save_pending_proposals([{"strategy": "y", "p": 2}], root)
+
+        assert len(captured_tmps) == 2
+        assert captured_tmps[0] != captured_tmps[1]
+        # Both proposals must end up in the final file.
+        pending = json.loads(
+            (root / "pending_changes.json").read_text(encoding="utf-8")
+        )
+        assert len(pending["pending"]) == 2
+
+    # --- Important 4: write_finding validates verdict/confidence ----------
+
+    def test_write_finding_normalizes_lowercase_confidence(self, ctx):
+        """confidence='medium' is normalized to 'MEDIUM' and accepted."""
+        result = so._dispatch_tool(
+            "write_finding",
+            {
+                "id": "lower_conf_test",
+                "strategy": "bias_momentum",
+                "verdict": "confirmed",  # also lowercase
+                "confidence": "medium",
+                "sample_size": 50,
+                "rationale": "DSR=0.76",
+            },
+            ctx,
+        )
+        assert result["ok"] is True
+        finding = ctx.facts["findings"][0]
+        assert finding["confidence"] == "MEDIUM"
+        assert finding["verdict"] == "CONFIRMED"
+
+    def test_write_finding_rejects_garbage_confidence(self, ctx):
+        result = so._dispatch_tool(
+            "write_finding",
+            {
+                "id": "garbage_conf_test",
+                "strategy": "bias_momentum",
+                "verdict": "CONFIRMED",
+                "confidence": "garbage",
+                "sample_size": 50,
+                "rationale": "DSR=0.76",
+            },
+            ctx,
+        )
+        assert result["ok"] is False
+        assert "confidence" in result["error"].lower()
+        assert ctx.facts["findings"] == []
+
+    def test_write_finding_rejects_garbage_verdict(self, ctx):
+        result = so._dispatch_tool(
+            "write_finding",
+            {
+                "id": "garbage_verdict_test",
+                "strategy": "bias_momentum",
+                "verdict": "MAYBE",
+                "confidence": "MEDIUM",
+                "sample_size": 50,
+                "rationale": "DSR=0.76",
+            },
+            ctx,
+        )
+        assert result["ok"] is False
+        assert "verdict" in result["error"].lower()
+
+    def test_propose_change_normalizes_lowercase_confidence(
+            self, monkeypatch, ctx):
+        monkeypatch.setattr(
+            so.prepared_queries, "current_param_value",
+            lambda strat, param: "09:30",
+        )
+        result = so._dispatch_tool(
+            "propose_change",
+            {
+                "strategy": "bias_momentum", "direction": "BOTH",
+                "parameter_name": "session_end_time",
+                "current_value": "09:45", "proposed_value": "09:15",
+                "rationale": "decay observed",
+                "confidence": "medium",  # lowercase
+                "sample_size": 122,
+                "finding_id": "bm_finding",
+            },
+            ctx,
+        )
+        assert result["ok"] is True
+        assert ctx.pending_proposals[0]["confidence"] == "MEDIUM"
+
+    # --- Important 6: proposals from rejected findings are stripped -------
+
+    def test_proposal_with_rejected_finding_id_is_stripped(
+            self, monkeypatch, tmp_logs_root, tmp_path):
+        """When the verifier rejects a finding, any proposal linked to it
+        via finding_id must not end up in pending_changes.json."""
+        regime = {
+            "stable": True, "z_score": 0.42, "warning": None,
+            "mode_skipped": False, "baseline_n_months": 6,
+            "latest_month": "2026-05", "latest_sharpe_proxy": 0.12,
+        }
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-fake")
+        monkeypatch.setattr(so, "_run_preflight",
+                             lambda mode: {"ok": True, "warehouse_path":
+                                            str(tmp_path / "wh.duckdb")})
+        monkeypatch.setattr(so, "_open_warehouse_conn",
+                             lambda path: _StubConn())
+        monkeypatch.setattr(so, "_check_regime_gate",
+                             lambda conn, mode: regime)
+        monkeypatch.setattr(so, "_build_facts", _stub_build_facts)
+        # AST stub for the propose_change pathway.
+        monkeypatch.setattr(
+            so.prepared_queries, "current_param_value",
+            lambda strat, param: "09:30",
+        )
+        # The verifier will reject "bad_finding".
+        monkeypatch.setattr(
+            so.verifier, "verify_report",
+            lambda *, facts, narrative_md, findings, lookahead_active: {
+                "ok": False,
+                "rejected_findings": ["bad_finding"],
+                "rejection_reasons": {"bad_finding": "test-reject"},
+                "downgrades": [],
+                "numbers_check": {}, "lookahead_check": {},
+                "causal_check": {},
+            },
+        )
+
+        client = _StubAnthropicClient([
+            _StubMessage(
+                [
+                    {"type": "tool_use", "name": "write_finding", "id": "tu1",
+                     "input": {
+                         "id": "bad_finding",
+                         "strategy": "bias_momentum",
+                         "verdict": "CONFIRMED",
+                         "confidence": "MEDIUM",
+                         "sample_size": 122,
+                         "rationale": "rejected by verifier (n=122)",
+                     }},
+                    {"type": "tool_use", "name": "propose_change", "id": "tu2",
+                     "input": {
+                         "strategy": "bias_momentum", "direction": "BOTH",
+                         "parameter_name": "session_end_time",
+                         "current_value": "09:45", "proposed_value": "09:15",
+                         "rationale": "decay",
+                         "confidence": "MEDIUM", "sample_size": 122,
+                         "finding_id": "bad_finding",
+                     }},
+                ],
+                stop_reason="tool_use",
+            ),
+            _StubMessage(
+                [{"type": "text", "text": "n=122 done."}],
+                stop_reason="end_turn",
+            ),
+        ])
+        result = so.run("weekly", client=client)
+        assert result["status"] == "complete"
+        # The proposal should have been stripped before persistence.
+        assert result["n_proposals_staged"] == 0
+        pending = json.loads(
+            Path(result["pending_changes_path"]).read_text(encoding="utf-8")
+        )
+        assert all(p.get("finding_id") != "bad_finding"
+                   for p in pending["pending"])
+
+    # --- Minor 1/2: debrief includes delta + proposals sections -----------
+
+    def test_debrief_renders_proposals_section(self, monkeypatch,
+                                                 tmp_logs_root, tmp_path):
+        regime = {
+            "stable": True, "z_score": 0.42, "warning": None,
+            "mode_skipped": False, "baseline_n_months": 6,
+            "latest_month": "2026-05", "latest_sharpe_proxy": 0.12,
+        }
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-fake")
+        monkeypatch.setattr(so, "_run_preflight",
+                             lambda mode: {"ok": True, "warehouse_path":
+                                            str(tmp_path / "wh.duckdb")})
+        monkeypatch.setattr(so, "_open_warehouse_conn",
+                             lambda path: _StubConn())
+        monkeypatch.setattr(so, "_check_regime_gate",
+                             lambda conn, mode: regime)
+        monkeypatch.setattr(so, "_build_facts", _stub_build_facts)
+        monkeypatch.setattr(
+            so.prepared_queries, "current_param_value",
+            lambda strat, param: "09:30",
+        )
+
+        client = _StubAnthropicClient([
+            _StubMessage(
+                [
+                    {"type": "tool_use", "name": "propose_change", "id": "tu1",
+                     "input": {
+                         "strategy": "bias_momentum", "direction": "BOTH",
+                         "parameter_name": "session_end_time",
+                         "current_value": "09:45", "proposed_value": "09:15",
+                         "rationale": "decay observed at 09:15",
+                         "confidence": "MEDIUM", "sample_size": 122,
+                         "finding_id": "bm_finding",
+                     }}
+                ],
+                stop_reason="tool_use",
+            ),
+            _StubMessage(
+                [{"type": "text", "text": "n=122 narrative."}],
+                stop_reason="end_turn",
+            ),
+        ])
+        result = so.run("weekly", client=client)
+        text = Path(result["debrief_path"]).read_text(encoding="utf-8")
+        assert "## Proposals" in text
+        assert "bias_momentum.session_end_time" in text
+        # The Why line cites the rationale.
+        assert "decay observed" in text
+
+    def test_debrief_delta_section_renders_when_strategies_changed(
+            self, monkeypatch, tmp_logs_root, tmp_path):
+        """When delta_vs_prior reports materially-changed strategies, the
+        debrief must include a 'Delta vs Last Run' section."""
+        regime = {
+            "stable": True, "z_score": 0.42, "warning": None,
+            "mode_skipped": False, "baseline_n_months": 6,
+            "latest_month": "2026-05", "latest_sharpe_proxy": 0.12,
+        }
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-fake")
+        monkeypatch.setattr(so, "_run_preflight",
+                             lambda mode: {"ok": True, "warehouse_path":
+                                            str(tmp_path / "wh.duckdb")})
+        monkeypatch.setattr(so, "_open_warehouse_conn",
+                             lambda path: _StubConn())
+        monkeypatch.setattr(so, "_check_regime_gate",
+                             lambda conn, mode: regime)
+
+        def stub_with_delta(_conn, mode, regime, _root=None):
+            facts = _stub_build_facts(_conn, mode, regime, _root)
+            facts["delta_vs_prior"] = {
+                "is_baseline": False,
+                "strategies": {
+                    "bias_momentum": {
+                        "dsr_delta": 0.12,
+                        "wr_delta": 0.04,
+                        "n_delta": 50,
+                        "materially_changed": True,
+                        "tier_change": "UP",
+                    },
+                },
+                "summary": {"n_strategies_changed": 1},
+            }
+            return facts
+
+        monkeypatch.setattr(so, "_build_facts", stub_with_delta)
+
+        client = _StubAnthropicClient([
+            _StubMessage([{"type": "text", "text": "Narrative."}],
+                          stop_reason="end_turn"),
+        ])
+        result = so.run("weekly", client=client)
+        text = Path(result["debrief_path"]).read_text(encoding="utf-8")
+        assert "Delta vs Last Run" in text
+        assert "bias_momentum" in text
+        assert "(UP)" in text

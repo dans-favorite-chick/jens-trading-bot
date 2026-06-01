@@ -80,6 +80,7 @@ _DSR_PROPOSE = 0.95
 _PSR_LUCK_FLOOR = 0.90
 _HLZ_T_THRESHOLD = 3.0
 _WFE_THRESHOLD = 0.6
+_BHY_P_THRESHOLD = 0.05
 
 # Sample-size gates per spec sec 7b. Centralized here as named constants
 # so they can be emitted into facts.json under `gate_thresholds` (see
@@ -558,8 +559,11 @@ def compute_strategy_metrics(trades_df: pd.DataFrame,
         "win_rate": float(win_rate),
     }
 
-    # Gates per spec sec 7. `wfa_pass` lives only in `gates` to avoid
-    # duplication between metrics and gates (single source of truth).
+    # Gates per spec sec 7. `wfa_pass` is duplicated into BOTH `gates`
+    # and `metrics` so external consumers reading either dict find it
+    # (the spec example shows it in `metrics`; the implementation
+    # additionally needs it in `gates` for the all-pass aggregation).
+    metrics["wfa_pass"] = bool(wfa_pass)
     gates = {
         "n_floor": n >= _N_FLOOR,
         "n_medium": n >= _N_MEDIUM,
@@ -570,11 +574,12 @@ def compute_strategy_metrics(trades_df: pd.DataFrame,
         "hlz_3_0": hlz_t > _HLZ_T_THRESHOLD,
         "min_trl_met": n >= min_trl,
         "wfa_pass": bool(wfa_pass),
+        "bhy_0_05": bhy_p <= _BHY_P_THRESHOLD,
     }
 
     proposal_gates = [
         "n_floor", "psr_0_90", "dsr_0_95", "hlz_3_0",
-        "min_trl_met", "wfa_pass",
+        "min_trl_met", "wfa_pass", "bhy_0_05",
     ]
     failed = [g for g in proposal_gates if not gates[g]]
     gates["all_pass_for_proposal"] = (len(failed) == 0)
@@ -593,6 +598,7 @@ def compute_strategy_metrics(trades_df: pd.DataFrame,
         "n_medium": _N_MEDIUM,
         "n_high": _N_HIGH,
         "wfe_ratio_min": _WFE_THRESHOLD,
+        "bhy_0_05": _BHY_P_THRESHOLD,
     }
 
     panel = {
