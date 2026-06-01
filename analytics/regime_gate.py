@@ -42,6 +42,7 @@ FORBIDDEN IMPORTS (CI invariant)
 """
 from __future__ import annotations
 
+import datetime as _dt
 import logging
 import math
 from typing import Literal
@@ -62,11 +63,11 @@ Z_THRESHOLD_DEFAULT = 1.5
 # this we report insufficient-data rather than running a degenerate test.
 _MIN_BASELINE_MONTHS = 4
 
-# How many months of history to pull from the warehouse. We need 6
-# baseline + 1 latest = 7 ideal months, but the prepared query parameter
-# is months_back, which is roughly inclusive of the current month. Pull
-# 7 to be safe -- if there are 6 distinct calendar months in that window
-# we use them all as baseline (latest excluded).
+# We pull 7 months from monthly_sharpe_proxy. Typical result: 6 baseline + 1 latest.
+# Early in a calendar month the rolling 7-month SQL window can produce up to 8 distinct
+# months (now() - 7 mo cutoff straddles an extra month boundary), so baseline_n_months
+# may occasionally be 7 instead of 6. This is statistically fine -- more baseline data
+# only improves the z-score's reliability.
 _PULL_MONTHS = 7
 
 Mode = Literal["research", "weekly", "daily"]
@@ -74,7 +75,9 @@ Mode = Literal["research", "weekly", "daily"]
 __all__ = ["check_regime_stability", "Z_THRESHOLD_DEFAULT"]
 
 
-def _latest_month_str(ts: object) -> str | None:
+def _latest_month_str(
+    ts: "pd.Timestamp | _dt.date | _dt.datetime | None",
+) -> str | None:
     """Format a month-bucket timestamp/date as 'YYYY-MM'. Tolerant of
     pandas Timestamp, datetime.date, datetime.datetime, or NaT."""
     if ts is None:
@@ -184,26 +187,72 @@ def check_regime_stability(
             "latest_sharpe_proxy": None,
         }
 
-    # The prepared query returns rows ordered by month ASC. We need the
-    # most recent row as "latest" and the rest as baseline.
-    df = df.sort_values("month").reset_index(drop=True)
+    # Schema-drift guard: monthly_sharpe_proxy must expose the column
+    # names this gate consumes. If T1 renames `sharpe_proxy` to `sharpe`
+    # (or drops `month`), we must NOT raise an unhandled KeyError that
+    # crashes the orchestrator -- the contract is "gate never raises on
+    # data-shape problems". Return the standard stable=True dict with a
+    # warning explaining the schema drift so the operator can fix it.
+    required_columns = {"month", "sharpe_proxy"}
+    missing = required_columns - set(df.columns)
+    if missing:
+        return {
+            "stable": True,
+            "z_score": float("nan"),
+            "warning": (
+                "Regime gate could not run: prepared_queries.monthly_sharpe_proxy "
+                f"is missing required columns {sorted(missing)}. Schema may have drifted."
+            ),
+            "mode_skipped": False,
+            "baseline_n_months": 0,
+            "latest_month": None,
+            "latest_sharpe_proxy": None,
+        }
 
-    # Filter out months where sharpe_proxy is NULL/NaN for baseline use,
-    # but keep them in `df` so we can still identify the actual most-
-    # recent calendar month for reporting.
-    latest_row = df.iloc[-1]
-    latest_month = _latest_month_str(latest_row["month"])
-    latest_sharpe = latest_row["sharpe_proxy"]
-    if pd.notna(latest_sharpe):
-        latest_sharpe = float(latest_sharpe)
-    else:
-        latest_sharpe = None
+    # Belt-and-suspenders: even with the schema check above, any unexpected
+    # shape problem during post-query processing (dtype surprises, index
+    # weirdness, etc.) must NOT crash the orchestrator. Return the same
+    # "gate could not run" shape so callers can keep going.
+    try:
+        # The prepared query returns rows ordered by month ASC. We need the
+        # most recent row as "latest" and the rest as baseline.
+        df = df.sort_values("month").reset_index(drop=True)
 
-    # Baseline = everything except the most recent row, with NaN sharpe
-    # values dropped.
-    baseline_df = df.iloc[:-1].copy()
-    baseline_df = baseline_df[baseline_df["sharpe_proxy"].notna()]
-    baseline_n = int(len(baseline_df))
+        # Filter out months where sharpe_proxy is NULL/NaN for baseline use,
+        # but keep them in `df` so we can still identify the actual most-
+        # recent calendar month for reporting.
+        latest_row = df.iloc[-1]
+        latest_month = _latest_month_str(latest_row["month"])
+        latest_sharpe = latest_row["sharpe_proxy"]
+        if pd.notna(latest_sharpe):
+            latest_sharpe = float(latest_sharpe)
+        else:
+            latest_sharpe = None
+
+        # Baseline = everything except the most recent row, with NaN sharpe
+        # values dropped.
+        baseline_df = df.iloc[:-1].copy()
+        baseline_df = baseline_df[baseline_df["sharpe_proxy"].notna()]
+        baseline_n = int(len(baseline_df))
+    except (KeyError, TypeError, AttributeError, ValueError) as e:
+        logger.warning(
+            "regime_gate: unexpected DataFrame shape during processing (%s: %s); "
+            "treating as schema drift and returning stable=True.",
+            type(e).__name__, e,
+        )
+        return {
+            "stable": True,
+            "z_score": float("nan"),
+            "warning": (
+                "Regime gate could not run: unexpected DataFrame shape from "
+                f"prepared_queries.monthly_sharpe_proxy ({type(e).__name__}). "
+                "Schema may have drifted."
+            ),
+            "mode_skipped": False,
+            "baseline_n_months": 0,
+            "latest_month": None,
+            "latest_sharpe_proxy": None,
+        }
 
     # Insufficient baseline: don't halt, just warn.
     if baseline_n < _MIN_BASELINE_MONTHS:
@@ -223,8 +272,10 @@ def check_regime_stability(
         }
 
     # If the latest month itself has no sharpe_proxy (single trade or
-    # zero-std), we can't compute z -- same fallback.
-    if latest_sharpe is None or math.isnan(latest_sharpe):
+    # zero-std), we can't compute z -- same fallback. The prior block
+    # already converts NaN to None via pd.notna() filtering, so a `None`
+    # check is sufficient -- math.isnan(None) would TypeError.
+    if latest_sharpe is None:
         return {
             "stable": True,
             "z_score": float("nan"),
@@ -249,7 +300,11 @@ def check_regime_stability(
     # same sharpe_proxy. Z would be +/-inf or NaN. Per spec we handle
     # gracefully: report insufficient information rather than halt or
     # raise. Return stable=True with a warning.
-    if baseline_std == 0 or math.isnan(baseline_std):
+    #
+    # Use an epsilon comparison instead of exact-zero: floating-point std
+    # of "identical" values coming back from SQL can land on ~1e-16 rather
+    # than 0.0 due to accumulation order in the variance calculation.
+    if baseline_std < 1e-10 or math.isnan(baseline_std):
         return {
             "stable": True,
             "z_score": float("nan"),

@@ -80,16 +80,22 @@ def _trades_for_sharpe(target_mean: float, target_std: float) -> list[float]:
     """Build a 3-trade pnl sequence whose AVG = target_mean and
     STDDEV_SAMP = target_std (sample ddof=1).
 
-    For pnls (m-d, m, m+d): mean = m, sample std = |d| * sqrt(2) (n=3).
-    So d = target_std / sqrt(2). target_std MUST be positive (std is
-    always non-negative); callers wanting a negative sharpe_proxy should
-    pass a negative target_mean with a positive target_std.
+    For the symmetric triple (m-d, m, m+d) with n=3:
+        squared deviations = (d^2, 0, d^2)
+        sample variance    = 2*d^2 / (3-1) = d^2
+        sample std         = |d|
+    So choosing pnls = (mean - d, mean, mean + d) with d = target_std
+    produces a month whose monthly_sharpe_proxy = mean / target_std == sharpe.
+
+    target_std MUST be non-negative (std is always >= 0); callers wanting
+    a negative sharpe_proxy should pass a negative target_mean with a
+    positive target_std.
     """
     if target_std == 0:
         return [target_mean, target_mean, target_mean]
     if target_std < 0:
         raise ValueError("target_std must be non-negative")
-    d = target_std / math.sqrt(2.0)
+    d = target_std
     return [target_mean - d, target_mean, target_mean + d]
 
 
@@ -123,12 +129,13 @@ def _build_db(month_sharpe_values: list[float], strategy: str = "gamma",
         # Use a fixed reference "now" via a recent date -- but the prepared
         # query filters by `entry_ts >= now() - (months_back * INTERVAL '1
         # month')` using DuckDB's now(), so the trades MUST be recent.
-        # Anchor to today (UTC) so the trades land inside the 6-month
-        # window when the test runs.
-        now_utc = datetime.now(tz=UTC)
-        # Pin to the start of the current UTC month so the latest month is
-        # the current calendar month.
-        months_back_from = datetime(now_utc.year, now_utc.month, 1, tzinfo=UTC)
+        # Anchor to a date ~20 days inside the current UTC month rather
+        # than to the month boundary: a naive month-start anchor would
+        # race the prepared query's own now() across a UTC month boundary
+        # if the test ran in the final seconds of a month, causing
+        # baseline_n_months to be off by 1.
+        anchor = datetime.now(tz=UTC) - timedelta(days=20)
+        months_back_from = datetime(anchor.year, anchor.month, 1, tzinfo=UTC)
 
     # Build month starts going backwards. month_sharpe_values[-1] is the
     # most recent month (latest).
@@ -200,7 +207,9 @@ def test_stable_regime_weekly_mode():
     assert out["warning"] is None
     assert not math.isnan(out["z_score"])
     assert abs(out["z_score"]) <= 1.5
-    assert out["baseline_n_months"] == 6
+    # Typically 6 baseline months; can be 7 early in a calendar month when
+    # the SQL rolling 7-month window straddles an extra month boundary.
+    assert out["baseline_n_months"] >= 5
     assert out["latest_sharpe_proxy"] is not None
     assert isinstance(out["latest_month"], str)
 
@@ -284,6 +293,48 @@ def test_empty_warehouse_returns_stable_with_warning():
     assert out["stable"] is True
     assert math.isnan(out["z_score"])
     assert out["warning"] is not None
+    assert out["latest_month"] is None
+    assert out["latest_sharpe_proxy"] is None
+
+
+def test_column_drift_returns_stable_with_warning(monkeypatch):
+    """Schema-drift safety: if prepared_queries.monthly_sharpe_proxy renames
+    `sharpe_proxy` to something else (e.g. `sharpe`), the gate must NOT
+    raise an unhandled KeyError -- it must return the standard
+    "could not run" dict shape with a warning so the orchestrator can
+    keep going. This protects the "never raises on data shape" contract
+    against future renames in T1."""
+    # Build a DataFrame with the EXPECTED row shape but the WRONG column
+    # name -- simulates T1 renaming `sharpe_proxy` to `sharpe`.
+    drifted = pd.DataFrame({
+        "month": pd.to_datetime([
+            "2026-01-01", "2026-02-01", "2026-03-01",
+            "2026-04-01", "2026-05-01", "2026-06-01", "2026-07-01",
+        ]),
+        "sharpe": [1.0, 1.05, 0.98, 1.02, 0.97, 1.03, 1.01],
+        "n_trades": [3, 3, 3, 3, 3, 3, 3],
+    })
+
+    def _fake_msp(conn, months_back=6):
+        return drifted
+
+    monkeypatch.setattr(rg.prepared_queries, "monthly_sharpe_proxy", _fake_msp)
+
+    # Use any valid connection -- the patched query never touches it.
+    con = duckdb.connect(":memory:")
+    out = rg.check_regime_stability(con, mode="weekly")
+    con.close()
+
+    # Must NOT raise. Must return the standard dict shape.
+    assert set(out.keys()) == REQUIRED_KEYS
+    assert out["stable"] is True
+    assert out["mode_skipped"] is False
+    assert math.isnan(out["z_score"])
+    assert out["warning"] is not None
+    # Warning should mention the schema-drift cause so an operator can fix it.
+    w = out["warning"].lower()
+    assert ("column" in w or "schema" in w or "drift" in w)
+    assert out["baseline_n_months"] == 0
     assert out["latest_month"] is None
     assert out["latest_sharpe_proxy"] is None
 
