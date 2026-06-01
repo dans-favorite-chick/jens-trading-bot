@@ -5,6 +5,29 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+### 2026-05-31 22:04 Central Daylight Time — Session changes: 5 files modified
+
+**Files changed:**
+- `agents/adaptive_params.py`
+- `data/historical/volumetric/_recorder.log`
+- `memory/audit_log.jsonl`
+- `memory/context/CURRENT_STATE.md`
+- `memory/context/RECENT_CHANGES.md`
+
+---
+### 2026-05-31 21:21 Central Daylight Time — Session changes: 8 files modified
+
+**Files changed:**
+- `tests/warehouse/fixtures/wfa_windows_3rows.csv`
+- `tests/warehouse/fixtures/wfa_windows_p13_inside_bar_3rows.csv`
+- `tests/warehouse/test_ingest.py`
+- `tests/warehouse/test_ingest_derived.py`
+- `tests/warehouse/test_sniff_filename.py`
+- `tests/warehouse/test_trades_ct.py`
+- `tools/warehouse/ingest.py`
+- `tools/warehouse/sidecar.py`
+
+---
 ### 2026-05-31 21:14 Central Daylight Time — Session changes: 3 files modified
 
 **Files changed:**
