@@ -27,8 +27,21 @@ CsvKind = Literal["trades", "wfa_windows", "wfa_summary", "summary", "mixed", "d
 AGGREGATE_METRIC_COLS = {"profit_factor", "sharpe", "win_rate", "max_dd", "n_trades"}
 
 # Convenience CSV filename patterns → 'derived' kind
+# Note: ordered to avoid accidental matches before content-based kind detection.
+# The sniff_kind() function tries trades/wfa/summary FIRST; this only fires for
+# files that pass none of those structural checks.
 DERIVED_PATTERNS = re.compile(
-    r"^(phase\d+_|microstructure_lift|phase3_)",
+    r"^("
+    r"phase\d+_"
+    r"|microstructure_lift"
+    r"|phase3_"
+    r"|phoenix_"
+    r"|backtest_v3_sweep_results"
+    r"|backtest_v3_"
+    r"|exit_methodology_"
+    r"|_dom_"
+    r"|opening_session_sub_"
+    r")",
     re.IGNORECASE,
 )
 
