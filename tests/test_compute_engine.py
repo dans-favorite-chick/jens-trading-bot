@@ -345,6 +345,7 @@ class TestStrategyMetrics:
         panel = ce.compute_strategy_metrics(df, wfa, n_trials_effective=10)
         assert "metrics" in panel
         assert "gates" in panel
+        assert "gate_thresholds" in panel
         m = panel["metrics"]
         for key in ("n_trades", "psr", "dsr", "min_trl", "hlz_t_stat",
                     "bhy_p_adjusted", "profit_factor", "sortino", "calmar",
@@ -358,6 +359,23 @@ class TestStrategyMetrics:
                     "dsr_0_95", "hlz_3_0", "min_trl_met", "wfa_pass",
                     "all_pass_for_proposal", "failed_gates"):
             assert key in g, f"missing gate: {key}"
+
+    def test_gate_thresholds_emitted(self):
+        # Per Task 4 review (Important 6): gate thresholds must be
+        # reachable from facts.json so a rationale like "DSR cleared the
+        # 0.95 gate" classifies as TRANSCRIPTION (the verifier walks the
+        # full facts tree and finds 0.95 under gate_thresholds.dsr_high).
+        df = _build_trades_df([1.0] * 50)
+        panel = ce.compute_strategy_metrics(df, {}, n_trials_effective=1)
+        gt = panel["gate_thresholds"]
+        assert gt["dsr_high"] == pytest.approx(0.95)
+        assert gt["dsr_luck_floor"] == pytest.approx(0.90)
+        assert gt["psr"] == pytest.approx(0.90)
+        assert gt["hlz_t_stat"] == pytest.approx(3.0)
+        assert gt["n_floor"] == 30
+        assert gt["n_medium"] == 100
+        assert gt["n_high"] == 200
+        assert gt["wfe_ratio_min"] == pytest.approx(0.6)
 
     def test_n_trades_matches_input(self):
         pnls = [10.0] * 50 + [-5.0] * 50

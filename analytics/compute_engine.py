@@ -81,6 +81,18 @@ _PSR_LUCK_FLOOR = 0.90
 _HLZ_T_THRESHOLD = 3.0
 _WFE_THRESHOLD = 0.6
 
+# Sample-size gates per spec sec 7b. Centralized here as named constants
+# so they can be emitted into facts.json under `gate_thresholds` (see
+# `compute_strategy_metrics`) and traced by the verifier. The verifier's
+# finding-classifier marks a rationale TRANSCRIPTION only when every
+# number traces to a leaf in facts; if a rationale cites "0.95 gate"
+# without that value being reachable, the finding is misclassified as
+# INTERPRETATION. Emitting the thresholds keeps gate references
+# legitimately quotable.
+_N_FLOOR = 30
+_N_MEDIUM = 100
+_N_HIGH = 200
+
 _MIN_TRL_INFEASIBLE = 10**9
 _EULER_GAMMA = 0.5772156649015329
 
@@ -549,9 +561,9 @@ def compute_strategy_metrics(trades_df: pd.DataFrame,
     # Gates per spec sec 7. `wfa_pass` lives only in `gates` to avoid
     # duplication between metrics and gates (single source of truth).
     gates = {
-        "n_floor": n >= 30,
-        "n_medium": n >= 100,
-        "n_high": n >= 200,
+        "n_floor": n >= _N_FLOOR,
+        "n_medium": n >= _N_MEDIUM,
+        "n_high": n >= _N_HIGH,
         "psr_0_90": psr >= _PSR_LUCK_FLOOR,
         "dsr_0_90": dsr >= _DSR_LUCK_FLOOR,
         "dsr_0_95": dsr >= _DSR_PROPOSE,
@@ -568,7 +580,26 @@ def compute_strategy_metrics(trades_df: pd.DataFrame,
     gates["all_pass_for_proposal"] = (len(failed) == 0)
     gates["failed_gates"] = failed
 
-    panel = {"metrics": metrics, "gates": gates}
+    # Emit gate thresholds so any rationale citing e.g. "0.95 gate" or
+    # "n>=30 floor" has a traceable leaf-value in facts.json. The
+    # verifier's number reconciler walks this dict because it sits
+    # outside the `findings` skip-tree.
+    gate_thresholds = {
+        "dsr_high": _DSR_PROPOSE,
+        "dsr_luck_floor": _DSR_LUCK_FLOOR,
+        "psr": _PSR_LUCK_FLOOR,
+        "hlz_t_stat": _HLZ_T_THRESHOLD,
+        "n_floor": _N_FLOOR,
+        "n_medium": _N_MEDIUM,
+        "n_high": _N_HIGH,
+        "wfe_ratio_min": _WFE_THRESHOLD,
+    }
+
+    panel = {
+        "metrics": metrics,
+        "gates": gates,
+        "gate_thresholds": gate_thresholds,
+    }
     return _sanitize_for_json(panel)
 
 

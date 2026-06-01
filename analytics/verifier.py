@@ -79,16 +79,22 @@ DEFAULT_CAUSAL_PHRASES = [
 # Statistical-reason whitelist. Causal phrases co-located with these tokens
 # describe internal reasoning about sample size / methodology, NOT exogenous
 # market causation. Matched as substrings, case-insensitive.
+#
+# Whitelist hygiene: every entry MUST be specific enough that it cannot
+# false-negative a real causal claim. Bare tokens like "tolerance" or
+# "n_trades" alone matched legitimate-sounding prose ("Fed tolerance for
+# inflation", "n_trades declined in 2022-10") and were tightened to the
+# parameter/comparator forms that actually indicate methodology talk.
 _STATISTICAL_REASON_TERMS = [
     "n <", "n <=", "n =", "n=",
     "sample size", "sample-size",
     "insufficient sample",
     "degrees of freedom",
-    "n_trades",
+    "n_trades <", "n_trades =", "n_trades below", "n_trades exceeded",
     "min_trl",
-    "tolerance", "tolerance pct", "tolerance_pct",
+    "tolerance pct", "tolerance_pct", "tolerance =",
     "below the floor", "above the floor",
-    "p-value", "p value", "p<", "p <",
+    "p-value", "p value", "p < ", "p<0",
     "confidence interval",
     "standard error",
 ]
@@ -417,28 +423,25 @@ def check_lookahead_keywords(
             # but guard anyway).
             continue
         window = _window_text(tokens, tok_idx, window_tokens)
+        # Collect EVERY matching keyword for this date. Recording only the
+        # first match drops diagnostic information about how concentrated
+        # the lookahead artifact is (a paragraph mentioning crash + rally +
+        # FOMC near the same date is a stronger tell than just one of them).
         for kw in kw_lower:
             # Substring search; word-boundary check for short single-word
             # keywords to avoid spurious matches like "rate" in "operate".
             if " " in kw:
                 # Multi-word keyword: substring match is fine.
-                if kw in window:
-                    violations.append({
-                        "date": date_text,
-                        "keyword": kw,
-                        "span": (m.start(), m.end()),
-                        "excerpt": _excerpt(narrative, m.start(), m.end()),
-                    })
-                    break
+                hit = kw in window
             else:
-                if re.search(rf"\b{re.escape(kw)}\b", window):
-                    violations.append({
-                        "date": date_text,
-                        "keyword": kw,
-                        "span": (m.start(), m.end()),
-                        "excerpt": _excerpt(narrative, m.start(), m.end()),
-                    })
-                    break
+                hit = bool(re.search(rf"\b{re.escape(kw)}\b", window))
+            if hit:
+                violations.append({
+                    "date": date_text,
+                    "keyword": kw,
+                    "span": (m.start(), m.end()),
+                    "excerpt": _excerpt(narrative, m.start(), m.end()),
+                })
 
     return {"ok": len(violations) == 0, "violations": violations}
 
@@ -480,9 +483,9 @@ def _window_event_trigger(window_text: str,
             if re.search(rf"\b{re.escape(term)}\b", window_text):
                 return term
     # Dates.
-    if re.search(date_pattern, window_text):
-        m = re.search(date_pattern, window_text)
-        return m.group(0) if m else "date"
+    m = re.search(date_pattern, window_text)
+    if m:
+        return m.group(0)
     return None
 
 
@@ -546,7 +549,8 @@ def check_causal_language(
 
 def classify_finding_type(finding: dict,
                           facts: Mapping[str, Any],
-                          tolerance: float = DEFAULT_TOLERANCE) -> str:
+                          tolerance: float = DEFAULT_TOLERANCE,
+                          num_check: dict | None = None) -> str:
     """Classify a finding as TRANSCRIPTION or INTERPRETATION.
 
     TRANSCRIPTION: every numeric token in ``finding['rationale']`` traces
@@ -558,15 +562,34 @@ def classify_finding_type(finding: dict,
     Empty rationale defaults to the conservative classification
     (INTERPRETATION) so an unannotated finding does not slip through the
     look-ahead downgrade.
+
+    Vacuous-truth divergence
+    ------------------------
+    When the rationale contains zero numbers, we return INTERPRETATION (a
+    conservative override of the spec's literal vacuous-truth reading).
+    Rationale: a numeric-free claim is pure LLM inference with no
+    quantitative anchor; treating it as TRANSCRIPTION would exempt it
+    from the lookahead downgrade despite carrying maximum interpretive
+    risk.
+
+    Parameters
+    ----------
+    num_check:
+        Optional pre-computed result of ``verify_numbers_in_facts`` on
+        the rationale. ``verify_report`` already runs that check to make
+        the reject/keep decision; passing it here avoids the duplicate
+        walk through facts. If None, the check is run locally.
     """
     rationale = finding.get("rationale") if isinstance(finding, dict) else None
     if not rationale:
         return "INTERPRETATION"
-    check = verify_numbers_in_facts(rationale, facts, tolerance)
-    if not check["ok"]:
+    if num_check is None:
+        num_check = verify_numbers_in_facts(rationale, facts, tolerance)
+    if not num_check["ok"]:
         return "INTERPRETATION"
     # If the rationale contains zero numbers, it is interpretive prose by
-    # default - no quantitative claim to ground in facts.
+    # default - no quantitative claim to ground in facts (see vacuous-truth
+    # divergence note above).
     if not extract_numbers(rationale):
         return "INTERPRETATION"
     return "TRANSCRIPTION"
@@ -592,7 +615,8 @@ def _downgrade_tier(tier: str) -> str:
 
 def _finding_rejection_reason(finding: dict,
                               facts: Mapping[str, Any],
-                              tolerance: float) -> str | None:
+                              tolerance: float
+                              ) -> tuple[str | None, dict | None]:
     """Determine whether a finding should be REJECTED outright.
 
     A finding is rejected when its rationale contains:
@@ -600,24 +624,28 @@ def _finding_rejection_reason(finding: dict,
     - a lookahead violation, OR
     - a hard causal violation.
 
-    Returns the reason string or None.
+    Returns ``(reason, num_check)``. ``reason`` is the rejection-reason
+    string or None if the finding survives. ``num_check`` is the cached
+    ``verify_numbers_in_facts`` result (or None if there was no
+    rationale to check); callers may pass it back into
+    ``classify_finding_type`` to avoid a second walk.
     """
     rationale = finding.get("rationale") if isinstance(finding, dict) else None
     if not rationale:
-        return None
+        return None, None
     # 1) Fabricated number in rationale.
     num_check = verify_numbers_in_facts(rationale, facts, tolerance)
     if not num_check["ok"]:
-        return f"unmatched_numbers:{num_check['unmatched']}"
+        return f"unmatched_numbers:{num_check['unmatched']}", num_check
     # 2) Lookahead violation in rationale.
     look = check_lookahead_keywords(rationale)
     if not look["ok"]:
-        return f"lookahead:{look['violations'][0]}"
+        return f"lookahead:{look['violations'][0]}", num_check
     # 3) Causal violation in rationale.
     causal = check_causal_language(rationale)
     if not causal["ok"]:
-        return f"causal:{causal['violations'][0]}"
-    return None
+        return f"causal:{causal['violations'][0]}", num_check
+    return None, num_check
 
 
 def verify_report(facts: Mapping[str, Any],
@@ -632,9 +660,28 @@ def verify_report(facts: Mapping[str, Any],
       3. check_causal_language on the narrative
       4. For each finding: classify TRANSCRIPTION vs INTERPRETATION;
          decide whether to REJECT it (fabricated number / lookahead /
-         causal violation in its rationale).
+         causal violation in its rationale, OR a missing finding id).
       5. If `lookahead_active` is True, build the per-finding confidence
          downgrade list for surviving INTERPRETATION findings.
+
+    Narrative-level vs finding-level asymmetry
+    ------------------------------------------
+    Steps 1-3 run on the FULL narrative; step 4's rejection logic runs
+    only on each finding's ``rationale``. A narrative-level violation
+    (e.g. the prose around a finding mentions "the market crashed in
+    2022-10") sets ``result["ok"] = False`` but does NOT add anything to
+    ``rejected_findings`` - the violating text is outside any specific
+    finding's rationale. **The orchestrator MUST act on
+    ``result['ok']`` independently of ``rejected_findings``.** A clean
+    ``rejected_findings`` list does not imply the report is publishable.
+
+    Structural rejection: missing finding id
+    ----------------------------------------
+    A finding without an ``id`` field is REJECTED outright with reason
+    ``"structural: missing finding id"``. Silent-skipping such findings
+    would let a fabricated rationale slip through unchecked: rejection
+    here both surfaces the malformed input and runs the same content
+    checks (which we still execute against a synthetic placeholder id).
 
     Returns:
         {
@@ -655,19 +702,34 @@ def verify_report(facts: Mapping[str, Any],
     rejection_reasons: dict[str, str] = {}
     downgrades: list[dict] = []
 
-    for finding in findings or []:
+    for idx, finding in enumerate(findings or []):
         fid = finding.get("id") if isinstance(finding, dict) else None
-        if fid is None:
-            continue
-        reason = _finding_rejection_reason(finding, facts, DEFAULT_TOLERANCE)
+        missing_id = fid is None
+        if missing_id:
+            # Generate a synthetic id so the rejection is trackable. We
+            # still run the content checks below so the orchestrator can
+            # see WHY this finding is bad (structural + possibly
+            # content). The structural reason wins if no content reason
+            # fires.
+            fid = f"missing_id_{idx}"
+        reason, _num_check = _finding_rejection_reason(
+            finding, facts, DEFAULT_TOLERANCE
+        )
+        if missing_id and reason is None:
+            reason = "structural: missing finding id"
+        elif missing_id and reason is not None:
+            reason = f"structural: missing finding id; {reason}"
         if reason is not None:
             rejected.append(fid)
             rejection_reasons[fid] = reason
             continue
         # Survived rejection. If lookahead is active, downgrade
-        # INTERPRETATION findings only.
+        # INTERPRETATION findings only. Reuse the cached num_check from
+        # the rejection probe to avoid re-walking facts.
         if lookahead_active:
-            ftype = classify_finding_type(finding, facts)
+            ftype = classify_finding_type(
+                finding, facts, num_check=_num_check
+            )
             if ftype == "INTERPRETATION":
                 old = finding.get("confidence", "")
                 new = _downgrade_tier(old)

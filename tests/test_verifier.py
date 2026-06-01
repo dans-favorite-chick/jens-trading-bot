@@ -31,83 +31,76 @@ from analytics import verifier as v
 # extract_numbers
 # ---------------------------------------------------------------------------
 
-class TestExtractNumbers:
-    def test_percentage_to_proportion(self):
-        out = v.extract_numbers("WR = 52.1%")
-        # Expect one (raw, value) where raw retains the % and value is 0.521.
-        assert len(out) == 1
-        raw, value = out[0]
-        assert raw == "52.1%"
-        assert value == pytest.approx(0.521)
+@pytest.mark.parametrize(
+    "label, text, expected",
+    [
+        # ---- Single-number happy paths ---------------------------------
+        # (Minor 14: consolidated from the original 11 individual methods
+        # plus edge cases called out in the review.)
+        ("percentage", "WR = 52.1%", [("52.1%", 0.521)]),
+        ("currency_with_commas", "max drawdown $1,840.50",
+         [("$1,840.50", 1840.5)]),
+        ("equals_assignment", "n=87", [("87", 87.0)]),
+        ("negative_number", "max drawdown -1840.5", [("-1840.5", -1840.5)]),
+        # Negative percentage: a real edge case for return-series reporting.
+        ("negative_percentage", "OOS PF drift -12.5%",
+         [("-12.5%", -0.125)]),
+        # ---- Multi-number narratives -----------------------------------
+        ("multiple_kv_pairs", "DSR=0.71, BHY-p=0.018",
+         [("0.71", 0.71), ("0.018", 0.018)]),
+        ("mixed_narrative", "WR dropped from 52.1% to 38.9% (n=35)",
+         [("52.1%", 0.521), ("38.9%", 0.389), ("35", 35.0)]),
+        # ---- Rejection cases (expected list is empty) ------------------
+        ("rejects_bare_year", "This was 2024 data", []),
+        ("rejects_ordinal_1st", "1st quarter results", []),
+        ("rejects_embedded_in_identifier", "q4_2024 results", []),
+        ("rejects_date_components", "session_date 2022-10-15 trades", []),
+        # Scientific notation: the grammar does not match the exponent
+        # (the trailing 'e' is whitelisted in `extract_numbers` to leave
+        # room for future support, but the exponent digits are not yet
+        # consumed). Current behavior: extract the mantissa "1.5"; the
+        # "e3" tail is left untouched. The contract pinned here is "no
+        # crash + no wrong full value" - we get the mantissa, not 1500.
+        # If true scientific support is added, update this case.
+        ("scientific_notation_mantissa_only",
+         "energy 1.5e3 watts", [("1.5", 1.5)]),
+    ],
+)
+def test_extract_numbers_parametrized(label, text, expected):
+    """Table-driven extract_numbers tests (Minor 14).
 
-    def test_currency_with_commas(self):
-        out = v.extract_numbers("max drawdown $1,840.50")
-        assert len(out) == 1
-        raw, value = out[0]
-        assert raw == "$1,840.50"
-        assert value == pytest.approx(1840.5)
+    `expected` is a list of (raw, value) tuples that MUST appear in the
+    output. For rejection cases the list is empty - the test asserts
+    nothing was extracted. Order is checked when the case lists more
+    than one element."""
+    out = v.extract_numbers(text)
+    if not expected:
+        assert out == [], f"{label}: expected no extractions, got {out!r}"
+        return
+    # Multi-element cases: compare as ordered (raw, value-rounded) lists.
+    assert len(out) == len(expected), (
+        f"{label}: got {len(out)} numbers, expected {len(expected)}: "
+        f"{out!r} vs {expected!r}"
+    )
+    for (raw_got, val_got), (raw_exp, val_exp) in zip(out, expected):
+        assert raw_got == raw_exp, f"{label}: raw mismatch"
+        assert val_got == pytest.approx(val_exp), (
+            f"{label}: value mismatch for {raw_exp!r}"
+        )
 
-    def test_equals_assignment(self):
-        out = v.extract_numbers("n=87")
-        assert len(out) == 1
-        raw, value = out[0]
-        assert raw == "87"
-        assert value == pytest.approx(87.0)
 
-    def test_multiple_kv_pairs(self):
-        out = v.extract_numbers("DSR=0.71, BHY-p=0.018")
-        values = {raw: val for raw, val in out}
-        assert "0.71" in values
-        assert "0.018" in values
-        assert values["0.71"] == pytest.approx(0.71)
-        assert values["0.018"] == pytest.approx(0.018)
-
-    def test_rejects_bare_year(self):
-        out = v.extract_numbers("This was 2024 data")
-        # 2024 alone should not be a number; it's a year token.
-        assert all(raw != "2024" for raw, _ in out)
-
-    def test_rejects_ordinal(self):
-        out = v.extract_numbers("1st quarter results")
-        # "1st" should not be extracted as 1.
-        assert all(raw != "1" for raw, _ in out)
-        assert len(out) == 0
-
-    def test_rejects_embedded_in_identifier(self):
-        out = v.extract_numbers("q4_2024 results")
-        # Neither 4 nor 2024 should come out of q4_2024.
-        assert len(out) == 0
-
-    def test_negative_number(self):
-        out = v.extract_numbers("max drawdown -1840.5")
-        assert len(out) == 1
-        raw, value = out[0]
-        assert raw == "-1840.5"
-        assert value == pytest.approx(-1840.5)
+class TestExtractNumbersBehavior:
+    """Additional extract_numbers cases that do not fit the parametrized
+    table (e.g. assertions about set-membership rather than exact
+    ordering)."""
 
     def test_signed_positive(self):
+        # The current grammar may or may not retain the '+' in the raw
+        # token; we only require the parsed value equals 0.05.
         out = v.extract_numbers("delta +0.05 confirmed")
         assert len(out) >= 1
-        # Either +0.05 or 0.05; whichever we pick the value must be 0.05.
-        # We assert that at least one extracted value equals 0.05.
         values = [val for _, val in out]
         assert any(val == pytest.approx(0.05) for val in values)
-
-    def test_mixed_narrative(self):
-        text = "WR dropped from 52.1% to 38.9% (n=35)"
-        out = v.extract_numbers(text)
-        # 3 numbers: 0.521, 0.389, 35
-        assert len(out) == 3
-        values = sorted(val for _, val in out)
-        # ascending: 0.389, 0.521, 35.0
-        assert values[0] == pytest.approx(0.389)
-        assert values[1] == pytest.approx(0.521)
-        assert values[2] == pytest.approx(35.0)
-
-    def test_does_not_extract_date_components(self):
-        # YYYY-MM date should not contribute spurious numbers.
-        out = v.extract_numbers("session_date 2022-10-15 trades")
-        assert len(out) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -234,14 +227,11 @@ class TestCheckLookaheadKeywords:
         assert len(result["violations"]) >= 2
 
     def test_window_size_excludes_far_keyword(self):
-        # Place the keyword 11 tokens away from the date.
-        filler = " ".join(["x"] * 11)
-        text = f"{filler} crash 2022-10"  # 11 fillers, then keyword, then date
-        # Actually: filler has 11 tokens, then "crash", then "2022-10".
-        # Reorder so date is at position 0 and crash is at position 12.
+        # Place the keyword 12 tokens away from the date. Date at
+        # position 0, then 11 filler "x" tokens, then "crashed" at
+        # position 12. With window_tokens=10, the keyword is outside.
         text = "2022-10 " + " ".join(["x"] * 11) + " crashed"
         result = v.check_lookahead_keywords(text, window_tokens=10)
-        # Crashed is 12 tokens after the date, outside window=10.
         assert result["ok"] is True
 
     def test_fomc_near_date_violates(self):
@@ -261,6 +251,33 @@ class TestCheckLookaheadKeywords:
         # Event keyword exists but no date; that's not the lookahead pattern.
         result = v.check_lookahead_keywords("the market crashed badly")
         assert result["ok"] is True
+
+    def test_multiple_keywords_same_date_all_recorded(self):
+        # Regression for Task 4 review (Important 4): the previous
+        # implementation broke after the FIRST matching keyword per
+        # date, dropping diagnostic info. Both "crashed" and "rallied"
+        # sit within the +/-10-token window of 2022-10 - both should
+        # appear in the violations list.
+        result = v.check_lookahead_keywords(
+            "the market crashed and rallied in 2022-10"
+        )
+        assert result["ok"] is False
+        keywords = {viol["keyword"] for viol in result["violations"]}
+        # Both event-word stems should be present. We match against the
+        # lowercased keyword forms emitted by the scanner.
+        assert any(kw.startswith("crash") for kw in keywords)
+        assert any(kw.startswith("rall") for kw in keywords)
+        assert len(result["violations"]) >= 2
+
+    def test_comma_attached_event_keyword_violates(self):
+        # Regression for Task 4 review (Minor 12): an event-word with a
+        # comma butted up against it ("crashed,") must still be detected
+        # in the window. Word-boundary matching is what makes this work.
+        result = v.check_lookahead_keywords(
+            "the market crashed, in 2022-10 trading was thin"
+        )
+        assert result["ok"] is False
+        assert len(result["violations"]) >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +328,49 @@ class TestCheckCausalLanguage:
             "this happened due to the events of 2022-10"
         )
         assert result["ok"] is False
+
+    def test_fed_tolerance_is_not_whitelisted(self):
+        # Regression for Task 4 review (Critical 1): the bare "tolerance"
+        # whitelist token previously matched "Fed tolerance for inflation"
+        # and silently passed a real exogenous causal claim. The intent of
+        # the whitelist was to legitimize the Oracle's `tolerance_pct`
+        # parameter language, NOT prose about Fed policy. Only the
+        # tighter parameter forms (tolerance_pct, tolerance =, etc.)
+        # should still legitimize methodology talk.
+        result = v.check_causal_language(
+            "strategy declined due to Fed tolerance for inflation risk"
+        )
+        assert result["ok"] is False
+        assert len(result["violations"]) >= 1
+
+    def test_tolerance_pct_parameter_still_whitelisted(self):
+        # Companion to test_fed_tolerance_is_not_whitelisted: confirm we
+        # did not over-rotate. The Oracle's internal tolerance_pct
+        # parameter is legitimate methodology talk and must still pass.
+        result = v.check_causal_language(
+            "no plateau because tolerance_pct = 0.10 exceeded"
+        )
+        assert result["ok"] is True
+
+    def test_n_trades_declined_is_not_whitelisted(self):
+        # Regression for Task 4 review (Important 5): bare "n_trades"
+        # previously whitelisted "n_trades declined in 2022-10" which is
+        # actually an exogenous causal claim about a market period. The
+        # tightened whitelist requires a comparator (n_trades <, =,
+        # below, exceeded) to legitimize the prose.
+        result = v.check_causal_language(
+            "signal degraded because n_trades declined in 2022-10"
+        )
+        assert result["ok"] is False
+        assert len(result["violations"]) >= 1
+
+    def test_n_trades_comparator_still_whitelisted(self):
+        # Companion to test_n_trades_declined_is_not_whitelisted: confirm
+        # the tightened forms still pass for legitimate methodology talk.
+        result = v.check_causal_language(
+            "skipped because n_trades < 30 below the floor"
+        )
+        assert result["ok"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +427,48 @@ class TestClassifyFindingType:
         finding = {"id": "f5"}
         assert v.classify_finding_type(finding, self._facts()) == "INTERPRETATION"
 
+    def test_gate_threshold_reference_is_transcription(self):
+        # Regression for Task 4 review (Important 6): a rationale citing
+        # a gate threshold value (e.g. 0.95 DSR gate) used to misclassify
+        # as INTERPRETATION because the constant did not exist as a leaf
+        # in facts. We now emit `gate_thresholds` into the panel from
+        # compute_engine, and this test confirms the verifier can trace
+        # 0.95 back to facts.X.gate_thresholds.dsr_high.
+        facts = {
+            "strategies": {
+                "X": {
+                    "metrics": {"dsr": 0.97, "n_trades": 200},
+                    "gates": {},
+                    "gate_thresholds": {
+                        "dsr_high": 0.95,
+                        "dsr_luck_floor": 0.90,
+                        "psr": 0.90,
+                    },
+                }
+            },
+        }
+        finding = {
+            "id": "f_gate",
+            "rationale": "DSR cleared the 0.95 gate",
+        }
+        assert v.classify_finding_type(finding, facts) == "TRANSCRIPTION"
+
+    def test_classify_accepts_cached_num_check(self):
+        # Important 6 / Minor 10: classify_finding_type should accept a
+        # pre-computed num_check (cached by verify_report's rejection
+        # probe) and skip the duplicate walk through facts.
+        facts = self._facts()
+        finding = {
+            "id": "f_cached",
+            "rationale": "DSR = 0.71, n = 87",
+        }
+        # Forge a cached check that would force INTERPRETATION even
+        # though the rationale is actually transcribable. This proves
+        # the cache is honored (not silently recomputed).
+        forged = {"ok": False, "unmatched": [("0.71", 0.71)]}
+        result = v.classify_finding_type(finding, facts, num_check=forged)
+        assert result == "INTERPRETATION"
+
 
 # ---------------------------------------------------------------------------
 # verify_report
@@ -406,10 +508,10 @@ class TestVerifyReport:
         assert result["rejected_findings"] == []
         assert result["downgrades"] == []
 
-    def test_tier4_adversarial_rejects_fabricated_finding(self):
-        # Spec sec 16, Tier 4: inject a synthetic precomputed fact with
-        # n=10 (below n=30 floor), dsr=0.99. The verifier must REJECT any
-        # narrative mentioning the synthetic finding.
+    def test_fabricated_dsr_rejected(self):
+        # Fabricated-number defense: the narrative AND the finding cite a
+        # DSR that does not appear anywhere in facts. The verifier must
+        # reject the finding outright.
         facts = {
             "strategies": {
                 "X": {
@@ -418,14 +520,6 @@ class TestVerifyReport:
                 }
             },
         }
-        # A "finding" that the orchestrator tried to write quoting the
-        # synthetic dsr=0.99. The narrative cites 0.99 which traces into
-        # facts.X.metrics.dsr, BUT a real defense is also needed at the
-        # finding level: n=10 < 30 should never produce a published
-        # finding. The verifier handles claims; the orchestrator-side gate
-        # handles the floor. We confirm the verifier surfaces the finding.
-        # Adversarial variant: narrative quotes dsr=0.95 (fabricated, not
-        # in facts) and ties it to strategy X.
         narrative = "Strategy X shows DSR=0.95 with n=10"
         findings = [
             {
@@ -443,6 +537,43 @@ class TestVerifyReport:
         assert result["ok"] is False
         assert "f_adversarial" in result["rejected_findings"]
         assert "f_adversarial" in result["rejection_reasons"]
+
+    def test_verifier_does_not_enforce_n_floor(self):
+        # Contract boundary: the n>=30 floor is the orchestrator's job,
+        # NOT the verifier's. If a finding cites DSR=0.99 with n=10 and
+        # BOTH values are present in facts, the verifier classifies it as
+        # a clean transcription and lets it through. The orchestrator
+        # must drop it upstream via its INSUFFICIENT-tier gate.
+        #
+        # This test pins the contract: future maintainers should not
+        # silently push the floor down into the verifier.
+        facts = {
+            "strategies": {
+                "X": {
+                    "metrics": {"dsr": 0.99, "n_trades": 10},
+                    "gates": {"all_pass_for_proposal": False},
+                }
+            },
+        }
+        narrative = "Strategy X shows DSR=0.99 with n=10"
+        findings = [
+            {
+                "id": "f_low_n",
+                "rationale": "DSR=0.99 with n=10",
+                "confidence": "MEDIUM",
+            }
+        ]
+        result = v.verify_report(
+            facts,
+            narrative,
+            findings,
+            lookahead_active=False,
+        )
+        # Both DSR=0.99 and n=10 trace to facts. No causal/lookahead
+        # issues. Therefore: no rejection, ok=True. The orchestrator
+        # owns the n-floor decision.
+        assert result["ok"] is True
+        assert result["rejected_findings"] == []
 
     def test_lookahead_active_downgrades_interpretation(self):
         facts = {
@@ -518,6 +649,52 @@ class TestVerifyReport:
                       if d["finding_id"] == "f1"]
         assert downgrades == []
 
+    def test_missing_finding_id_rejected_with_fabricated_number(self):
+        # Regression for Task 4 review (Critical 2): a finding without
+        # an id used to be silently skipped, letting a fabricated
+        # rationale slip through unchecked. The verifier must now reject
+        # id-less findings outright AND still surface any content issues.
+        facts = {
+            "strategies": {
+                "bias_momentum": {
+                    "metrics": {"dsr": 0.71, "n_trades": 200},
+                    "gates": {},
+                }
+            },
+        }
+        findings = [
+            # Two id-less findings: one with a fabricated number, one
+            # with a clean rationale. BOTH should land in rejected, the
+            # first one with a content reason concatenated.
+            {"rationale": "DSR=0.99 striking", "confidence": "HIGH"},
+            {"rationale": "DSR=0.71", "confidence": "HIGH"},
+        ]
+        result = v.verify_report(
+            facts,
+            "DSR=0.71 holds.",
+            findings,
+            lookahead_active=False,
+        )
+        assert result["ok"] is False
+        # Both id-less findings should have synthetic ids in the
+        # rejected list.
+        assert any("missing_id_" in fid
+                   for fid in result["rejected_findings"])
+        assert len(result["rejected_findings"]) == 2
+        # The first finding's reason must mention both structural AND
+        # the fabricated-number issue.
+        first_id = "missing_id_0"
+        assert first_id in result["rejection_reasons"]
+        first_reason = result["rejection_reasons"][first_id]
+        assert "missing finding id" in first_reason
+        assert "unmatched_numbers" in first_reason
+        # The second finding's reason is purely structural.
+        second_id = "missing_id_1"
+        assert second_id in result["rejection_reasons"]
+        assert result["rejection_reasons"][second_id] == (
+            "structural: missing finding id"
+        )
+
     def test_narrative_with_lookahead_violation_flags(self):
         facts = {
             "strategies": {
@@ -567,6 +744,10 @@ class TestPublicSurface:
             r"^\s*import\s+bridge\b",
             r"^\s*from\s+data_feeds\b",
             r"^\s*import\s+data_feeds\b",
+            # Verifier must not import the engine it verifies (module
+            # independence: orchestrator wires them together).
+            r"^\s*from\s+analytics\.compute_engine\b",
+            r"^\s*import\s+analytics\.compute_engine\b",
         ]
         for pat in forbidden_patterns:
             assert not re.search(pat, text, re.MULTILINE), (
