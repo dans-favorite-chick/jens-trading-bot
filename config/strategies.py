@@ -1139,6 +1139,22 @@ STRATEGIES = {
         # retest entry-mode pilot (Section V.1: +$119 / 60d in analyzer).
         "enabled": True,
         "validated": True,
+        # Oracle 2026-06-01 proposal #7 (finding_id: raschke_baseline_confirmed_2026-06-01),
+        # Hour-10 priority slice (was omitted by the Oracle's one-per-strategy
+        # cap; staged here per operator master plan section 3F):
+        # Hour 10 CT is the standout slot (PF 4.73, n=218). Hours 11-14
+        # are also strong (PF 2.14-3.07) but the operator-prescribed
+        # block keeps only hours 10-11 CT. Hours 8-9 are blocked (PF 1.46
+        # at hour 9 is the weak slot); hours 12-15 are blocked per the
+        # operator directive. Trade count will drop materially; per-trade
+        # edge expected to improve.
+        # The companion SHORT-priority proposal (raschke_baseline_short_advantage_*)
+        # needs the Phase 4 allowed_directions + size-tilt mechanism;
+        # tracked separately in pending_changes.json.
+        "session_block_windows": [
+            ("08:00", "09:59"),
+            ("12:00", "15:00"),
+        ],
         "trend_spread_atr": 0.3,
         "ema_ref_period": 21,
         "touch_buffer_ticks": 2,
