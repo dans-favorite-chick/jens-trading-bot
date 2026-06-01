@@ -764,38 +764,3 @@ def _log_result(r: IngestResult) -> None:
         log.info("⏭  %s  skipped_duplicate", r.csv_path.name)
     else:
         log.warning("❌ %s  error=%s", r.csv_path.name, r.error)
-# Utilities
-# ──────────────────────────────────────────────────────────────
-
-def _safe_csv_path(path: Path) -> str:
-    """Return a DuckDB-safe single-quoted path string for use in SQL."""
-    escaped = str(path).replace("'", "''")
-    return f"'{escaped}'"
-
-
-def _log_error(csv_path: Path, error_class: str, error_msg: str, *, traceback: str = "") -> None:
-    import traceback as tb_mod
-    record = {
-        "ts":          datetime.now(timezone.utc).isoformat(),
-        "level":       "error",
-        "file":        str(csv_path),
-        "error_class": error_class,
-        "error":       error_msg,
-    }
-    if traceback:
-        record["traceback"] = traceback
-    ERROR_LOG.parent.mkdir(parents=True, exist_ok=True)
-    with ERROR_LOG.open("a") as fh:
-        fh.write(json.dumps(record) + "\n")
-    log.error("ingest error [%s] %s: %s", error_class, csv_path.name, error_msg)
-
-
-def _log_result(r: IngestResult) -> None:
-    if r.status == "inserted":
-        log.info("✅ %s  kind=%-12s  rows=%d  metrics=%d  run_id=%s...",
-                 r.csv_path.name, r.csv_kind, r.rows_inserted, r.metrics_inserted,
-                 (r.run_id or "")[:12])
-    elif r.status == "skipped_duplicate":
-        log.info("⏭  %s  skipped_duplicate", r.csv_path.name)
-    else:
-        log.warning("❌ %s  error=%s", r.csv_path.name, r.error)

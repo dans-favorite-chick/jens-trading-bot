@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "strategy": "bias_momentum",
+  "friction_per_rt_usd": 4.82,
+  "logical_group": "test_fixture",
+  "notes": "Fixture for friction-implicit-true branch (no explicit friction_applied key)"
+}

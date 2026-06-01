@@ -82,3 +82,15 @@ def test_parse_error_records_b64_and_proceeds(tmp_path):
     assert res.sidecar == {}
     assert "sidecar_parse_error" in res.sidecar_raw["meta"]
     assert "parse_error_raw_b64" in res.sidecar_raw["meta"]
+
+
+def test_friction_applied_implicit_true_via_friction_per_rt_usd(fixtures_dir):
+    """Test that friction_applied resolves to True when friction_per_rt_usd > 0 (no explicit field)."""
+    from tools.warehouse.sidecar import friction_applied
+
+    res = load_and_hash(fixtures_dir / "trades_friction_per_rt_only.csv")
+    # Sidecar should have friction_per_rt_usd but NOT friction_applied
+    assert res.sidecar.get("friction_per_rt_usd") == 4.82
+    assert "friction_applied" not in res.sidecar
+    # friction_applied resolver should return True because friction_per_rt_usd > 0
+    assert friction_applied(res.sidecar, cli_override=None) is True

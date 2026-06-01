@@ -58,3 +58,14 @@ def test_friction_resolution_sidecar_without_friction_field(tmp_path):
     sc_path.write_text(json.dumps({"schema_version": 1, "seed": 1}))
     sc = load_and_hash(csv)
     assert friction_applied(sc.sidecar, cli_override=None) is False
+
+
+def test_friction_resolution_sidecar_friction_per_rt_usd_only(tmp_path):
+    """Test that friction_applied=True when only friction_per_rt_usd > 0 (no explicit field)."""
+    csv = tmp_path / "x.csv"
+    csv.write_text("a\n1\n")
+    # Use correct sidecar naming: x.run.json
+    sc_path = tmp_path / "x.run.json"
+    sc_path.write_text(json.dumps({"schema_version": 1, "friction_per_rt_usd": 4.82}))
+    sc = load_and_hash(csv)
+    assert friction_applied(sc.sidecar, cli_override=None) is True

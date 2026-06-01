@@ -136,6 +136,12 @@ def _print_summary(results: list[IngestResult]) -> None:
 
 
 def main(argv=None) -> int:
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass  # non-tty stdout (pipe), or older Python; safe to skip
+
     parser = argparse.ArgumentParser(
         prog="python -m tools.warehouse",
         description="Phoenix backtest warehouse CLI",
