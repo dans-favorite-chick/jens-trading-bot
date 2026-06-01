@@ -47,7 +47,11 @@ WINNERS_PHASE13 = (
     # V2 un-retirement did not rescue the structural mismatch.
     # OPERATOR-APPROVED disable: 2026-06-01 (commit efc6d5e).
     # Now listed in ALLOWED_DISABLED_LEGACIES below.
-    "vwap_pullback_v2",
+    # 2026-06-01: vwap_pullback_v2 REMOVED from §1.1 winners pool.
+    # Oracle 5y verdict: n=5,383, t=-3.61, PF 0.888, max DD -$18,981.
+    # Negative both directions, WFA gate FAIL. OPERATOR-APPROVED disable
+    # 2026-06-01 (commit 0ae8961). Tombstone retained in WINNERS_BEYOND_PLAN
+    # (validated=True preserved as audit history).
     "opening_session",          # parent for 4 enabled subs + orb
     "raschke_baseline",
     "g_inside_bar_breakout",
@@ -61,7 +65,11 @@ WINNERS_PHASE13 = (
 # Per PHOENIX_BEST_PLAN.md §1.2 — not in §1.1's "winners" pool but
 # explicitly per-strategy-specced. Considered an OK validated=True.
 WINNERS_BEYOND_PLAN = (
-    "vwap_band_reversion",  # §1.2 row 12 (retest, scale_out_1r + filter)
+    # 2026-06-01: vwap_band_reversion DISABLED by Oracle 5y verdict
+    # (n=2,733, t=-3.75, PF 0.845, max DD -$16,206; commit 6b60c50,
+    # OPERATOR-APPROVED). validated is already False so it's not even
+    # required here, but listed for completeness alongside the others.
+    "vwap_band_reversion",  # §1.2 row 12, now disabled 2026-06-01
     # 2026-06-01: spring_setup tombstone. Disabled by Oracle 5y verdict
     # (commit efc6d5e, OPERATOR-APPROVED) but validated=True preserved
     # in config/strategies.py as audit history of its prior status.
@@ -70,6 +78,10 @@ WINNERS_BEYOND_PLAN = (
     # "validated for the record, but not shipping" and exempt from the
     # silent-override guardrail.
     "spring_setup",
+    # 2026-06-01: vwap_pullback_v2 tombstone, same pattern.
+    # Disabled by Oracle verdict (commit 0ae8961, OPERATOR-APPROVED).
+    # validated=True preserved as audit history.
+    "vwap_pullback_v2",
     # Future legitimate promotions land here with a citation comment.
 )
 
@@ -85,6 +97,11 @@ ALLOWED_DISABLED_LEGACIES = (
     "noise_area",         # retired 2026-05-15 (target=entry bug + anti-edge)
     "high_precision_only", # retired 2026-05-13 (557 trades / 29% WR / -$1,082)
     "spring_setup",       # 2026-06-01 Oracle verdict t=-7.77, MaxDD -$83k (commit efc6d5e)
+    "vwap_pullback_v2",   # 2026-06-01 Oracle verdict t=-3.61, MaxDD -$19k (commit 0ae8961)
+    "vwap_band_reversion", # 2026-06-01 Oracle verdict t=-3.75, MaxDD -$16k (commit 6b60c50)
+    "compression_breakout_v2",  # 2026-06-01 Oracle verdict t=-6.23, PF 0.443 (commit 54edcf4)
+    "compression_breakout_micro", # 2026-06-01 Oracle verdict t=-6.14, PF 0.464 (commit b2ba160)
+    "orb_fade",           # 2026-06-01 Oracle verdict WR 13.5%, PF 0.81 (commit f4216e5)
     # 2026-05-22 pt8 (per agent ac705046): cover all the disabled legacies
     # so a "promote-by-vibes" PR can't silently flip enabled=True without
     # tripping CI. Each of these has empirical evidence supporting the
