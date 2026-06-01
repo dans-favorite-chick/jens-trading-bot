@@ -12,10 +12,8 @@ query must exclude trades from runs where friction_applied = FALSE.
 """
 from __future__ import annotations
 
-import json
 import textwrap
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import duckdb
 import pandas as pd
@@ -245,6 +243,28 @@ def test_assert_select_only_rejects_truncate():
         pq.assert_select_only("TRUNCATE TABLE trades")
 
 
+def test_assert_select_only_rejects_merge():
+    with pytest.raises(ValueError):
+        pq.assert_select_only("MERGE INTO trades USING staging ON trades.id = staging.id")
+
+
+def test_assert_select_only_rejects_alter():
+    with pytest.raises(ValueError):
+        pq.assert_select_only("ALTER TABLE trades ADD COLUMN x INTEGER")
+
+
+def test_assert_select_only_rejects_create():
+    with pytest.raises(ValueError):
+        pq.assert_select_only("CREATE TABLE foo (id INTEGER)")
+
+
+def test_assert_select_only_allows_replace_string_function():
+    # DuckDB has a built-in REPLACE(s, from, to) string function. After the
+    # code-review fix we no longer ban this keyword, so SELECT-side usage
+    # like REPLACE(strategy, '-', '_') must be accepted.
+    pq.assert_select_only("SELECT REPLACE(strategy, '-', '_') FROM trades")
+
+
 # ---------------------------------------------------------------------------
 # strategies_with_trades — verifies friction filter + min_n
 # ---------------------------------------------------------------------------
@@ -343,13 +363,131 @@ def test_wfa_summary_for_strategy_returns_dict(db):
 
 def test_wfa_summary_for_strategy_missing(db):
     d = pq.wfa_summary_for_strategy(db, "does_not_exist")
-    assert d == {} or d.get("n_windows") in (None, 0)
+    assert d == {}
 
 
 def test_wfa_windows_for_strategy_returns_frame(db):
     df = pq.wfa_windows_for_strategy(db, "alpha")
     assert len(df) == 5
     assert {"window_idx", "is_pf", "oos_pf", "degraded"}.issubset(df.columns)
+
+
+# ---------------------------------------------------------------------------
+# WFA most-recent-run selection — protects against run_id (hash) ordering
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def multi_run_wfa_db():
+    """Two runs with WFA rows for the same strategy at distinct ingested_at.
+
+    The OLDER run is named with a LEXICOGRAPHICALLY-LATER run_id so that the
+    bug (`ORDER BY run_id`) would pick the wrong row. The fix orders by
+    `ingested_at DESC` and must therefore return the NEWER run.
+    """
+    con = duckdb.connect(":memory:")
+    apply_schema(con)
+
+    older_ts = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
+    newer_ts = datetime(2026, 5, 30, 12, 0, tzinfo=UTC)
+
+    # Older run, lexicographically-LATER run_id. The buggy ORDER BY run_id
+    # would prefer this row; the fix must NOT.
+    con.execute(
+        """
+        INSERT INTO runs (run_id, source_filename, csv_kind, strategy,
+                          friction_applied, ingested_at)
+        VALUES ('zzz_old', 'old.csv', 'wfa_summary', 'alpha', TRUE, ?)
+        """,
+        [older_ts],
+    )
+    # Newer run, lexicographically-EARLIER run_id.
+    con.execute(
+        """
+        INSERT INTO runs (run_id, source_filename, csv_kind, strategy,
+                          friction_applied, ingested_at)
+        VALUES ('aaa_new', 'new.csv', 'wfa_summary', 'alpha', TRUE, ?)
+        """,
+        [newer_ts],
+    )
+
+    # WFA summary rows — distinct n_windows so we can tell them apart.
+    con.execute(
+        """
+        INSERT INTO wfa_summary
+          (run_id, strategy, n_windows, mean_is_pf, mean_oos_pf,
+           median_oos_pf, pct_windows_degraded, robust)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        ["zzz_old", "alpha", 3, 1.1, 1.0, 1.05, 0.10, False],
+    )
+    con.execute(
+        """
+        INSERT INTO wfa_summary
+          (run_id, strategy, n_windows, mean_is_pf, mean_oos_pf,
+           median_oos_pf, pct_windows_degraded, robust)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        ["aaa_new", "alpha", 7, 2.0, 1.6, 1.55, 0.05, True],
+    )
+
+    # WFA windows for each run — distinct window_idx ranges to tell apart.
+    for i in range(3):  # older run: idx 100-102
+        con.execute(
+            """
+            INSERT INTO wfa_windows
+              (run_id, strategy, window_idx, is_start, is_end, oos_start, oos_end,
+               is_pf, is_trades, oos_pf, oos_trades, oos_net, wfe, degraded)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                "zzz_old", "alpha", 100 + i,
+                datetime(2024, 1, 1).date(),
+                datetime(2024, 1, 30).date(),
+                datetime(2024, 1, 31).date(),
+                datetime(2024, 2, 28).date(),
+                1.1, 50, 1.0, 20, 100.0, 0.5, False,
+            ],
+        )
+    for i in range(7):  # newer run: idx 0-6
+        con.execute(
+            """
+            INSERT INTO wfa_windows
+              (run_id, strategy, window_idx, is_start, is_end, oos_start, oos_end,
+               is_pf, is_trades, oos_pf, oos_trades, oos_net, wfe, degraded)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                "aaa_new", "alpha", i,
+                datetime(2025, 1, 1).date(),
+                datetime(2025, 1, 30).date(),
+                datetime(2025, 1, 31).date(),
+                datetime(2025, 2, 28).date(),
+                2.0, 100, 1.6, 40, 500.0, 0.8, False,
+            ],
+        )
+
+    yield con
+    con.close()
+
+
+def test_wfa_summary_for_strategy_returns_most_recent_run(multi_run_wfa_db):
+    # The newer run has n_windows=7. The older (but lexicographically-later
+    # run_id) has n_windows=3. The fix must return the newer one.
+    d = pq.wfa_summary_for_strategy(multi_run_wfa_db, "alpha")
+    assert d["n_windows"] == 7
+    assert d["robust"] is True
+    assert abs(d["mean_oos_pf"] - 1.6) < 1e-9
+
+
+def test_wfa_windows_for_strategy_returns_only_most_recent_run(multi_run_wfa_db):
+    # The newer run has window_idx values 0..6. The older run uses 100..102.
+    # Only the newer run's windows must be returned.
+    df = pq.wfa_windows_for_strategy(multi_run_wfa_db, "alpha")
+    assert len(df) == 7
+    idxs = sorted(int(x) for x in df["window_idx"].tolist())
+    assert idxs == [0, 1, 2, 3, 4, 5, 6]
+    # And the run_id column must show only the newer run.
+    assert set(df["run_id"].tolist()) == {"aaa_new"}
 
 
 # ---------------------------------------------------------------------------
@@ -487,6 +625,30 @@ def test_current_param_value_bad_file_raises(tmp_path):
     bad.write_text("this is not valid (((( python", encoding="utf-8")
     with pytest.raises(ValueError):
         pq.current_param_value("alpha", "x", str(bad))
+
+
+@pytest.fixture
+def annotated_strategies_file(tmp_path):
+    """Fixture using an annotated assignment for STRATEGIES (PEP 526)."""
+    p = tmp_path / "strategies_annotated.py"
+    p.write_text(textwrap.dedent("""
+        from typing import Any
+
+        STRATEGIES: dict[str, Any] = {
+            "alpha": {
+                "enabled": True,
+                "min_stop_ticks": 32,
+            },
+        }
+    """).strip(), encoding="utf-8")
+    return p
+
+
+def test_current_param_value_handles_annotated_assignment(annotated_strategies_file):
+    # `STRATEGIES: dict[str, Any] = {...}` is an ast.AnnAssign, not an
+    # ast.Assign. The fix must still find it.
+    v = pq.current_param_value("alpha", "min_stop_ticks", str(annotated_strategies_file))
+    assert v == 32
 
 
 def test_current_param_value_does_not_import_module(tmp_path):

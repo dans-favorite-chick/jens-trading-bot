@@ -48,8 +48,13 @@ WAREHOUSE_PATH = r"C:\Trading Project\phoenix_bot\data\warehouse\phoenix.duckdb"
 
 BANNED_SQL_KEYWORDS = frozenset({
     "INSERT", "UPDATE", "DELETE", "DROP", "CREATE",
-    "ALTER", "TRUNCATE", "REPLACE", "MERGE",
+    "ALTER", "TRUNCATE", "MERGE",
 })
+# NOTE: `REPLACE` is intentionally NOT in the banned set. DuckDB exposes a
+# built-in REPLACE(string, from, to) string function, and a word-boundary
+# match would also reject legitimate SELECT-side usages like
+# `SELECT REPLACE(strategy, '-', '_') ...`. Write-prevention is enforced by
+# the read-only DuckDB connection; this keyword guard is belt-and-suspenders.
 
 # Pre-compiled regex: case-insensitive, word-boundary match so column names
 # like `created_at` or `updated_at` do not false-positive.
@@ -79,7 +84,14 @@ def assert_select_only(sql: str) -> None:
 
 
 def open_conn(path: str = WAREHOUSE_PATH) -> duckdb.DuckDBPyConnection:
-    """Open a read-only DuckDB connection to the warehouse."""
+    """Open a read-only DuckDB connection to the warehouse.
+
+    The caller owns the connection lifecycle. The returned connection may
+    be used as a context manager so it closes deterministically::
+
+        with pq.open_conn() as conn:
+            df = pq.trades_for_strategy(conn, "alpha", window_days=30)
+    """
     return duckdb.connect(path, read_only=True)
 
 
@@ -160,7 +172,10 @@ def monthly_sharpe_proxy(
     conn: duckdb.DuckDBPyConnection,
     months_back: int = 6,
 ) -> pd.DataFrame:
-    """Per-month aggregates used by the regime gate.
+    """PORTFOLIO-WIDE monthly aggregates across ALL strategies (no strategy
+    filter). Used by the regime stability gate to detect overall environmental
+    shifts that should halt analysis across every strategy at once.
+    Per-strategy regime analysis uses `panel_by_regime` instead.
 
     Columns: month, trade_count, avg_pnl, pnl_stddev, sharpe_proxy, win_rate.
     `sharpe_proxy = avg_pnl / pnl_stddev` (NaN when stddev is 0 or NULL).
@@ -200,23 +215,24 @@ def wfa_summary_for_strategy(
 ) -> dict:
     """Return the WFA summary row for `strategy` as a dict.
 
-    Empty dict if no row exists. If multiple rows exist (multiple runs
-    have produced WFA summaries for this strategy), the most-recent one
-    is preferred via ORDER BY run_id ingested order — but since WFA
-    rows are keyed (run_id, strategy) we take the first; callers needing
-    multi-run handling should call lower-level APIs.
+    Returns the most-recently-ingested run's WFA summary. Empty dict if no
+    row exists. WFA rows are keyed (run_id, strategy); when multiple runs
+    have produced WFA summaries for the same strategy we join `runs` and
+    pick the row with the latest `ingested_at`. Callers needing multi-run
+    handling should call lower-level APIs.
     """
     sql = """
         SELECT
-            n_windows,
-            mean_is_pf,
-            mean_oos_pf,
-            median_oos_pf,
-            pct_windows_degraded,
-            robust
-        FROM wfa_summary
-        WHERE strategy = ?
-        ORDER BY run_id
+            ws.n_windows,
+            ws.mean_is_pf,
+            ws.mean_oos_pf,
+            ws.median_oos_pf,
+            ws.pct_windows_degraded,
+            ws.robust
+        FROM wfa_summary ws
+        JOIN runs r ON ws.run_id = r.run_id
+        WHERE ws.strategy = ?
+        ORDER BY r.ingested_at DESC
         LIMIT 1
     """
     df = _run_query(conn, sql, [strategy])
@@ -237,27 +253,39 @@ def wfa_windows_for_strategy(
     conn: duckdb.DuckDBPyConnection,
     strategy: str,
 ) -> pd.DataFrame:
-    """All WFA windows for `strategy`, ordered by window_idx."""
+    """All WFA windows for `strategy` from the most-recently-ingested run.
+
+    When multiple runs have produced WFA windows for the same strategy we
+    scope to whichever run has the latest `runs.ingested_at` — interleaving
+    windows from different runs would be misleading. Ordered by window_idx.
+    """
     sql = """
         SELECT
-            run_id,
-            window_idx,
-            is_start,
-            is_end,
-            oos_start,
-            oos_end,
-            is_pf,
-            is_trades,
-            oos_pf,
-            oos_trades,
-            oos_net,
-            wfe,
-            degraded
-        FROM wfa_windows
-        WHERE strategy = ?
-        ORDER BY run_id, window_idx
+            ww.run_id,
+            ww.window_idx,
+            ww.is_start,
+            ww.is_end,
+            ww.oos_start,
+            ww.oos_end,
+            ww.is_pf,
+            ww.is_trades,
+            ww.oos_pf,
+            ww.oos_trades,
+            ww.oos_net,
+            ww.wfe,
+            ww.degraded
+        FROM wfa_windows ww
+        JOIN runs r ON ww.run_id = r.run_id
+        WHERE ww.strategy = ?
+          AND r.ingested_at = (
+            SELECT MAX(r2.ingested_at)
+            FROM wfa_windows ww2
+            JOIN runs r2 ON ww2.run_id = r2.run_id
+            WHERE ww2.strategy = ?
+          )
+        ORDER BY ww.window_idx
     """
-    return _run_query(conn, sql, [strategy])
+    return _run_query(conn, sql, [strategy, strategy])
 
 
 # ---------------------------------------------------------------------------
@@ -272,8 +300,14 @@ def panel_by_hour_ct(
     """Aggregates by Chicago-time hour of entry.
 
     Columns: hour_ct, n_trades, wins, win_rate, profit_factor, avg_pnl.
-    hour_ct is derived from market_open_minutes via trades_ct:
-        market open is 08:30 CT == minute 0; minute 60 == 09:30 CT, etc.
+
+    `hour_ct` is the calendar hour (0-23) of the trade's entry time in
+    Chicago time. A trade entering at 09:30 CT lands in bucket 9 (the
+    09:00-09:59 hour); a trade entering at 10:00 CT lands in bucket 10.
+    Derived from `trades_ct.market_open_minutes`, which is minutes since
+    08:30 CT (market open). The arithmetic
+    `8 + FLOOR((market_open_minutes + 30) / 60.0)` reverses that: minute 0
+    -> hour 8, minute 30 -> hour 9, minute 90 -> hour 10, etc.
     """
     sql = """
         SELECT
@@ -402,9 +436,15 @@ def daily_ib_regime(
 ) -> pd.DataFrame:
     """Daily IB-width-vs-ATR regime classification.
 
-    NOTE: depends on a `bar_events` table that is not yet in the v1
-    warehouse. If the table is missing or empty, returns an empty
-    DataFrame with the correct columns and logs a warning. Does NOT raise.
+    STUB until `bar_events` table is populated. When implemented, this
+    function will filter to the trailing `window_days` calendar days and
+    compute IB width vs the 20-day ATR median per session, returning the
+    columns documented below. The `window_days` parameter is accepted now
+    so the orchestrator can call this function with the final signature.
+
+    Returns an empty DataFrame with the documented columns
+    (session_date, ib_width_ticks, atr_20d, ib_regime) while the stub is
+    active. Logs a warning. Does NOT raise.
     """
     has_bar_events = conn.execute(
         "SELECT COUNT(*) FROM information_schema.tables "
@@ -542,6 +582,14 @@ def current_param_value(
                 if isinstance(target, ast.Name) and target.id == "STRATEGIES":
                     strategies_node = node.value
                     break
+        elif isinstance(node, ast.AnnAssign):
+            # Handle annotated assignment, e.g. `STRATEGIES: dict[str, Any] = {...}`
+            if (
+                isinstance(node.target, ast.Name)
+                and node.target.id == "STRATEGIES"
+                and node.value is not None
+            ):
+                strategies_node = node.value
         if strategies_node is not None:
             break
 
