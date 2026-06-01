@@ -88,7 +88,13 @@ Mode = Literal["research", "weekly", "daily"]
 MODE_CONFIG: dict[str, dict] = {
     "research": {
         "window_days": 1825,
-        "token_budget": 200_000,
+        # Phase 6/8 added by_market_state + mae_elbow_long/short +
+        # mfe_p90_long/short splits, which pushed per-panel size from ~3 KB
+        # to 10-50 KB. Loading 16 panels in parallel + several write_finding/
+        # propose_change turns over a 200K budget. 600K covers a full 5-year
+        # research run with all 16 strategies inspected end-to-end. At Sonnet
+        # 4.6 prices this is ~$6-9 per research run -- operator-acceptable.
+        "token_budget": 600_000,
         "can_propose": True,
         "skip_regime_gate": False,
         # Operator-authorized 2026-06-01 (second pass): research mode uses a
@@ -1145,12 +1151,25 @@ def _build_initial_user_message(facts: dict) -> str:
         f"## Available Parameter Schema (per strategy)\n"
         f"{schema_block}\n\n"
         f"## Prior findings (last 30 days)\n"
-        f"{prior_block}\n\n"
+        f"{prior_block}\n"
+        f"_Prior findings are CONTEXT ONLY. They do NOT substitute for "
+        f"this run's outputs. You must still emit your own write_finding "
+        f"and (if eligible) propose_change calls for every strategy you "
+        f"analyze, even if a similar finding already exists in prior context._\n\n"
         f"## Delta vs prior run\n"
         f"{delta_block}\n\n"
-        f"Begin by calling `think` to plan, then fetch panels for the "
-        f"strategies that look most interesting. Conclude with a "
-        f"narrative summary."
+        f"## Workflow (mandatory; do not skip steps)\n"
+        f"1. Call `think` ONCE to plan which strategies you will analyze.\n"
+        f"2. Call `fetch_strategy_stats` for EVERY strategy in the panel "
+        f"(use parallel tool calls -- the loop supports it).\n"
+        f"3. Call `write_finding` for EVERY strategy you fetched.\n"
+        f"4. For every CONFIRMED finding whose strategy has "
+        f"all_pass_for_proposal=TRUE AND the Regime section says STABLE, "
+        f"call `propose_change` (up to 3 proposals per strategy).\n"
+        f"5. Emit a final narrative summary (~200-500 words). This is the "
+        f"LAST step -- not a substitute for steps 3 and 4.\n"
+        f"A run that ends with n_findings=0 or n_proposals_staged=0 (when "
+        f"PASS strategies exist and regime is stable) is a FAILED RUN."
     )
 
 
@@ -1206,9 +1225,14 @@ def _run_llm_loop(client: Anthropic,
     budget_nudge_sent = False
 
     for iteration in range(MAX_TOOL_ITERATIONS):
+        # max_tokens=16384: Sonnet 4.6 routinely needs to emit many parallel
+        # tool_use blocks per turn (e.g., fetch_strategy_stats x 13 + 13
+        # write_finding + 7 propose_change). The prior 4096 cap was too low
+        # and caused 2026-06-01 post-master-fix run to truncate turn 2,
+        # leaving turn 3 with only narrative text and zero findings.
         resp = client.messages.create(
             model=MODEL_ID,
-            max_tokens=4096,
+            max_tokens=16384,
             temperature=TEMPERATURE,
             system=system_prompt,
             tools=TOOLS,
