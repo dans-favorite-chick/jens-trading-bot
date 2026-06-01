@@ -971,7 +971,15 @@ STRATEGIES = {
     },
 
     "vwap_pullback_v2": {
-        "enabled": True,
+        # 2026-06-01 DISABLED — Oracle 5y verdict
+        # n=5,383, t-stat=-3.61, PF 0.888, max DD -$18,981, WR 38.8%.
+        # Negative edge across both directions (LONG PF 0.894, SHORT PF 0.881)
+        # and across all three regime buckets. WFA gate FAIL: OOS PF below
+        # 60% of IS PF across all windows. Tied for 2nd-largest 5y loss in
+        # the warehouse after spring_setup.
+        # Re-enable only after fundamental redesign (not a parameter tweak).
+        # OPERATOR-APPROVED: 2026-06-01
+        "enabled": False,
         "validated": True,
         # F-25 (2026-05-25): "informational" because vwap_pullback_v2 is
         # NOT in LIVE_STRATEGY_ALLOWLIST today (only bias_momentum is).
