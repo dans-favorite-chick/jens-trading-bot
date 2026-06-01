@@ -295,6 +295,15 @@ def _walk_facts_numbers(facts: Any,
     Skips any sub-tree rooted at a key in `skip_keys` (default: findings).
     Booleans are excluded (Python treats bool as int but they aren't
     numeric measurements).
+
+    2026-06-01 master fix Phase 7 — sign-symmetric matching. After
+    collecting a leaf value x, ALSO collect -x. This makes citations
+    like "HLZ t < -3.0 required, observed -7.77" match a gate_thresholds
+    leaf of 3.0 (unsigned) AND a strategy metric of -7.77 (already
+    signed). Run #6 of the Oracle had 6 REFUTED findings rejected by
+    the verifier because the LLM cited "-3.0" gate threshold while
+    facts.json carried the unsigned +3.0; this expands the candidate
+    set so the magnitude is what's reconciled, not the convention.
     """
     if isinstance(facts, Mapping):
         for k, val in facts.items():
@@ -310,7 +319,13 @@ def _walk_facts_numbers(facts: Any,
     elif isinstance(facts, (int, float)):
         if isinstance(facts, float) and not math.isfinite(facts):
             return
-        out.append(float(facts))
+        x = float(facts)
+        out.append(x)
+        # Also emit the negation when non-zero so signed citations of
+        # the same magnitude reconcile. -0.0 == 0.0 in float math, so
+        # the guard skips redundant zero-doubling.
+        if x != 0.0:
+            out.append(-x)
 
 
 def _number_matches(target: float, candidates: Iterable[float],
