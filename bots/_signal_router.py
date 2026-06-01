@@ -84,6 +84,34 @@ class SignalRouter:
             except Exception as _e:
                 logger.debug(f"[HOUR_SKIP] filter check error (non-blocking): {_e!r}")
 
+            # ── 2026-06-01 master fix Phase 4: allowed_directions gate ──
+            # Per-strategy direction filter. config.strategies.py entries
+            # MAY set allowed_directions=["LONG"] or ["SHORT"] to gate one
+            # side; None / unset / ["LONG", "SHORT"] = both allowed.
+            # Built for the Oracle's 2026-06-01 SHORT-priority proposals
+            # (raschke_baseline, g_inside_bar_breakout) as the hard-gate
+            # fallback if the operator opts for SHORT_ONLY/LONG_ONLY
+            # rather than a sizing tilt (which would require a PROTECTED
+            # risk_manager.py edit). No strategy sets this today; the
+            # gate is dormant until operator-approved.
+            try:
+                from config.strategies import STRATEGIES as _STRATEGIES
+                _cfg = _STRATEGIES.get(signal.strategy, {})
+                _allowed = _cfg.get("allowed_directions")
+                if _allowed is not None and signal.direction not in _allowed:
+                    logger.info(
+                        f"[DIRECTION_FILTER] {signal.strategy} {signal.direction}: "
+                        f"blocked — allowed_directions={_allowed}"
+                    )
+                    self.bot.last_rejection = (
+                        f"direction_filtered ({signal.direction} not in {_allowed})"
+                    )
+                    return
+            except Exception as _e:
+                logger.debug(
+                    f"[DIRECTION_FILTER] gate error (non-blocking): {_e!r}"
+                )
+
             # ── PHASE 13 SECTION U: tick-validated per-strategy overrides ──
             # Apply per-strategy entry order_type AND exit policy from the
             # canonical assignments in core/exit_policies.py. Safe no-op if

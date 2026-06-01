@@ -123,6 +123,24 @@ class BaseStrategy:
         self.config = config
         self.enabled = config.get("enabled", True)
         self.validated = config.get("validated", False)
+        # 2026-06-01 master fix Phase 4 — direction-filter mechanism.
+        # `allowed_directions` is the per-strategy override that gates
+        # which side of the trade is allowed. Three legal shapes:
+        #   None                 -> both directions allowed (default)
+        #   ["LONG"]             -> only LONG signals pass downstream
+        #   ["SHORT"]            -> only SHORT signals pass downstream
+        #   ["LONG", "SHORT"]    -> equivalent to None (both allowed)
+        # The gate itself lives in bots/base_bot.py just before signal
+        # emission to the router. No strategy sets this today; the Oracle
+        # 2026-06-01 SHORT-priority proposals (raschke_baseline,
+        # g_inside_bar_breakout) are tracked as REQUIRES_SIZE_TILT_MECHANISM
+        # in pending_changes.json until a sizing tilt (which would touch
+        # the PROTECTED risk_manager.py) is operator-approved. `allowed_
+        # directions` is the hard-gate fallback if the operator decides
+        # SHORT_ONLY / LONG_ONLY rather than a sizing tilt.
+        self.allowed_directions: list[str] | None = config.get(
+            "allowed_directions"
+        )
 
     def evaluate(self, market: dict, bars_5m: list, bars_1m: list,
                  session_info: dict) -> Signal | None:
