@@ -866,7 +866,16 @@ STRATEGIES = {
         # strategy can actually emit signals now. PHASE_13 plan §O
         # previously called it "anti-edge" (PF 0.34) — sim testing
         # post-B3-fix will confirm whether that verdict holds.
-        "enabled": True,
+        # 2026-06-01 DISABLED — Oracle 5y verdict
+        # n=898, t-stat=-1.99, PF 0.810, max DD -$3,865, WR 13.5%.
+        # WR of 13.5% is structurally broken, not statistical noise —
+        # PF 0.81 loses 19c per dollar risked over 898 trades. Hour
+        # 8 CT was the only positive hour (PF 1.30, n=136) — far
+        # too small to rescue the strategy. Sim test post-B3-fix
+        # confirmed Phase 13's "anti-edge" verdict; the bug fix
+        # let real signals fire but the underlying logic is wrong.
+        # OPERATOR-APPROVED: 2026-06-01
+        "enabled": False,
         "validated": False,
         # F-25 (2026-05-25): informational walk-forward gate (sim only).
         "walk_forward_gate": "informational",
