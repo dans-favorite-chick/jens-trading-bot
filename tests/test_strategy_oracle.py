@@ -526,6 +526,54 @@ class TestRegimeHalt:
         result = so.run("daily", client=client)
         assert result["status"] == "complete"
 
+    def test_research_does_not_halt_on_unstable(self, monkeypatch,
+                                                  tmp_logs_root, synth_facts,
+                                                  tmp_path):
+        """Research mode treats regime instability as INFORMATIONAL.
+
+        Operator-authorized 2026-06-01: research is a manual deep-dive over the
+        full 5-year window; recent-month volatility should not block discovery.
+        The regime warning still surfaces in facts.json and the LLM prompt.
+        """
+        unstable = {
+            "stable": False, "z_score": 2.97, "warning": "regime shift",
+            "mode_skipped": False, "baseline_n_months": 6,
+            "latest_month": "2026-05", "latest_sharpe_proxy": 0.115,
+        }
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-fake")
+        monkeypatch.setattr(so, "_run_preflight",
+                             lambda mode: {"ok": True, "warehouse_path":
+                                            str(tmp_path / "warehouse.duckdb")})
+        monkeypatch.setattr(so, "_open_warehouse_conn",
+                             lambda path: _StubConn())
+        monkeypatch.setattr(so, "_check_regime_gate", lambda conn, mode: unstable)
+        # synth_facts already carries the regime in its top-level dict via
+        # _build_facts; ensure the prompt path sees the warning.
+        facts_with_regime = dict(synth_facts)
+        facts_with_regime["regime"] = unstable
+        monkeypatch.setattr(
+            so, "_build_facts",
+            lambda conn, mode, regime, root=None: facts_with_regime,
+        )
+
+        client = _StubAnthropicClient([
+            _StubMessage([{"type": "text",
+                             "text": "Research narrative respecting regime warning."}],
+                          stop_reason="end_turn"),
+        ])
+        result = so.run("research", client=client)
+        # Does not halt despite unstable regime
+        assert result["status"] == "complete"
+        assert result["regime"]["stable"] is False
+        assert result["regime"]["z_score"] == 2.97
+
+    def test_mode_config_halt_flags_are_correct(self):
+        """Pin the per-mode halt configuration so a refactor can't silently
+        change which modes halt on regime instability."""
+        assert so.MODE_CONFIG["research"]["halt_on_unstable_regime"] is False
+        assert so.MODE_CONFIG["weekly"]["halt_on_unstable_regime"] is True
+        assert so.MODE_CONFIG["daily"]["halt_on_unstable_regime"] is False
+
 
 # ===========================================================================
 # TestPreflight

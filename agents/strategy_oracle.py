@@ -91,18 +91,31 @@ MODE_CONFIG: dict[str, dict] = {
         "token_budget": 200_000,
         "can_propose": True,
         "skip_regime_gate": False,
+        # Operator-authorized 2026-06-01: research mode treats regime
+        # instability as INFORMATIONAL, not blocking. Rationale: research
+        # mode is a manual deep-dive over the FULL 5-year window where the
+        # operator wants the analysis regardless of recent-month volatility.
+        # All proposals still flow through pending_changes.json for human
+        # review, so no parameter changes can be auto-applied during a
+        # regime transition. The regime warning is injected into the LLM
+        # prompt and the debrief so the operator sees it.
+        "halt_on_unstable_regime": False,
     },
     "weekly": {
         "window_days": 7,
         "token_budget": 80_000,
         "can_propose": True,
         "skip_regime_gate": False,
+        # Weekly DOES halt on regime instability. Tuning parameters during
+        # a regime transition is the dominant overfitting trap.
+        "halt_on_unstable_regime": True,
     },
     "daily": {
         "window_days": 1,
         "token_budget": 15_000,
         "can_propose": False,
         "skip_regime_gate": True,
+        "halt_on_unstable_regime": False,
     },
 }
 
@@ -874,10 +887,36 @@ def _build_initial_user_message(facts: dict) -> str:
         delta.get("summary", {}), default=str,
     )
 
+    # Regime block. When unstable but we did not halt (research/daily modes),
+    # surface the warning so the LLM treats recent-month signal cautiously.
+    regime = facts.get("regime") or {}
+    if regime.get("mode_skipped"):
+        regime_block = (
+            "Daily mode -- regime gate skipped (1-day window too noisy for the z-test)."
+        )
+    elif regime.get("stable"):
+        regime_block = (
+            f"STABLE. Latest-month sharpe-proxy z-score = "
+            f"{regime.get('z_score', 0):+.2f} (threshold +/- 1.50)."
+        )
+    else:
+        regime_block = (
+            f"**INFORMATIONAL WARNING -- regime is UNSTABLE.** "
+            f"Latest month ({regime.get('latest_month')}) sharpe-proxy "
+            f"z-score = {regime.get('z_score', 0):+.2f} vs the trailing 6-mo "
+            f"baseline (threshold +/- 1.50). Analysis is proceeding because "
+            f"this run mode treats regime instability as informational, not "
+            f"blocking. Treat any recent-month-driven signal with extra "
+            f"caution. Prefer findings supported by data spanning multiple "
+            f"regimes, not just the latest month."
+        )
+
     return (
         f"# Phoenix Strategy Oracle -- {facts.get('run_mode')} run\n"
         f"Run date: {facts.get('run_date')}\n"
         f"Window: {facts.get('window_start')} -> {facts.get('window_end')}\n\n"
+        f"## Regime\n"
+        f"{regime_block}\n\n"
         f"## Compact Summary (full panels available via fetch_strategy_stats)\n"
         f"{summary}\n\n"
         f"## Prior findings (last 30 days)\n"
@@ -1345,8 +1384,13 @@ def run(mode: Mode, save_baseline: bool = True,
             except Exception:  # noqa: BLE001
                 pass
 
-        # Halt on unstable regime (weekly/research only -- daily skips).
-        if (not regime.get("stable")) and not regime.get("mode_skipped"):
+        # Halt on unstable regime only when the mode config opts in.
+        # Weekly halts (parameter tuning during a transition is the dominant
+        # overfitting trap). Research and daily continue with the warning
+        # surfaced in facts.json, the LLM prompt, and the debrief.
+        cfg = MODE_CONFIG[mode]
+        halt_on_unstable = cfg.get("halt_on_unstable_regime", True)
+        if (not regime.get("stable")) and not regime.get("mode_skipped") and halt_on_unstable:
             facts_path = _write_facts(mode, today, facts, root)
             debrief_path = _write_debrief(
                 mode, today, narrative="(halted on regime instability)",
