@@ -124,6 +124,22 @@ CREATE TABLE IF NOT EXISTS wfa_summary (
     PRIMARY KEY (run_id, strategy)
 );
 
+-- ──────────────────────────────────────────────────────────────
+-- market_state_bars: per-5m-bar classifier output (Phase 8, 2026-06-01).
+-- Populated by tools/warehouse/backfill_market_state.py.
+-- One row per 5m bar; PRIMARY KEY = bar_ts so the backfill is idempotent.
+-- See core/market_state.py for the signal definitions and label priority.
+-- ──────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS market_state_bars (
+    bar_ts            TIMESTAMP WITH TIME ZONE PRIMARY KEY,
+    label             VARCHAR NOT NULL,
+    realized_vol      DOUBLE,
+    trend_strength    DOUBLE,
+    choppiness_index  DOUBLE
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_state_label ON market_state_bars(label);
+
 -- import_<name> tables are created lazily by the ingester on first encounter.
 -- They follow the pattern: CREATE TABLE IF NOT EXISTS import_<safe_name> AS
 --   SELECT *, NULL::VARCHAR AS run_id FROM read_csv_auto(...) WHERE 1=0;

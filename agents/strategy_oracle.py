@@ -646,6 +646,21 @@ def _build_facts(conn, mode: str, regime: dict, root: Path) -> dict:
             splits["by_direction"] = prepared_queries.panel_by_direction(
                 conn, strat, window,
             ).to_dict("records")
+            # Phase 8 (2026-06-01): by_market_state split surfaces the
+            # market_state classifier label at each trade's entry. If
+            # backfill has not been run (table empty or absent) the
+            # query returns an empty DataFrame -- we still write the
+            # key with [] so panel shape is stable for downstream code.
+            try:
+                splits["by_market_state"] = prepared_queries.panel_by_market_state(
+                    conn, strat, window,
+                ).to_dict("records")
+            except Exception as ms_err:  # noqa: BLE001 -- backfill optional
+                logger.warning(
+                    "by_market_state split unavailable for %s: %s",
+                    strat, ms_err,
+                )
+                splits["by_market_state"] = []
             splits["mae_mfe_long"] = prepared_queries.mae_mfe_distribution(
                 conn, strat, "LONG", window,
             ).to_dict("records")

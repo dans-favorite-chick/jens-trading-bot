@@ -394,6 +394,69 @@ def panel_by_direction(
     return _run_query(conn, sql, [strategy, int(window_days)])
 
 
+def panel_by_market_state(
+    conn: duckdb.DuckDBPyConnection,
+    strategy: str,
+    window_days: int,
+) -> pd.DataFrame:
+    """Aggregates by market_state_bars.label at the trade's entry time.
+
+    Joins `trades` to `market_state_bars` by flooring entry_ts down to
+    the 5-minute boundary (the table holds one row per 5m bar with
+    bar_ts == the bar's open). If `market_state_bars` is empty (e.g.
+    backfill has not yet been run on a fresh warehouse) the query
+    returns an empty DataFrame, NOT an error -- the splits builder in
+    strategy_oracle treats that as "no signal yet" and downstream
+    consumers (Oracle panel render, prompt assembly) skip the section.
+
+    Phase 8 (2026-06-01): observational only. Strategies do NOT gate
+    on this label in this phase.
+
+    Columns: market_state, n_trades, wins, win_rate, profit_factor,
+    avg_pnl.
+    """
+    # Floor entry_ts to the 5-minute boundary that market_state_bars
+    # keys on. We use DuckDB's time_bucket which is exact (no fp drift
+    # on epoch arithmetic) and consistent with how upstream feeds round
+    # bars.
+    sql = """
+        SELECT
+            ms.label AS market_state,
+            COUNT(*) AS n_trades,
+            SUM(CASE WHEN t.pnl_dollars > 0 THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN t.pnl_dollars > 0 THEN 1 ELSE 0 END) * 1.0
+                / NULLIF(COUNT(*), 0) AS win_rate,
+            CASE
+                WHEN SUM(CASE WHEN t.pnl_dollars < 0 THEN -t.pnl_dollars ELSE 0 END) = 0
+                THEN NULL
+                ELSE SUM(CASE WHEN t.pnl_dollars > 0 THEN t.pnl_dollars ELSE 0 END)
+                     / SUM(CASE WHEN t.pnl_dollars < 0 THEN -t.pnl_dollars ELSE 0 END)
+            END AS profit_factor,
+            AVG(t.pnl_dollars) AS avg_pnl
+        FROM trades t
+        JOIN runs r USING(run_id)
+        JOIN market_state_bars ms
+          ON ms.bar_ts = time_bucket(INTERVAL '5 minutes', t.entry_ts)
+        WHERE r.friction_applied = TRUE
+          AND t.strategy = ?
+          AND t.entry_ts >= now() - (? * INTERVAL '1 day')
+        GROUP BY ms.label
+        ORDER BY ms.label
+    """
+    # If market_state_bars does not exist yet (fresh DB, no backfill),
+    # the join itself would error. Probe first; return empty frame.
+    has_table = conn.execute(
+        "SELECT COUNT(*) FROM information_schema.tables "
+        "WHERE table_name = 'market_state_bars'"
+    ).fetchone()[0]
+    if not has_table:
+        return pd.DataFrame(columns=[
+            "market_state", "n_trades", "wins", "win_rate",
+            "profit_factor", "avg_pnl",
+        ])
+    return _run_query(conn, sql, [strategy, int(window_days)])
+
+
 def mae_mfe_distribution(
     conn: duckdb.DuckDBPyConnection,
     strategy: str,
