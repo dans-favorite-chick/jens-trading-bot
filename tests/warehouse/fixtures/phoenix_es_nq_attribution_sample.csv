@@ -1,0 +1,2 @@
+strategy,direction,entry_ts,pnl_dollars,pnl_ticks,year,alignment,mnq_ret_bp,mes_ret_bp
+vwap_pullback_v2,SHORT,2021-05-17 05:00:00+00:00,-40.5,-81,2021,weak,-3.0,-0.6

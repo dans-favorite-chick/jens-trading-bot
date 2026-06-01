@@ -1,0 +1,2 @@
+policy,starting_equity,final_equity,total_return_pct,max_dd_dollars,max_dd_pct,n_trades,avg_contracts,max_contracts,circuit_halts
+flat_1,1500.0,102618.0,6741.2,8008.0,53.5,43500,1.0,1,181

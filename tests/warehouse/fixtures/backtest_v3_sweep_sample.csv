@@ -1,0 +1,2 @@
+direction,signal_sign,boost_formula,boost_threshold,corr_threshold,total_trades,win_rate,total_pnl,avg_per_trade,profit_factor,avg_hold_min,years_positive,composite_score
+LONG,POS,raw,25.0,0.85,131,50.38,804.0,6.14,2.03,1.05,6,26.07

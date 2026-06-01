@@ -1,0 +1,2 @@
+signal_ts,entry_ts,entry_price,direction,boost,corr,pnl_dollars,exit_ts,exit_price,exit_reason,pnl_ticks,hold_minutes,mfe_ticks,mae_ticks,year
+2021-05-17 19:30:00+00:00,2021-05-17 19:35:00+00:00,13258.25,LONG,8.47,0.91,24.0,2021-05-17 19:41:00+00:00,13270.25,target,48.0,6.0,45.0,-5.0,2021

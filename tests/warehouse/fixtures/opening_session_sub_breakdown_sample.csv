@@ -1,0 +1,2 @@
+sub_name,direction,entry_ts,entry_price,stop_price,target_price,exit_ts,exit_price,exit_reason,pnl_dollars,pnl_ticks,hold_min,year
+orb,SHORT,2021-05-17 14:00:00+00:00,13273.0,13288.0,13233.88,2021-05-17 14:18:00+00:00,13288.0,stop,-30.0,-60,18.0,2021
