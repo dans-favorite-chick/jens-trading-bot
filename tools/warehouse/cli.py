@@ -104,7 +104,8 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def _print_result(r: IngestResult) -> None:
-    icon = {"inserted": "✅", "skipped_duplicate": "⏭ ", "error": "❌"}.get(r.status, "?")
+    # ASCII-only: Windows console default codec is cp1252.
+    icon = {"inserted": "[OK]", "skipped_duplicate": "[--]", "error": "[ER]"}.get(r.status, "[??]")
     print(f"{icon}  {r.csv_path.name:<50}  status={r.status}")
     if r.status == "inserted":
         print(f"    kind={r.csv_kind}  rows={r.rows_inserted}  metrics={r.metrics_inserted}")
@@ -120,7 +121,9 @@ def _print_summary(results: list[IngestResult]) -> None:
     total_rows    = sum(r.rows_inserted for r in inserted)
     total_metrics = sum(r.metrics_inserted for r in inserted)
 
-    print(f"\n{'─'*60}")
+    # ASCII-only output: Windows default console codec (cp1252) can't encode
+    # box-drawing or emoji characters and crashes the whole CLI mid-print.
+    print(f"\n{'-'*60}")
     print(f"  Files processed : {len(results)}")
     print(f"  Inserted        : {len(inserted)}  ({total_rows} rows, {total_metrics} metrics)")
     print(f"  Duplicates skip : {len(dupes)}")
@@ -128,8 +131,8 @@ def _print_summary(results: list[IngestResult]) -> None:
     if errors:
         print("\n  Failed files:")
         for r in errors:
-            print(f"    ❌  {r.csv_path.name}: {r.error}")
-    print(f"{'─'*60}\n")
+            print(f"    [ERROR] {r.csv_path.name}: {r.error}")
+    print(f"{'-'*60}\n")
 
 
 def main(argv=None) -> int:
