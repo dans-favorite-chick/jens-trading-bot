@@ -1058,8 +1058,14 @@ STRATEGIES = {
         # core.exit_policies.PHASE_13_EXIT_ASSIGNMENTS.
         "enabled": True,
         "validated": True,
-        "window_start_ct": "03:00",
-        "window_end_ct": "08:00",
+        # Oracle 2026-06-01 proposal #1 (finding_id: a_asian_continuation_confirmed_2026-06-01):
+        # LONG PF peaks Hours 4-5 CT (PF 4.70 and 5.25). Hours 6-7 weaker
+        # (PF 2.68, 2.69). Hour 3 still profitable (PF 3.55). Narrowing
+        # the window from 03:00-08:00 to 04:00-06:00 concentrates trades
+        # on the strongest 2-hour block. Trade count expected to drop
+        # ~40% with the narrower window; per-trade edge expected to improve.
+        "window_start_ct": "04:00",
+        "window_end_ct": "06:00",
         "range_break_atr_mult": 0.5,
         "min_stop_ticks": 6,
         "max_stop_ticks": 14,
