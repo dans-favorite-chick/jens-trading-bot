@@ -1,0 +1,4 @@
+regime,n,net_pnl,win_rate,profit_factor,expectancy,sharpe,sortino,max_dd,max_dd_dur_trades,max_tuw_days,max_consec_losses
+HIGH_VOLATILITY,33195,33790.6,0.3715,1.041,1.018,1.551,1.908,11928.38,10465,668.04,21
+LOW_VOL_TREND,21167,15671.06,0.3745,1.034,0.74,1.111,1.333,6994.08,6997,609.86,19
+MEAN_REVERT_CHOP,21980,12608.9,0.3697,1.026,0.574,0.854,0.949,9961.08,15845,1283.69,22

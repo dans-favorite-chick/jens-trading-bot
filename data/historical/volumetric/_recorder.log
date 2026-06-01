@@ -718,3 +718,1079 @@
 2026-05-27 10:43:01,630 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
 2026-05-27 10:53:01,662 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
 2026-05-27 11:03:01,716 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 11:13:01,597 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 11:23:01,666 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 11:33:01,715 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 11:43:01,706 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 11:53:01,680 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 12:03:01,702 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 12:13:01,691 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 12:23:01,621 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 12:33:01,701 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 12:43:01,646 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 12:53:01,642 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 13:03:01,691 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 13:13:01,670 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 13:23:01,664 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 13:33:01,674 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 13:43:01,654 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 13:53:01,710 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 14:03:01,711 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 14:13:01,695 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 14:23:01,825 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 14:33:01,843 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 14:43:01,834 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 14:53:01,828 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 15:03:01,839 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 15:13:01,754 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 15:23:01,786 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 15:33:01,852 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 15:43:03,401 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 15:53:02,333 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 16:03:02,197 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 16:13:02,513 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 16:23:02,227 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 16:33:02,047 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 16:43:01,956 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 16:53:01,892 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 17:03:02,052 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 17:13:01,889 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 17:23:01,935 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 17:33:01,890 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 17:43:01,868 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 17:53:01,884 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 18:03:01,893 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 18:13:01,914 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 18:23:01,904 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 18:33:01,903 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 18:43:01,920 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 18:53:01,913 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 19:03:01,783 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 19:13:01,766 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 19:23:01,769 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 19:33:01,793 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 19:43:01,791 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 19:53:01,787 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 20:03:01,840 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 20:13:01,801 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 20:23:01,836 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 20:33:01,856 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 20:43:01,855 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 20:53:01,839 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 21:03:01,866 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 21:13:01,849 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 21:23:01,897 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 21:33:01,900 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 21:43:02,037 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 21:53:01,917 [INFO] captured snapshot ts=2026-05-19T23:03:00.0000000 delta=243 poc=28935 cvd_session=243
+2026-05-27 22:03:01,888 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-19T23:03:00.0000000
+2026-05-27 22:13:02,012 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-19T23:03:00.0000000
+2026-05-27 22:23:02,024 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-19T23:03:00.0000000
+2026-05-27 22:33:01,960 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-19T23:03:00.0000000
+2026-05-27 22:43:01,995 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-19T23:03:00.0000000
+2026-05-27 22:53:01,903 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-19T23:03:00.0000000
+2026-05-27 23:01:05,171 [INFO] captured snapshot ts=2026-05-27T23:00:59.2980000 delta=-503 poc=29812.75 cvd_session=-398
+2026-05-27 23:03:01,938 [INFO] captured snapshot ts=2026-05-27T23:02:45.4020000 delta=237 poc=29794 cvd_session=-713
+2026-05-27 23:13:01,965 [INFO] captured snapshot ts=2026-05-27T23:12:05.8530000 delta=-220 poc=29805.75 cvd_session=-438
+2026-05-27 23:23:01,971 [INFO] captured snapshot ts=2026-05-27T23:22:02.1010000 delta=160 poc=29770.25 cvd_session=-1134
+2026-05-27 23:33:02,032 [INFO] captured snapshot ts=2026-05-27T23:31:39.0160000 delta=-74 poc=29787.25 cvd_session=-978
+2026-05-27 23:43:01,984 [INFO] captured snapshot ts=2026-05-27T23:42:06.4210000 delta=-293 poc=29814.25 cvd_session=-470
+2026-05-27 23:53:02,022 [INFO] captured snapshot ts=2026-05-27T23:51:20.0160000 delta=-85 poc=29787 cvd_session=-1112
+2026-05-28 00:03:02,071 [INFO] captured snapshot ts=2026-05-28T00:01:29.9660000 delta=-129 poc=29779.75 cvd_session=-129
+2026-05-28 00:13:02,102 [INFO] captured snapshot ts=2026-05-28T00:11:32.4020000 delta=295 poc=29804.25 cvd_session=544
+2026-05-28 00:23:02,051 [INFO] captured snapshot ts=2026-05-28T00:21:54.2490000 delta=549 poc=29822.75 cvd_session=1467
+2026-05-28 00:33:02,026 [INFO] captured snapshot ts=2026-05-28T00:31:41.5850000 delta=113 poc=29858.75 cvd_session=1643
+2026-05-28 00:43:02,043 [INFO] captured snapshot ts=2026-05-28T00:40:48.0490000 delta=224 poc=29879.75 cvd_session=1883
+2026-05-28 00:53:02,050 [INFO] captured snapshot ts=2026-05-28T00:52:02.9650000 delta=363 poc=29900 cvd_session=2119
+2026-05-28 01:03:02,051 [INFO] captured snapshot ts=2026-05-28T01:01:50.4960000 delta=243 poc=29920 cvd_session=2285
+2026-05-28 01:13:02,041 [INFO] captured snapshot ts=2026-05-28T01:11:06.5660000 delta=38 poc=29924.5 cvd_session=2176
+2026-05-28 01:23:02,045 [INFO] captured snapshot ts=2026-05-28T01:21:46.9900000 delta=-57 poc=29935 cvd_session=2242
+2026-05-28 01:33:02,066 [INFO] captured snapshot ts=2026-05-28T01:30:26.2120000 delta=-254 poc=29918.5 cvd_session=1503
+2026-05-28 01:43:02,242 [INFO] captured snapshot ts=2026-05-28T01:40:20.3900000 delta=-76 poc=29900 cvd_session=1062
+2026-05-28 01:53:02,085 [INFO] captured snapshot ts=2026-05-28T01:51:45.5820000 delta=-554 poc=29888.5 cvd_session=335
+2026-05-28 02:03:02,139 [INFO] captured snapshot ts=2026-05-28T01:58:28.2870000 delta=304 poc=29900.25 cvd_session=558
+2026-05-28 02:13:02,086 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 02:23:02,063 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 02:33:02,074 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 02:43:02,084 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 02:53:02,120 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 03:03:02,096 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 03:13:02,091 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 03:23:02,090 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 03:33:02,110 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 03:43:02,114 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 03:53:02,094 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 04:03:02,130 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T01:58:28.2870000 is 2.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-28 04:03:02,131 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 04:13:02,109 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T01:58:28.2870000 is 2.2h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-28 04:13:02,110 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 04:23:02,123 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T01:58:28.2870000 is 2.4h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-28 04:23:02,124 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 04:33:02,151 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T01:58:28.2870000 is 2.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-28 04:33:02,152 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 04:43:02,132 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T01:58:28.2870000 is 2.7h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-28 04:43:02,133 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 04:53:02,141 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T01:58:28.2870000 is 2.9h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-28 04:53:02,142 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 05:03:02,185 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T01:58:28.2870000 is 3.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-28 05:03:02,187 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 05:13:02,156 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T01:58:28.2870000 is 3.2h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-28 05:13:02,157 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 05:23:02,179 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T01:58:28.2870000 is 3.4h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-28 05:23:02,181 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 05:33:02,222 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T01:58:28.2870000 is 3.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-28 05:33:02,224 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 05:43:02,196 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T01:58:28.2870000 is 3.7h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-28 05:43:02,197 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 05:53:02,208 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T01:58:28.2870000 is 3.9h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-28 05:53:02,208 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 06:03:02,235 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T01:58:28.2870000 is 4.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-28 06:03:02,236 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 06:13:02,201 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T01:58:28.2870000 is 4.2h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-28 06:13:02,202 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 06:23:02,232 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T01:58:28.2870000 is 4.4h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-28 06:23:02,232 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 06:33:02,266 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T01:58:28.2870000 is 4.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-28 06:33:02,267 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 06:43:02,260 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T01:58:28.2870000 is 4.7h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-28 06:43:02,261 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 06:53:02,264 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T01:58:28.2870000 is 4.9h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-28 06:53:02,265 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 07:03:02,303 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T01:58:28.2870000 is 5.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-28 07:03:02,303 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 07:13:02,289 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T01:58:28.2870000 is 5.2h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-28 07:13:02,289 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 07:23:02,294 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T01:58:28.2870000 is 5.4h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-28 07:23:02,294 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 07:33:02,274 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T01:58:28.2870000 is 5.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-28 07:33:02,275 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 07:43:02,293 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T01:58:28.2870000 is 5.7h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-28 07:43:02,293 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 07:53:02,317 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T01:58:28.2870000 is 5.9h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-28 07:53:02,318 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 08:03:02,331 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T01:58:28.2870000 is 6.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-28 08:03:02,332 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T01:58:28.2870000
+2026-05-28 08:13:02,356 [INFO] captured snapshot ts=2026-05-28T08:12:49.5570000 delta=183 poc=30040.75 cvd_session=-223
+2026-05-28 08:23:02,398 [INFO] captured snapshot ts=2026-05-28T08:21:16.1850000 delta=-423 poc=30039 cvd_session=-67
+2026-05-28 08:33:02,359 [INFO] captured snapshot ts=2026-05-28T08:32:54.1450000 delta=13 poc=30070 cvd_session=3214
+2026-05-28 08:43:02,378 [INFO] captured snapshot ts=2026-05-28T08:42:56.8930000 delta=333 poc=29980 cvd_session=-866
+2026-05-28 08:53:02,364 [INFO] captured snapshot ts=2026-05-28T08:52:46.2660000 delta=-254 poc=29992.25 cvd_session=-72
+2026-05-28 09:03:02,385 [INFO] captured snapshot ts=2026-05-28T09:02:52.5830000 delta=13 poc=29982.25 cvd_session=-1326
+2026-05-28 09:13:02,390 [INFO] captured snapshot ts=2026-05-28T09:12:59.3210000 delta=660 poc=30122.25 cvd_session=6747
+2026-05-28 09:23:02,381 [INFO] captured snapshot ts=2026-05-28T09:22:45.8340000 delta=250 poc=30094.75 cvd_session=5670
+2026-05-28 09:33:02,383 [INFO] captured snapshot ts=2026-05-28T09:32:36.8230000 delta=-78 poc=30143 cvd_session=7481
+2026-05-28 09:43:02,376 [INFO] captured snapshot ts=2026-05-28T09:42:52.3680000 delta=153 poc=30130.25 cvd_session=6526
+2026-05-28 09:53:02,519 [INFO] captured snapshot ts=2026-05-28T09:52:46.6790000 delta=280 poc=30153.25 cvd_session=4219
+2026-05-28 10:03:02,435 [INFO] captured snapshot ts=2026-05-28T10:02:50.7570000 delta=292 poc=30225 cvd_session=7484
+2026-05-28 10:13:02,455 [INFO] captured snapshot ts=2026-05-28T10:12:45.3390000 delta=-68 poc=30224.5 cvd_session=5176
+2026-05-28 10:23:02,579 [INFO] captured snapshot ts=2026-05-28T10:22:59.1140000 delta=146 poc=30245.25 cvd_session=6029
+2026-05-28 10:33:02,443 [INFO] captured snapshot ts=2026-05-28T10:32:38.5450000 delta=477 poc=30276.25 cvd_session=7470
+2026-05-28 10:43:02,430 [INFO] captured snapshot ts=2026-05-28T10:42:56.3640000 delta=40 poc=30274 cvd_session=6258
+2026-05-28 10:53:02,461 [INFO] captured snapshot ts=2026-05-28T10:52:36.3350000 delta=-330 poc=30277.25 cvd_session=6981
+2026-05-28 11:03:02,457 [INFO] captured snapshot ts=2026-05-28T11:02:51.1430000 delta=90 poc=30253.5 cvd_session=5238
+2026-05-28 11:13:02,436 [INFO] captured snapshot ts=2026-05-28T11:12:33.8270000 delta=-431 poc=30273.75 cvd_session=5877
+2026-05-28 11:23:02,449 [INFO] captured snapshot ts=2026-05-28T11:22:33.0320000 delta=-326 poc=30288.75 cvd_session=7531
+2026-05-28 11:33:02,460 [INFO] captured snapshot ts=2026-05-28T11:32:05.1390000 delta=-294 poc=30292.5 cvd_session=7714
+2026-05-28 11:43:02,462 [INFO] captured snapshot ts=2026-05-28T11:42:23.8880000 delta=225 poc=30307 cvd_session=8626
+2026-05-28 11:53:02,480 [INFO] captured snapshot ts=2026-05-28T11:52:31.7280000 delta=-438 poc=30302 cvd_session=7931
+2026-05-28 12:03:02,495 [INFO] captured snapshot ts=2026-05-28T12:02:58.7910000 delta=-273 poc=30327.25 cvd_session=9380
+2026-05-28 12:13:02,517 [INFO] captured snapshot ts=2026-05-28T12:12:48.6630000 delta=131 poc=30323.75 cvd_session=8903
+2026-05-28 12:23:02,506 [INFO] captured snapshot ts=2026-05-28T12:22:55.0550000 delta=-290 poc=30312.5 cvd_session=7958
+2026-05-28 12:33:02,514 [INFO] captured snapshot ts=2026-05-28T12:32:30.3820000 delta=-194 poc=30308 cvd_session=7088
+2026-05-28 12:43:02,544 [INFO] captured snapshot ts=2026-05-28T12:42:03.9910000 delta=35 poc=30320.75 cvd_session=8327
+2026-05-28 12:53:02,521 [INFO] captured snapshot ts=2026-05-28T12:52:20.4290000 delta=94 poc=30338 cvd_session=10006
+2026-05-28 13:03:02,643 [INFO] captured snapshot ts=2026-05-28T13:01:54.7260000 delta=102 poc=30310.75 cvd_session=8199
+2026-05-28 13:13:01,567 [INFO] captured snapshot ts=2026-05-28T13:12:51.2160000 delta=-131 poc=30315 cvd_session=7710
+2026-05-28 13:23:01,536 [INFO] captured snapshot ts=2026-05-28T13:22:49.0000000 delta=437 poc=30312.75 cvd_session=8748
+2026-05-28 13:33:01,574 [INFO] captured snapshot ts=2026-05-28T13:31:37.8100000 delta=55 poc=30305.5 cvd_session=7874
+2026-05-28 13:43:01,577 [INFO] captured snapshot ts=2026-05-28T13:42:45.1050000 delta=-52 poc=30301 cvd_session=7224
+2026-05-28 13:53:01,589 [INFO] captured snapshot ts=2026-05-28T13:52:55.0790000 delta=-137 poc=30302.5 cvd_session=6686
+2026-05-28 14:03:01,644 [INFO] captured snapshot ts=2026-05-28T14:02:39.4410000 delta=126 poc=30290 cvd_session=6108
+2026-05-28 14:13:01,643 [INFO] captured snapshot ts=2026-05-28T14:12:35.5430000 delta=154 poc=30311.25 cvd_session=6864
+2026-05-28 14:23:01,603 [INFO] captured snapshot ts=2026-05-28T14:22:09.9740000 delta=-179 poc=30287 cvd_session=6069
+2026-05-28 14:33:01,757 [INFO] captured snapshot ts=2026-05-28T14:32:54.2800000 delta=285 poc=30313 cvd_session=7411
+2026-05-28 14:43:01,723 [INFO] captured snapshot ts=2026-05-28T14:42:48.4040000 delta=94 poc=30320.75 cvd_session=7692
+2026-05-28 14:53:01,639 [INFO] captured snapshot ts=2026-05-28T14:52:46.6850000 delta=-299 poc=30289.5 cvd_session=5735
+2026-05-28 15:03:01,680 [INFO] captured snapshot ts=2026-05-28T15:01:49.8070000 delta=454 poc=30309 cvd_session=6413
+2026-05-28 15:13:01,674 [INFO] captured snapshot ts=2026-05-28T15:10:33.1960000 delta=-228 poc=30324 cvd_session=6940
+2026-05-28 15:23:01,695 [INFO] captured snapshot ts=2026-05-28T15:22:39.4440000 delta=-181 poc=30324.75 cvd_session=7443
+2026-05-28 15:33:01,706 [INFO] captured snapshot ts=2026-05-28T15:29:37.8430000 delta=80 poc=30322.5 cvd_session=7507
+2026-05-28 15:43:01,700 [INFO] captured snapshot ts=2026-05-28T15:38:13.6790000 delta=-41 poc=30323 cvd_session=7456
+2026-05-28 15:53:01,699 [INFO] captured snapshot ts=2026-05-28T15:49:44.3790000 delta=220 poc=30326.75 cvd_session=8342
+2026-05-28 16:03:01,695 [INFO] captured snapshot ts=2026-05-28T15:59:42.8370000 delta=-302 poc=30320.75 cvd_session=7970
+2026-05-28 16:13:01,690 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T15:59:42.8370000
+2026-05-28 16:23:01,699 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T15:59:42.8370000
+2026-05-28 16:33:01,695 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T15:59:42.8370000
+2026-05-28 16:43:01,703 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T15:59:42.8370000
+2026-05-28 16:53:01,718 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T15:59:42.8370000
+2026-05-28 17:03:01,743 [INFO] captured snapshot ts=2026-05-28T17:02:03.3480000 delta=23 poc=30344.75 cvd_session=8300
+2026-05-28 17:13:01,740 [INFO] captured snapshot ts=2026-05-28T17:12:11.3870000 delta=-209 poc=30297.75 cvd_session=7174
+2026-05-28 17:23:01,733 [INFO] captured snapshot ts=2026-05-28T17:21:15.9600000 delta=292 poc=30305.75 cvd_session=7417
+2026-05-28 17:33:01,741 [INFO] captured snapshot ts=2026-05-28T17:30:24.2520000 delta=187 poc=30301.75 cvd_session=7365
+2026-05-28 17:43:01,807 [INFO] captured snapshot ts=2026-05-28T17:41:26.0250000 delta=273 poc=30303.5 cvd_session=7438
+2026-05-28 17:53:01,790 [INFO] captured snapshot ts=2026-05-28T17:46:08.3800000 delta=125 poc=30310.75 cvd_session=7563
+2026-05-28 18:03:01,822 [INFO] captured snapshot ts=2026-05-28T18:00:10.3110000 delta=-148 poc=30298.5 cvd_session=7280
+2026-05-28 18:13:01,821 [INFO] captured snapshot ts=2026-05-28T18:05:38.0200000 delta=106 poc=30315.75 cvd_session=7648
+2026-05-28 18:23:01,822 [INFO] captured snapshot ts=2026-05-28T18:19:02.3410000 delta=431 poc=30323 cvd_session=8289
+2026-05-28 18:33:01,813 [INFO] captured snapshot ts=2026-05-28T18:31:24.8520000 delta=-70 poc=30317.25 cvd_session=8005
+2026-05-28 18:43:01,805 [INFO] captured snapshot ts=2026-05-28T18:39:22.5150000 delta=-136 poc=30313 cvd_session=7869
+2026-05-28 18:53:01,814 [INFO] captured snapshot ts=2026-05-28T18:49:43.8470000 delta=-308 poc=30301.5 cvd_session=7360
+2026-05-28 19:03:01,827 [INFO] captured snapshot ts=2026-05-28T19:02:27.1800000 delta=-144 poc=30290 cvd_session=6972
+2026-05-28 19:13:01,865 [INFO] captured snapshot ts=2026-05-28T19:12:30.0140000 delta=130 poc=30290.5 cvd_session=6708
+2026-05-28 19:23:01,826 [INFO] captured snapshot ts=2026-05-28T19:21:43.8160000 delta=100 poc=30293.5 cvd_session=7010
+2026-05-28 19:33:02,237 [INFO] captured snapshot ts=2026-05-28T19:32:43.2170000 delta=-276 poc=30265 cvd_session=6368
+2026-05-28 19:43:02,217 [INFO] captured snapshot ts=2026-05-28T19:41:12.0060000 delta=-235 poc=30250 cvd_session=5694
+2026-05-28 19:53:02,234 [INFO] captured snapshot ts=2026-05-28T19:51:24.2970000 delta=180 poc=30250.25 cvd_session=5770
+2026-05-28 20:03:02,255 [INFO] captured snapshot ts=2026-05-28T20:02:00.8760000 delta=-236 poc=30255.5 cvd_session=5675
+2026-05-28 20:13:02,252 [INFO] captured snapshot ts=2026-05-28T20:11:57.2530000 delta=-87 poc=30248 cvd_session=5757
+2026-05-28 20:23:02,276 [INFO] captured snapshot ts=2026-05-28T20:22:45.9590000 delta=-136 poc=30240.75 cvd_session=6137
+2026-05-28 20:33:02,282 [INFO] captured snapshot ts=2026-05-28T20:30:53.9240000 delta=-122 poc=30229.75 cvd_session=5693
+2026-05-28 20:43:02,388 [INFO] captured snapshot ts=2026-05-28T20:41:43.4870000 delta=151 poc=30240.5 cvd_session=6106
+2026-05-28 20:53:02,326 [INFO] captured snapshot ts=2026-05-28T20:51:26.4260000 delta=20 poc=30236.75 cvd_session=6539
+2026-05-28 21:03:02,396 [INFO] captured snapshot ts=2026-05-28T20:59:42.1660000 delta=187 poc=30248.5 cvd_session=6954
+2026-05-28 21:13:02,329 [INFO] captured snapshot ts=2026-05-28T21:12:17.4520000 delta=156 poc=30261 cvd_session=7367
+2026-05-28 21:23:02,354 [INFO] captured snapshot ts=2026-05-28T21:22:56.6350000 delta=-112 poc=30254.5 cvd_session=7462
+2026-05-28 21:33:02,378 [INFO] captured snapshot ts=2026-05-28T21:31:12.0690000 delta=349 poc=30234 cvd_session=6855
+2026-05-28 21:43:02,394 [INFO] captured snapshot ts=2026-05-28T21:42:35.6390000 delta=407 poc=30248.5 cvd_session=7214
+2026-05-28 21:53:02,421 [INFO] captured snapshot ts=2026-05-28T21:51:51.0060000 delta=-52 poc=30239.5 cvd_session=6988
+2026-05-28 22:03:02,419 [INFO] captured snapshot ts=2026-05-28T21:58:46.6000000 delta=101 poc=30238.25 cvd_session=7089
+2026-05-28 22:13:02,403 [INFO] captured snapshot ts=2026-05-28T22:12:32.9210000 delta=132 poc=30257.75 cvd_session=7774
+2026-05-28 22:23:02,504 [INFO] captured snapshot ts=2026-05-28T22:18:31.4340000 delta=170 poc=30258.75 cvd_session=7944
+2026-05-28 22:33:02,399 [INFO] captured snapshot ts=2026-05-28T22:24:35.6820000 delta=203 poc=30263.25 cvd_session=8147
+2026-05-28 22:43:02,423 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-28 22:53:02,569 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-28 23:03:02,388 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-28 23:13:02,385 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-28 23:23:02,408 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-28 23:33:02,399 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-28 23:43:02,511 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-28 23:53:02,407 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 00:03:02,434 [INFO] captured snapshot ts=2026-05-28T22:24:35.6820000 delta=203 poc=30263.25 cvd_session=8147
+2026-05-29 00:13:02,524 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 00:23:02,436 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 00:33:02,434 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 2.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 00:33:02,434 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 00:43:02,497 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 2.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 00:43:02,497 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 00:53:02,468 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 2.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 00:53:02,469 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 01:03:02,445 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 2.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 01:03:02,445 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 01:13:02,457 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 2.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 01:13:02,458 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 01:23:02,439 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 3.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 01:23:02,439 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 01:33:02,432 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 3.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 01:33:02,432 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 01:43:02,489 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 3.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 01:43:02,490 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 01:53:02,477 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 3.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 01:53:02,477 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 02:03:02,537 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 3.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 02:03:02,537 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 02:13:02,460 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 3.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 02:13:02,461 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 02:23:02,488 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 4.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 02:23:02,489 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 02:33:02,507 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 4.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 02:33:02,507 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 02:43:02,482 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 4.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 02:43:02,483 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 02:53:01,517 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 4.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 02:53:01,518 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 03:03:01,572 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 4.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 03:03:01,573 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 03:13:01,541 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 4.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 03:13:01,542 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 03:23:01,569 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 5.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 03:23:01,570 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 03:33:01,543 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 5.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 03:33:01,543 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 03:43:01,565 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 5.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 03:43:01,567 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 03:53:01,545 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 5.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 03:53:01,545 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 04:03:01,588 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 5.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 04:03:01,588 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 04:13:01,568 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 5.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 04:13:01,569 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 04:23:01,591 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 6.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 04:23:01,591 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 04:33:01,617 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 6.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 04:33:01,618 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 04:43:01,605 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 6.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 04:43:01,606 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 04:53:01,603 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 6.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 04:53:01,604 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 05:03:01,633 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 6.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 05:03:01,633 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 05:13:01,596 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 6.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 05:13:01,597 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 05:23:01,654 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 7.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 05:23:01,655 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 05:33:01,642 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 7.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 05:33:01,643 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 05:43:01,630 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 7.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 05:43:01,630 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 05:53:01,652 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 7.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 05:53:01,653 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 06:03:01,665 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 7.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 06:03:01,665 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 06:13:01,671 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 7.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 06:13:01,672 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 06:23:01,679 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 8.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 06:23:01,680 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 06:33:01,688 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 8.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 06:33:01,689 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 06:43:01,672 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 8.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 06:43:01,673 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 06:53:01,689 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 8.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 06:53:01,690 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 07:03:01,748 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 8.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 07:03:01,749 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 07:13:01,707 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 8.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 07:13:01,708 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 07:23:01,696 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 9.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 07:23:01,697 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 07:33:01,724 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 9.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 07:33:01,724 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 07:43:01,736 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 9.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 07:43:01,737 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 07:53:01,722 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 9.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 07:53:01,725 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 08:03:01,754 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 9.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 08:03:01,754 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 08:13:01,751 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 9.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 08:13:01,752 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 08:23:01,780 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 10.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 08:23:01,782 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 08:33:01,744 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 10.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 08:33:01,745 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 08:43:01,805 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 10.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 08:43:01,805 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 08:53:01,791 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 10.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 08:53:01,791 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 09:03:01,832 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 10.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 09:03:01,834 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 09:13:01,822 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 10.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 09:13:01,823 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 09:23:01,810 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 11.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 09:23:01,811 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 09:33:01,824 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 11.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 09:33:01,825 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 09:43:01,819 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 11.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 09:43:01,820 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 09:53:01,981 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 11.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 09:53:01,993 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 10:03:01,869 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 11.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 10:03:01,869 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 10:13:01,885 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 11.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 10:13:01,886 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 10:23:01,878 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 12.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 10:23:01,878 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 10:33:01,891 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 12.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 10:33:01,892 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 10:43:01,914 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 12.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 10:43:01,915 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 10:53:01,879 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 12.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 10:53:01,879 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 11:03:01,938 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 12.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 11:03:01,939 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 11:13:01,912 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 12.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 11:13:01,913 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 11:23:01,928 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 13.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 11:23:01,928 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 11:33:01,941 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 13.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 11:33:01,942 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 11:43:01,974 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 13.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 11:43:01,976 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 11:53:01,997 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 13.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 11:53:01,998 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 12:03:02,009 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 13.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 12:03:02,009 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 12:13:01,974 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 13.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 12:13:01,975 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 12:23:02,022 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 14.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 12:23:02,026 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 12:33:01,969 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 14.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 12:33:01,970 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 12:43:01,982 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 14.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 12:43:01,982 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 12:53:02,005 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 14.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 12:53:02,005 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 13:03:02,017 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 14.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 13:03:02,018 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 13:13:02,031 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 14.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 13:13:02,032 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 13:23:02,040 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 15.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 13:23:02,041 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 13:33:02,092 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 15.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 13:33:02,092 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 13:43:02,060 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 15.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 13:43:02,061 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 13:53:02,131 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 15.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 13:53:02,132 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 14:03:02,058 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 15.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 14:03:02,058 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 14:13:02,061 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 15.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 14:13:02,062 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 14:23:02,065 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 16.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 14:23:02,066 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 14:33:02,101 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 16.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 14:33:02,101 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 14:43:02,046 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 16.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 14:43:02,046 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 14:53:02,066 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 16.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 14:53:02,067 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 15:03:02,141 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 16.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 15:03:02,143 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 15:13:02,103 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 16.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 15:13:02,103 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 15:23:02,101 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 17.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 15:23:02,102 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 15:33:02,116 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 17.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 15:33:02,117 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 15:43:02,121 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 17.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 15:43:02,122 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 15:53:02,132 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 17.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 15:53:02,132 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 16:03:02,129 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 17.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 16:03:02,130 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 16:13:02,143 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 17.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 16:13:02,143 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 16:23:02,290 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 18.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 16:23:02,291 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 16:33:02,275 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 18.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 16:33:02,275 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 16:43:02,252 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 18.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 16:43:02,254 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 16:53:02,590 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 18.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 16:53:02,591 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 17:03:02,340 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 18.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 17:03:02,341 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 17:13:02,195 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 18.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 17:13:02,196 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 17:23:02,329 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 19.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 17:23:02,329 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 17:33:02,275 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 19.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 17:33:02,275 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 17:43:02,260 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 19.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 17:43:02,261 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 17:53:02,354 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 19.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 17:53:02,355 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 18:03:02,393 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 19.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 18:03:02,393 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 18:13:02,353 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 19.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 18:13:02,353 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 18:23:02,239 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 20.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 18:23:02,239 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 18:33:02,239 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 20.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 18:33:02,240 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 18:43:02,260 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 20.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 18:43:02,261 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 18:53:02,442 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 20.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 18:53:02,444 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 19:03:02,308 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 20.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 19:03:02,309 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 19:13:02,283 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 20.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 19:13:02,284 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 19:23:02,355 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 21.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 19:23:02,357 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 19:33:02,251 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 21.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 19:33:02,251 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 19:43:02,226 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 21.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 19:43:02,226 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 19:53:02,297 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 21.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 19:53:02,298 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 20:03:02,534 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 21.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 20:03:02,535 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 20:13:02,408 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 21.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 20:13:02,410 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 20:23:02,426 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 22.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 20:23:02,427 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 20:33:02,409 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 22.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 20:33:02,410 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 20:43:02,410 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 22.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 20:43:02,410 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 20:53:02,495 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 22.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 20:53:02,495 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 21:03:02,479 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 22.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 21:03:02,480 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 21:13:02,334 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 22.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 21:13:02,334 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 21:23:02,304 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 23.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 21:23:02,304 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 21:33:02,379 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 23.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 21:33:02,379 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 21:43:02,379 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 23.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 21:43:02,379 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 21:53:02,349 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 23.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 21:53:02,349 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 22:03:02,480 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 23.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 22:03:02,481 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 22:13:02,424 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 23.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 22:13:02,426 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 22:23:02,409 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 24.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 22:23:02,410 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 22:33:02,439 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 24.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 22:33:02,439 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 22:43:02,387 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 24.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 22:43:02,388 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 22:53:02,435 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 24.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 22:53:02,436 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 23:03:02,414 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 24.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 23:03:02,415 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 23:13:02,421 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 24.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 23:13:02,422 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 23:23:02,431 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 25.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 23:23:02,431 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 23:33:02,457 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 25.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 23:33:02,458 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 23:43:02,477 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 25.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 23:43:02,478 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-29 23:53:02,446 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 25.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-29 23:53:02,448 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 00:03:02,487 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 25.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 00:03:02,488 [INFO] captured snapshot ts=2026-05-28T22:24:35.6820000 delta=203 poc=30263.25 cvd_session=8147
+2026-05-30 00:13:02,741 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 25.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 00:13:02,755 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 00:23:02,501 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 26.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 00:23:02,501 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 00:33:02,553 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 26.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 00:33:02,553 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 00:43:02,578 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 26.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 00:43:02,579 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 00:53:02,543 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 26.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 00:53:02,543 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 01:03:02,573 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 26.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 01:03:02,573 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 01:13:02,506 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 26.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 01:13:02,507 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 01:23:02,518 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 27.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 01:23:02,518 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 01:33:02,562 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 27.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 01:33:02,563 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 01:43:02,542 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 27.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 01:43:02,544 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 01:53:02,543 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 27.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 01:53:02,544 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 02:03:02,594 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 27.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 02:03:02,595 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 02:13:02,579 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 27.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 02:13:02,581 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 02:23:02,577 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 28.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 02:23:02,578 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 02:33:01,593 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 28.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 02:33:01,594 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 02:43:01,551 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 28.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 02:43:01,552 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 02:53:01,545 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 28.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 02:53:01,546 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 03:03:01,632 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 28.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 03:03:01,632 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 03:13:01,614 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 28.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 03:13:01,614 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 03:23:01,599 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 29.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 03:23:01,600 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 03:33:01,639 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 29.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 03:33:01,640 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 03:43:01,617 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 29.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 03:43:01,618 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 03:53:01,595 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 29.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 03:53:01,595 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 04:03:01,627 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 29.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 04:03:01,627 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 04:13:01,623 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 29.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 04:13:01,623 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 04:23:01,616 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 30.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 04:23:01,617 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 04:33:01,647 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 30.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 04:33:01,648 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 04:43:01,627 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 30.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 04:43:01,628 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 04:53:01,647 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 30.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 04:53:01,647 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 05:03:01,657 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 30.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 05:03:01,657 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 05:13:01,679 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 30.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 05:13:01,680 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 05:23:01,741 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 31.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 05:23:01,741 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 05:33:01,668 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 31.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 05:33:01,669 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 05:43:01,690 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 31.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 05:43:01,690 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 05:53:01,696 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 31.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 05:53:01,696 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 06:03:01,712 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 31.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 06:03:01,713 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 06:13:01,744 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 31.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 06:13:01,745 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 06:23:01,710 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 32.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 06:23:01,710 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 06:33:01,695 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 32.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 06:33:01,696 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 06:43:01,733 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 32.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 06:43:01,733 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 06:53:01,749 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 32.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 06:53:01,749 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 07:03:01,749 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 32.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 07:03:01,750 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 07:13:01,729 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 32.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 07:13:01,730 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 07:23:01,718 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 33.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 07:23:01,719 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 07:33:01,757 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 33.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 07:33:01,758 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 07:43:01,755 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 33.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 07:43:01,756 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 07:53:01,770 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 33.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 07:53:01,770 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 08:03:01,754 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 33.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 08:03:01,755 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 08:13:01,782 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 33.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 08:13:01,782 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 08:23:01,780 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 34.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 08:23:01,780 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 08:33:01,799 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 34.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 08:33:01,799 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 08:43:01,797 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 34.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 08:43:01,797 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 08:53:01,807 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 34.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 08:53:01,807 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 09:03:01,953 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 34.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 09:03:01,954 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 09:13:02,267 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 34.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 09:13:02,269 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 09:23:01,968 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 35.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 09:23:01,968 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 09:33:02,217 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 35.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 09:33:02,219 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 09:43:02,001 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 35.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 09:43:02,002 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 09:53:02,125 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 35.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 09:53:02,134 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 10:03:01,927 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 35.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 10:03:01,928 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 10:13:02,277 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 35.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 10:13:02,279 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 10:23:02,183 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 36.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 10:23:02,184 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 10:33:01,967 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 36.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 10:33:01,968 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 10:43:01,993 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 36.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 10:43:01,993 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 10:53:01,928 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 36.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 10:53:01,928 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 11:03:01,955 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 36.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 11:03:01,956 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 11:13:01,955 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 36.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 11:13:01,956 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 11:23:01,996 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 37.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 11:23:01,996 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 11:33:01,997 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 37.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 11:33:01,997 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 11:43:01,993 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 37.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 11:43:01,993 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 11:53:01,992 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 37.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 11:53:01,993 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 12:03:01,945 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 37.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 12:03:01,945 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 12:13:01,994 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 37.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 12:13:01,994 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 12:23:02,313 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 38.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 12:23:02,326 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 12:33:02,132 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 38.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 12:33:02,133 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 12:43:02,197 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 38.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 12:43:02,198 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 12:53:02,015 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 38.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 12:53:02,015 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 13:03:02,035 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 38.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 13:03:02,036 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 13:13:02,099 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 38.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 13:13:02,100 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 13:23:02,021 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 39.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 13:23:02,022 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 13:33:02,055 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 39.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 13:33:02,055 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 13:43:02,043 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 39.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 13:43:02,043 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 13:53:02,346 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 39.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 13:53:02,347 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 14:03:02,108 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 39.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 14:03:02,108 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 14:13:02,134 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 39.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 14:13:02,135 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 14:23:02,337 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 40.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 14:23:02,338 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 14:33:02,326 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 40.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 14:33:02,327 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 14:43:02,303 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 40.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 14:43:02,304 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 14:53:02,339 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 40.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 14:53:02,340 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 15:03:02,387 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 40.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 15:03:02,389 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 15:13:02,360 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 40.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 15:13:02,361 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 15:23:02,386 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 41.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 15:23:02,387 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 15:33:02,389 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 41.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 15:33:02,390 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 15:43:02,506 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 41.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 15:43:02,507 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 15:53:02,235 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 41.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 15:53:02,236 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 16:03:02,437 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 41.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 16:03:02,438 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 16:13:02,240 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 41.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 16:13:02,240 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 16:23:02,303 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 42.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 16:23:02,304 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 16:33:02,175 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 42.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 16:33:02,175 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 16:43:02,237 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 42.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 16:43:02,238 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 16:53:02,222 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 42.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 16:53:02,222 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 17:03:02,266 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 42.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 17:03:02,266 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 17:13:02,270 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 42.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 17:13:02,271 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 17:23:02,265 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 43.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 17:23:02,265 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 17:33:02,230 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 43.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 17:33:02,231 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 17:43:02,249 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 43.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 17:43:02,250 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 17:53:02,254 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 43.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 17:53:02,254 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 18:03:02,333 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 43.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 18:03:02,334 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 18:13:02,306 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 43.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 18:13:02,307 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 18:23:02,308 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 44.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 18:23:02,309 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 18:33:02,346 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 44.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 18:33:02,346 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 18:43:02,323 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 44.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 18:43:02,323 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 18:53:02,327 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 44.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 18:53:02,328 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 19:03:02,328 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 44.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 19:03:02,328 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 19:13:02,387 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 44.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 19:13:02,387 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 19:23:01,569 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 45.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 19:23:01,570 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 19:33:01,586 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 45.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 19:33:01,587 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 19:43:01,585 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 45.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 19:43:01,586 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 19:53:01,615 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 45.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 19:53:01,617 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 20:03:01,655 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 45.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 20:03:01,656 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 20:13:01,652 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 45.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 20:13:01,653 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 20:23:01,636 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 46.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 20:23:01,636 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 20:33:01,609 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 46.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 20:33:01,609 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 20:43:01,656 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 46.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 20:43:01,657 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 20:53:01,686 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 46.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 20:53:01,686 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 21:03:01,668 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 46.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 21:03:01,669 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 21:13:01,655 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 46.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 21:13:01,656 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 21:23:01,682 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 47.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 21:23:01,683 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 21:33:01,711 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 47.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 21:33:01,712 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 21:43:01,703 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 47.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 21:43:01,704 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 21:53:01,690 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 47.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 21:53:01,690 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 22:03:01,701 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 47.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 22:03:01,702 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 22:13:01,713 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 47.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 22:13:01,714 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 22:23:01,711 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 48.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 22:23:01,712 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 22:33:01,760 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 48.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 22:33:01,762 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 22:43:01,754 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 48.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 22:43:01,755 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 22:53:01,761 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 48.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 22:53:01,762 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 23:03:01,759 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 48.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 23:03:01,760 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 23:13:01,756 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 48.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 23:13:01,757 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 23:23:01,761 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 49.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 23:23:01,762 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 23:33:01,754 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 49.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 23:33:01,756 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 23:43:01,901 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 49.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 23:43:01,913 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-30 23:53:01,793 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 49.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-30 23:53:01,794 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 00:03:01,812 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 49.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 00:03:01,813 [INFO] captured snapshot ts=2026-05-28T22:24:35.6820000 delta=203 poc=30263.25 cvd_session=8147
+2026-05-31 00:13:01,862 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 49.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 00:13:01,865 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 00:23:01,812 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 50.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 00:23:01,812 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 00:33:01,804 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 50.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 00:33:01,804 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 00:43:01,830 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 50.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 00:43:01,830 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 00:53:01,820 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 50.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 00:53:01,820 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 01:03:01,895 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 50.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 01:03:01,896 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 01:13:02,045 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 50.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 01:13:02,056 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 01:23:01,894 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 51.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 01:23:01,894 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 01:33:01,907 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 51.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 01:33:01,908 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 01:43:01,907 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 51.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 01:43:01,908 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 01:53:01,875 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 51.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 01:53:01,877 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 02:03:01,915 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 51.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 02:03:01,916 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 02:13:01,901 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 51.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 02:13:01,901 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 02:23:01,864 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 52.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 02:23:01,865 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 02:33:01,924 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 52.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 02:33:01,925 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 02:43:02,093 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 52.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 02:43:02,094 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 02:53:02,089 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 52.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 02:53:02,090 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 03:03:02,115 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 52.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 03:03:02,116 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 03:13:01,957 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 52.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 03:13:01,958 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 03:23:02,042 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 53.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 03:23:02,044 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 03:33:01,937 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 53.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 03:33:01,937 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 03:43:01,962 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 53.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 03:43:01,963 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 03:53:01,975 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 53.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 03:53:01,976 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 04:03:02,041 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 53.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 04:03:02,043 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 04:13:02,027 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 53.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 04:13:02,029 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 04:23:01,977 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 54.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 04:23:01,978 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 04:33:02,045 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 54.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 04:33:02,047 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 04:43:02,019 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 54.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 04:43:02,020 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 04:53:02,027 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 54.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 04:53:02,027 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 05:03:02,043 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 54.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 05:03:02,044 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 05:13:02,035 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 54.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 05:13:02,036 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 05:23:02,084 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 55.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 05:23:02,086 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 05:33:02,080 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 55.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 05:33:02,081 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 05:43:02,065 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 55.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 05:43:02,065 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 05:53:02,097 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 55.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 05:53:02,097 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 06:03:02,078 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 55.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 06:03:02,079 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 06:13:02,077 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 55.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 06:13:02,078 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 06:23:02,110 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 56.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 06:23:02,111 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 06:33:02,102 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 56.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 06:33:02,103 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 06:43:02,260 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 56.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 06:43:02,260 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 06:53:02,112 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 56.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 06:53:02,114 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 07:03:02,130 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 56.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 07:03:02,131 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 07:13:02,133 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 56.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 07:13:02,134 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 07:23:02,135 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 57.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 07:23:02,156 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 07:33:02,114 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 57.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 07:33:02,116 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 07:43:02,135 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 57.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 07:43:02,136 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 07:53:02,152 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 57.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 07:53:02,153 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 08:03:02,150 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 57.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 08:03:02,150 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 08:13:02,159 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 57.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 08:13:02,160 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 08:23:02,198 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 58.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 08:23:02,199 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 08:33:02,439 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 58.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 08:33:02,441 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 08:43:02,168 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 58.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 08:43:02,170 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 08:53:02,160 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 58.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 08:53:02,160 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 09:03:02,250 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 58.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 09:03:02,251 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 09:13:02,203 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 58.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 09:13:02,203 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 09:23:02,204 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 59.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 09:23:02,204 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 09:33:02,233 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 59.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 09:33:02,233 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 09:43:02,252 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 59.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 09:43:02,253 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 09:53:02,344 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 59.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 09:53:02,357 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 10:03:02,274 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 59.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 10:03:02,275 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 10:13:02,237 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 59.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 10:13:02,237 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 10:23:02,259 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 60.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 10:23:02,259 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 10:33:02,266 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 60.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 10:33:02,266 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 10:43:02,273 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 60.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 10:43:02,274 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 10:53:02,288 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 60.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 10:53:02,289 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 11:03:02,316 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 60.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 11:03:02,316 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 11:13:02,321 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 60.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 11:13:02,321 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 11:23:02,316 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 61.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 11:23:02,318 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 11:33:02,321 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 61.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 11:33:02,321 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 11:43:02,378 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 61.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 11:43:02,378 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 11:53:02,362 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 61.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 11:53:02,364 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 12:03:02,346 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 61.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 12:03:02,348 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 12:13:02,407 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 61.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 12:13:02,409 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 12:23:02,336 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 62.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 12:23:02,337 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 12:33:02,369 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 62.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 12:33:02,369 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 12:43:02,365 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 62.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 12:43:02,367 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 12:53:02,380 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 62.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 12:53:02,382 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 13:03:02,442 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 62.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 13:03:02,443 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 13:13:02,387 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 62.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 13:13:02,387 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 13:23:02,452 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 63.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 13:23:02,454 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 13:33:02,413 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 63.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 13:33:02,413 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 13:43:02,578 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 63.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 13:43:02,594 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 13:53:02,421 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 63.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 13:53:02,422 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 14:03:02,422 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 63.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 14:03:02,422 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 14:13:02,471 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 63.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 14:13:02,471 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 14:23:02,422 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 64.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 14:23:02,423 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 14:33:02,472 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 64.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 14:33:02,473 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 14:43:02,498 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 64.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 14:43:02,498 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 14:53:02,488 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 64.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 14:53:02,488 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 15:03:02,487 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 64.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 15:03:02,487 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 15:13:02,514 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 64.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 15:13:02,514 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 15:23:02,473 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 65.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 15:23:02,474 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 15:33:02,467 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 65.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 15:33:02,468 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 15:43:02,548 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 65.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 15:43:02,548 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 15:53:02,487 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 65.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 15:53:02,487 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 16:03:02,551 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 65.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 16:03:02,553 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 16:13:02,622 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 65.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 16:13:02,622 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 16:23:02,540 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 66.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 16:23:02,541 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 16:33:02,519 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 66.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 16:33:02,519 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 16:43:02,572 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 66.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 16:43:02,573 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 16:53:01,528 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 66.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 16:53:01,528 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 17:03:01,565 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 66.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 17:03:01,566 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 17:13:01,616 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 66.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 17:13:01,617 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 17:23:01,625 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 67.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 17:23:01,626 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 17:33:01,602 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 67.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 17:33:01,604 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 17:43:01,640 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 67.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 17:43:01,641 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 17:53:01,612 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 67.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 17:53:01,613 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 18:03:01,638 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 67.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 18:03:01,638 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 18:13:01,700 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 67.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 18:13:01,701 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 18:23:01,732 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 68.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 18:23:01,732 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 18:33:01,662 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 68.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 18:33:01,663 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 18:43:01,673 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 68.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 18:43:01,673 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 18:53:01,652 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 68.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 18:53:01,652 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 19:03:01,688 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 68.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 19:03:01,688 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 19:13:01,709 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 68.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 19:13:01,710 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 19:23:01,677 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 69.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 19:23:01,677 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 19:33:01,949 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 69.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 19:33:01,965 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 19:43:02,102 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 69.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 19:43:02,148 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 19:53:01,909 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 69.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 19:53:01,911 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 20:03:01,792 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 69.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 20:03:01,793 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 20:13:01,816 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 69.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 20:13:01,817 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 20:23:01,795 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 70.0h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 20:23:01,796 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 20:33:01,844 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 70.1h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 20:33:01,844 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 20:43:01,887 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 70.3h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 20:43:01,888 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 20:53:02,030 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 70.5h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 20:53:02,031 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 21:03:01,988 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 70.6h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 21:03:01,989 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000
+2026-05-31 21:13:02,010 [WARNING] STALE FEED: volumetric snapshot ts=2026-05-28T22:24:35.6820000 is 70.8h old (threshold 2.0h) — TickStreamer feed may be frozen. Check the NT8 chart's data connection.
+2026-05-31 21:13:02,011 [INFO] dedup skip (TickStreamer ts unchanged): 2026-05-28T22:24:35.6820000

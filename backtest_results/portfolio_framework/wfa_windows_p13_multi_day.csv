@@ -1,0 +1,16 @@
+strategy,window_idx,is_start,is_end,oos_start,oos_end,best_params,is_pf,is_trades,oos_pf,oos_trades,oos_net,wfe,degraded
+e_multi_day_breakout,0,2021-05-17,2022-05-16,2022-05-17,2022-08-16,"{""lookback_days"": 4, ""target_rr"": 2.5}",5.3242,126,5.7684,27,385.86,1.0834,False
+e_multi_day_breakout,1,2021-08-17,2022-08-16,2022-08-17,2022-11-16,"{""lookback_days"": 2, ""target_rr"": 2.5}",6.666,161,3.5151,36,412.98,0.5273,True
+e_multi_day_breakout,2,2021-11-17,2022-11-16,2022-11-17,2023-02-16,"{""lookback_days"": 2, ""target_rr"": 2.0}",7.6992,150,2.3299,37,241.16,0.3026,True
+e_multi_day_breakout,3,2022-02-17,2023-02-16,2023-02-17,2023-05-16,"{""lookback_days"": 2, ""target_rr"": 2.0}",5.6833,151,4.8799,31,301.08,0.8586,False
+e_multi_day_breakout,4,2022-05-17,2023-05-16,2023-05-17,2023-08-16,"{""lookback_days"": 2, ""target_rr"": 1.5}",6.4359,148,2.6044,39,191.02,0.4047,True
+e_multi_day_breakout,5,2022-08-17,2023-08-16,2023-08-17,2023-11-16,"{""lookback_days"": 2, ""target_rr"": 1.5}",4.1943,148,9.6967,39,347.52,2.3119,False
+e_multi_day_breakout,6,2022-11-17,2023-11-16,2023-11-17,2024-02-16,"{""lookback_days"": 3, ""target_rr"": 2.5}",3.9766,136,3.2496,36,377.98,0.8172,False
+e_multi_day_breakout,7,2023-02-17,2024-02-16,2024-02-17,2024-05-16,"{""lookback_days"": 2, ""target_rr"": 2.0}",4.5764,158,2.445,36,224.98,0.5343,True
+e_multi_day_breakout,8,2023-05-17,2024-05-16,2024-05-17,2024-08-16,"{""lookback_days"": 3, ""target_rr"": 2.5}",4.2091,141,3.0441,38,355.34,0.7232,True
+e_multi_day_breakout,9,2023-08-17,2024-08-16,2024-08-17,2024-11-16,"{""lookback_days"": 2, ""target_rr"": 2.0}",4.3214,164,2.3695,33,190.44,0.5483,True
+e_multi_day_breakout,10,2023-11-17,2024-11-16,2024-11-17,2025-02-16,"{""lookback_days"": 4, ""target_rr"": 2.5}",3.2972,124,6.362,25,312.5,1.9295,False
+e_multi_day_breakout,11,2024-02-17,2025-02-16,2025-02-17,2025-05-16,"{""lookback_days"": 4, ""target_rr"": 2.5}",3.4635,115,3.002,29,315.72,0.8667,False
+e_multi_day_breakout,12,2024-05-17,2025-05-16,2025-05-17,2025-08-16,"{""lookback_days"": 4, ""target_rr"": 2.5}",3.3725,121,2.6733,29,233.22,0.7927,True
+e_multi_day_breakout,13,2024-08-17,2025-08-16,2025-08-17,2025-11-16,"{""lookback_days"": 2, ""target_rr"": 2.5}",3.5717,151,5.7866,39,461.52,1.6201,False
+e_multi_day_breakout,14,2024-11-17,2025-11-16,2025-11-17,2026-02-16,"{""lookback_days"": 2, ""target_rr"": 2.5}",3.8789,157,3.5975,35,366.3,0.9274,False

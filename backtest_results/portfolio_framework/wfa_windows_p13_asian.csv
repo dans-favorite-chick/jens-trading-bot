@@ -1,0 +1,16 @@
+strategy,window_idx,is_start,is_end,oos_start,oos_end,best_params,is_pf,is_trades,oos_pf,oos_trades,oos_net,wfe,degraded
+a_asian_continuation,0,2021-05-17,2022-05-16,2022-05-17,2022-08-16,"{""range_break_atr_mult"": 0.5, ""target_rr"": 2.5}",5.4644,195,4.3983,51,401.68,0.8049,False
+a_asian_continuation,1,2021-08-17,2022-08-16,2022-08-17,2022-11-16,"{""range_break_atr_mult"": 0.5, ""target_rr"": 2.5}",4.552,194,2.6053,48,265.64,0.5723,True
+a_asian_continuation,2,2021-11-17,2022-11-16,2022-11-17,2023-02-16,"{""range_break_atr_mult"": 0.3, ""target_rr"": 2.5}",3.8834,231,9.1184,57,575.76,2.3481,False
+a_asian_continuation,3,2022-02-17,2023-02-16,2023-02-17,2023-05-16,"{""range_break_atr_mult"": 0.3, ""target_rr"": 2.5}",4.1313,228,7.6626,57,551.26,1.8548,False
+a_asian_continuation,4,2022-05-17,2023-05-16,2023-05-17,2023-08-16,"{""range_break_atr_mult"": 0.3, ""target_rr"": 2.5}",5.3363,233,9.1184,57,575.76,1.7088,False
+a_asian_continuation,5,2022-08-17,2023-08-16,2023-08-17,2023-11-16,"{""range_break_atr_mult"": 0.3, ""target_rr"": 2.5}",6.6042,229,4.3886,56,440.58,0.6645,True
+a_asian_continuation,6,2022-11-17,2023-11-16,2023-11-17,2024-02-16,"{""range_break_atr_mult"": 0.5, ""target_rr"": 2.5}",11.0349,191,8.0457,51,499.68,0.7291,True
+a_asian_continuation,7,2023-02-17,2024-02-16,2024-02-17,2024-05-16,"{""range_break_atr_mult"": 0.5, ""target_rr"": 2.5}",10.7907,188,9.6548,40,409.2,0.8947,False
+a_asian_continuation,8,2023-05-17,2024-05-16,2024-05-17,2024-08-16,"{""range_break_atr_mult"": 0.5, ""target_rr"": 2.5}",10.9287,179,4.8274,44,361.92,0.4417,True
+a_asian_continuation,9,2023-08-17,2024-08-16,2024-08-17,2024-11-16,"{""range_break_atr_mult"": 0.5, ""target_rr"": 2.5}",8.0712,179,5.4979,49,425.32,0.6812,True
+a_asian_continuation,10,2023-11-17,2024-11-16,2024-11-17,2025-02-16,"{""range_break_atr_mult"": 0.7, ""target_rr"": 2.5}",7.7617,140,2.7892,36,211.48,0.3593,True
+a_asian_continuation,11,2024-02-17,2025-02-16,2025-02-17,2025-05-16,"{""range_break_atr_mult"": 0.7, ""target_rr"": 2.5}",5.4613,134,2.7713,43,251.24,0.5074,True
+a_asian_continuation,12,2024-05-17,2025-05-16,2025-05-17,2025-08-16,"{""range_break_atr_mult"": 0.7, ""target_rr"": 2.5}",3.7882,145,3.2183,28,183.54,0.8496,False
+a_asian_continuation,13,2024-08-17,2025-08-16,2025-08-17,2025-11-16,"{""range_break_atr_mult"": 0.3, ""target_rr"": 2.5}",3.5969,222,4.4861,57,453.26,1.2472,False
+a_asian_continuation,14,2024-11-17,2025-11-16,2025-11-17,2026-02-16,"{""range_break_atr_mult"": 0.7, ""target_rr"": 2.5}",3.4458,139,1.2873,33,50.94,0.3736,True

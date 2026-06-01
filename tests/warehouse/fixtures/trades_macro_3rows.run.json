@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "strategy": null,
+  "params": {"per_strategy": {"bias_momentum": {"ema_len": 21, "atr_mult": 1.5}}},
+  "code_sha": "090d030",
+  "seed": 42,
+  "lookback_start": "2024-01-01T00:00:00Z",
+  "lookback_end":   "2024-12-31T00:00:00Z",
+  "engine_version": "phoenix_portfolio_backtest@2026-05-31",
+  "friction_per_rt_usd": 4.82,
+  "friction_applied": true,
+  "logical_group": "test_fixture",
+  "notes": "3-row fixture for unit tests"
+}

@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "strategy": null,
+  "params": {
+    "strategies": [
+      "bias_momentum",
+      "ib_breakout",
+      "vwap_band_reversion",
+      "compression_breakout_micro",
+      "vwap_pullback_v2",
+      "big_move_signal",
+      "orb_v2",
+      "orb_fade",
+      "spring_setup"
+    ],
+    "start": "2021-05-17",
+    "end": "2026-05-15",
+    "is_months": 12,
+    "oos_months": 3,
+    "step_months": 3,
+    "grid": "full",
+    "warmup": 300,
+    "apply_friction": true
+  },
+  "code_sha": "ccbc32a",
+  "seed": null,
+  "lookback_start": "2021-05-17T00:00:00Z",
+  "lookback_end": "2026-05-15T00:00:00Z",
+  "engine_version": "phoenix_portfolio_backtest@2026-05-31",
+  "friction_per_rt_usd": 4.82,
+  "logical_group": "portfolio_wfa",
+  "notes": "retroactively emitted 2026-05-31; this CSV predates the writer-patch sidecar contract"
+}

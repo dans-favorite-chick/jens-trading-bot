@@ -1,0 +1,10 @@
+filter,subset,n,net_pnl,win_rate,profit_factor
+absorption,baseline,3218,15952.74,0.3931,1.194
+absorption,passed,199,270.32,0.3719,1.047
+absorption,failed,3007,15895.26,0.3944,1.21
+delta_trail,baseline,3218,15952.74,0.3931,1.194
+delta_trail,trail_applied,3218,15952.74,0.3931,1.194
+delta_trail,scratched_original,0,0.0,0.0,0.0
+intermarket,baseline,2972,13198.96,0.3799,1.173
+intermarket,passed,408,1917.44,0.3701,1.192
+intermarket,failed,2564,11281.52,0.3814,1.171

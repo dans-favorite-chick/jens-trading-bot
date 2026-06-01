@@ -1,0 +1,2 @@
+strategy,direction,entry_ts,entry_price,pnl_dollars,pnl_ticks,hold_min,year,mae_ticks,mfe_ticks,regime,tod_bucket
+foo,LONG,2025-01-02 14:30:00+00:00,21000.0,42.0,84,30.0,2025,12.0,20.0,LOW_VOL_TREND,Opening Drive

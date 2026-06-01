@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "strategy": null,
+  "params": {
+    "shards_merged": [
+      "wfa_windows_shardA.csv",
+      "wfa_windows_shardB.csv",
+      "wfa_windows_p13_asian.csv",
+      "wfa_windows_p13_inside_bar.csv",
+      "wfa_windows_p13_multi_day.csv",
+      "wfa_windows_p13_raschke.csv"
+    ],
+    "n_strategies": 18,
+    "strategies": [
+      "a_asian_continuation",
+      "bias_momentum",
+      "big_move_signal",
+      "compression_breakout_micro",
+      "compression_breakout_v2",
+      "e_multi_day_breakout",
+      "es_nq_confluence",
+      "g_inside_bar_breakout",
+      "ib_breakout",
+      "noise_area",
+      "opening_session",
+      "orb_fade",
+      "orb_v2",
+      "raschke_baseline",
+      "spring_setup",
+      "vwap_band_pullback",
+      "vwap_band_reversion",
+      "vwap_pullback_v2"
+    ],
+    "n_window_rows": 270
+  },
+  "code_sha": "ccbc32a",
+  "seed": null,
+  "lookback_start": "2021-05-17T00:00:00Z",
+  "lookback_end": "2026-02-16T00:00:00Z",
+  "engine_version": "phoenix_portfolio_backtest@2026-05-31",
+  "friction_per_rt_usd": 4.82,
+  "logical_group": "portfolio_wfa",
+  "notes": "merged from shard CSVs; preserves per-window IS/OOS detail"
+}

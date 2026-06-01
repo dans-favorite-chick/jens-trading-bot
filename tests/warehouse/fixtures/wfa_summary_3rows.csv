@@ -1,0 +1,4 @@
+strategy,n_windows,mean_is_pf,mean_oos_pf,median_oos_pf,pct_windows_degraded,robust
+bias_momentum,3,1.45,1.17,1.21,0.333,True
+vwap_pullback_v2,3,1.32,1.05,1.08,0.333,True
+dom_pullback,3,1.18,0.91,0.93,0.667,False

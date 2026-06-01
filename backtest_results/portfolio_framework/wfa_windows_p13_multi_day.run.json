@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "strategy": "e_multi_day_breakout",
+  "params": {
+    "strategies": [
+      "e_multi_day_breakout"
+    ],
+    "start": "2021-05-17",
+    "end": "2026-05-15",
+    "is_months": 12,
+    "oos_months": 3,
+    "step_months": 3,
+    "grid": "full",
+    "warmup": 300,
+    "apply_friction": true
+  },
+  "code_sha": "ccbc32a",
+  "seed": null,
+  "lookback_start": "2021-05-17T00:00:00Z",
+  "lookback_end": "2026-05-15T00:00:00Z",
+  "engine_version": "phoenix_portfolio_backtest@2026-05-31",
+  "friction_per_rt_usd": 4.82,
+  "logical_group": "phase13_wfa",
+  "notes": "emitted post-hoc 2026-05-31; shard process pre-dated the writer-patch sidecar contract"
+}

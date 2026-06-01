@@ -1,0 +1,16 @@
+strategy,window_idx,is_start,is_end,oos_start,oos_end,best_params,is_pf,is_trades,oos_pf,oos_trades,oos_net,wfe,degraded
+raschke_baseline,0,2021-05-17,2022-05-16,2022-05-17,2022-08-16,"{""target_rr"": 1.5, ""trend_spread_atr"": 0.4}",2.3142,218,3.6672,27,267.36,1.5847,False
+raschke_baseline,1,2021-08-17,2022-08-16,2022-08-17,2022-11-16,"{""target_rr"": 1.5, ""trend_spread_atr"": 0.4}",3.1535,144,2.5268,29,223.22,0.8013,False
+raschke_baseline,2,2021-11-17,2022-11-16,2022-11-17,2023-02-16,"{""target_rr"": 2.5, ""trend_spread_atr"": 0.3}",3.8742,108,1.5668,36,185.98,0.4044,True
+raschke_baseline,3,2022-02-17,2023-02-16,2023-02-17,2023-05-16,"{""target_rr"": 2.5, ""trend_spread_atr"": 0.2}",2.8443,117,2.7555,49,536.82,0.9688,False
+raschke_baseline,4,2022-05-17,2023-05-16,2023-05-17,2023-08-16,"{""target_rr"": 1.5, ""trend_spread_atr"": 0.2}",2.7625,160,3.3757,72,636.96,1.222,False
+raschke_baseline,5,2022-08-17,2023-08-16,2023-08-17,2023-11-16,"{""target_rr"": 1.5, ""trend_spread_atr"": 0.2}",2.7539,208,4.2892,43,489.24,1.5575,False
+raschke_baseline,6,2022-11-17,2023-11-16,2023-11-17,2024-02-16,"{""target_rr"": 1.5, ""trend_spread_atr"": 0.2}",3.0074,220,2.3694,81,532.08,0.7879,True
+raschke_baseline,7,2023-02-17,2024-02-16,2024-02-17,2024-05-16,"{""target_rr"": 1.5, ""trend_spread_atr"": 0.2}",3.0389,255,3.0955,66,573.38,1.0187,False
+raschke_baseline,8,2023-05-17,2024-05-16,2024-05-17,2024-08-16,"{""target_rr"": 1.5, ""trend_spread_atr"": 0.2}",3.0902,263,6.2773,48,590.64,2.0314,False
+raschke_baseline,9,2023-08-17,2024-08-16,2024-08-17,2024-11-16,"{""target_rr"": 1.5, ""trend_spread_atr"": 0.2}",3.3558,242,4.0877,31,309.08,1.2181,False
+raschke_baseline,10,2023-11-17,2024-11-16,2024-11-17,2025-02-16,"{""target_rr"": 2.5, ""trend_spread_atr"": 0.2}",3.4728,210,3.6515,46,701.28,1.0515,False
+raschke_baseline,11,2024-02-17,2025-02-16,2025-02-17,2025-05-16,"{""target_rr"": 2.0, ""trend_spread_atr"": 0.2}",3.9105,186,1.0028,16,0.38,0.2564,True
+raschke_baseline,12,2024-05-17,2025-05-16,2025-05-17,2025-08-16,"{""target_rr"": 2.0, ""trend_spread_atr"": 0.2}",3.7971,139,2.0101,52,379.36,0.5294,True
+raschke_baseline,13,2024-08-17,2025-08-16,2025-08-17,2025-11-16,"{""target_rr"": 2.5, ""trend_spread_atr"": 0.2}",2.8851,145,4.5115,41,739.88,1.5637,False
+raschke_baseline,14,2024-11-17,2025-11-16,2025-11-17,2026-02-16,"{""target_rr"": 2.0, ""trend_spread_atr"": 0.4}",3.1222,136,2.2785,20,154.6,0.7298,True

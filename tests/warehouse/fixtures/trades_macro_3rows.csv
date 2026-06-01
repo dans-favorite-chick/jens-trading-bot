@@ -1,0 +1,4 @@
+strategy,direction,entry_ts,entry_price,stop_price,target_price,exit_ts,exit_price,exit_reason,pnl_dollars,pnl_ticks,hold_min,year,mae_ticks,mfe_ticks,regime,tod_bucket
+bias_momentum,LONG,2024-08-15 13:30:00+00:00,19250.0,19230.0,19285.0,2024-08-15 13:52:00+00:00,19285.0,target,33.68,67,22.0,2024,12.0,80.0,LOW_VOL_TREND,Opening Drive
+bias_momentum,SHORT,2024-08-15 14:15:00+00:00,19300.0,19320.0,19265.0,2024-08-15 14:31:00+00:00,19320.0,stop,-42.82,-80,16.0,2024,82.0,5.0,LOW_VOL_TREND,Opening Drive
+bias_momentum,LONG,2024-08-16 13:31:00+00:00,19180.0,19158.5,19218.0,2024-08-16 13:58:00+00:00,19218.0,target,36.68,73,27.0,2024,8.0,90.0,HIGH_VOLATILITY,Opening Drive

@@ -1,0 +1,3 @@
+strategy,direction,entry_ts,entry_price,pnl_dollars,profit_factor,n_trades
+foo,LONG,2025-01-02 14:30:00+00:00,21000.0,42.0,1.5,100
+foo,SHORT,2025-01-03 14:30:00+00:00,21100.0,-20.0,1.5,100

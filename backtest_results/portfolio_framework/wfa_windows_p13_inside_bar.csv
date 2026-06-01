@@ -1,0 +1,16 @@
+strategy,window_idx,is_start,is_end,oos_start,oos_end,best_params,is_pf,is_trades,oos_pf,oos_trades,oos_net,wfe,degraded
+g_inside_bar_breakout,0,2021-05-17,2022-05-16,2022-05-17,2022-08-16,"{""min_inside_range_ticks"": 3, ""target_rr"": 2.0}",2.2066,288,1.9106,42,182.56,0.8659,False
+g_inside_bar_breakout,1,2021-08-17,2022-08-16,2022-08-17,2022-11-16,"{""min_inside_range_ticks"": 3, ""target_rr"": 1.5}",2.0667,215,3.0722,35,191.8,1.4865,False
+g_inside_bar_breakout,2,2021-11-17,2022-11-16,2022-11-17,2023-02-16,"{""min_inside_range_ticks"": 3, ""target_rr"": 2.0}",2.5774,137,4.0288,65,609.7,1.5631,False
+g_inside_bar_breakout,3,2022-02-17,2023-02-16,2023-02-17,2023-05-16,"{""min_inside_range_ticks"": 3, ""target_rr"": 2.0}",3.1064,162,3.028,45,320.1,0.9748,False
+g_inside_bar_breakout,4,2022-05-17,2023-05-16,2023-05-17,2023-08-16,"{""min_inside_range_ticks"": 3, ""target_rr"": 2.0}",3.1012,190,2.7374,72,481.96,0.8827,False
+g_inside_bar_breakout,5,2022-08-17,2023-08-16,2023-08-17,2023-11-16,"{""min_inside_range_ticks"": 3, ""target_rr"": 2.5}",3.224,218,2.5787,45,323.6,0.7999,True
+g_inside_bar_breakout,6,2022-11-17,2023-11-16,2023-11-17,2024-02-16,"{""min_inside_range_ticks"": 3, ""target_rr"": 2.5}",2.9688,228,2.0625,65,406.2,0.6947,True
+g_inside_bar_breakout,7,2023-02-17,2024-02-16,2024-02-17,2024-05-16,"{""min_inside_range_ticks"": 3, ""target_rr"": 2.5}",2.6207,231,4.2395,35,441.8,1.6177,False
+g_inside_bar_breakout,8,2023-05-17,2024-05-16,2024-05-17,2024-08-16,"{""min_inside_range_ticks"": 3, ""target_rr"": 1.5}",2.8327,225,3.0774,53,291.54,1.0864,False
+g_inside_bar_breakout,9,2023-08-17,2024-08-16,2024-08-17,2024-11-16,"{""min_inside_range_ticks"": 3, ""target_rr"": 2.5}",2.8565,201,1.9784,39,246.02,0.6926,True
+g_inside_bar_breakout,10,2023-11-17,2024-11-16,2024-11-17,2025-02-16,"{""min_inside_range_ticks"": 3, ""target_rr"": 2.5}",2.6293,192,2.7535,36,314.48,1.0473,False
+g_inside_bar_breakout,11,2024-02-17,2025-02-16,2025-02-17,2025-05-16,"{""min_inside_range_ticks"": 3, ""target_rr"": 2.0}",3.2022,164,1.7086,20,82.6,0.5336,True
+g_inside_bar_breakout,12,2024-05-17,2025-05-16,2025-05-17,2025-08-16,"{""min_inside_range_ticks"": 3, ""target_rr"": 2.0}",2.6691,148,3.4787,62,529.16,1.3033,False
+g_inside_bar_breakout,13,2024-08-17,2025-08-16,2025-08-17,2025-11-16,"{""min_inside_range_ticks"": 3, ""target_rr"": 2.5}",2.7315,157,1.7178,44,214.92,0.6289,True
+g_inside_bar_breakout,14,2024-11-17,2025-11-16,2025-11-17,2026-02-16,"{""min_inside_range_ticks"": 3, ""target_rr"": 2.5}",2.5971,162,3.5808,32,343.76,1.3787,False

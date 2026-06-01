@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "strategy": "foo",
+  "params": {"ema_len": 21},
+  "code_sha": "abc123",
+  "seed": 42,
+  "lookback_start": "2024-01-01T00:00:00Z",
+  "lookback_end":   "2025-01-01T00:00:00Z",
+  "friction_applied": true,
+  "friction_per_rt_usd": 4.82
+}

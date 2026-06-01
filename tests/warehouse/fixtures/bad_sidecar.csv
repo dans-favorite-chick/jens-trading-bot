@@ -1,0 +1,2 @@
+strategy,direction,entry_ts,entry_price,stop_price,target_price,exit_ts,exit_price,exit_reason,pnl_dollars,pnl_ticks,hold_min,year
+bias_momentum,LONG,2024-08-15 13:30:00+00:00,19250.0,19230.0,19285.0,2024-08-15 13:52:00+00:00,19285.0,target,33.68,67,22.0,2024

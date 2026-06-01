@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "strategy": null,
+  "params": {
+    "strategies_requested": "all (14 harness + 4 phase13 lab)",
+    "harness_strategies": "bias_momentum, opening_session, ib_breakout, compression_breakout_v2, compression_breakout_micro, orb_v2, orb_fade, vwap_pullback_v2, vwap_band_pullback, vwap_band_reversion, noise_area, spring_setup, big_move_signal, es_nq_confluence",
+    "phase13_strategies": "raschke_baseline, g_inside_bar_breakout, e_multi_day_breakout, a_asian_continuation",
+    "start": "2021-05-17",
+    "end": "2026-05-15",
+    "friction_on": true,
+    "merge_source": "macro run + _run_phase13_4 merge"
+  },
+  "code_sha": "ccbc32a",
+  "seed": null,
+  "lookback_start": "2021-05-17T00:00:00Z",
+  "lookback_end": "2026-05-15T00:00:00Z",
+  "engine_version": "phoenix_portfolio_backtest@2026-05-31",
+  "friction_per_rt_usd": 4.82,
+  "logical_group": "portfolio_macro",
+  "notes": "retroactively emitted 2026-05-31; this CSV predates the writer-patch sidecar contract"
+}
