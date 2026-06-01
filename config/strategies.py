@@ -229,8 +229,17 @@ STRATEGIES = {
         # (min_tf_votes 3->2, require_vwap_reclaim True->False) loosen
         # the gates that pre-2026-05-17 were rejecting almost every
         # candidate. Re-evaluate after 30+ sim trades.
-        "enabled": True,
-        "validated": True,    # Was running in prod bot before retire
+        # 2026-06-01 RE-DISABLED — Oracle research run verdict.
+        # 5y stats: n=20,567, t-stat=-7.77, max DD -$83,614, PF 0.884.
+        # The 2026-05-17 V2 un-retirement (min_tf_votes 3->2,
+        # require_vwap_reclaim True->False) loosened filters but did not
+        # rescue the structural mismatch with MNQ price action. WFA gate
+        # fails: OOS PF < 60% of IS PF across all 3 windows.
+        # Re-enable only after a fundamental redesign of the wick-spring
+        # detector (not a parameter tweak).
+        # OPERATOR-APPROVED: 2026-06-01
+        "enabled": False,
+        "validated": True,    # Left True for audit history; enabled=False is the kill switch
         "stop_multiplier": 1.5,  # fallback wick multiplier (used only if stop_at_structure=False)
         "target_rr": 1.5,
         "min_wick_ticks": 6,
