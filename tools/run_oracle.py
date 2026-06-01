@@ -35,6 +35,16 @@ import json
 import logging
 import sys
 
+try:
+    from pathlib import Path as _Path
+
+    from dotenv import load_dotenv
+
+    _PROJECT_ROOT = _Path(__file__).resolve().parent.parent
+    load_dotenv(_PROJECT_ROOT / ".env")
+except ImportError:
+    pass
+
 from agents import strategy_oracle
 
 __no_trade_path_imports__ = True
