@@ -96,14 +96,33 @@ def load_and_hash(csv_path: Path) -> SidecarResult:
 
     run_id = sha256(csv_bytes + b"\\n" + canonical_sidecar_bytes)
 
-    This is the single source of truth for run_id computation, matching
-    the logic that was previously inlined in ingest._ingest_one().
+    Returns a SidecarResult with:
+      .sidecar      — parsed sidecar data (empty dict if missing or parse failed)
+      .sidecar_raw  — envelope `{"sidecar": <parsed>, "meta": {...}}` for forensic
+                      storage in runs.sidecar_raw, including sidecar_missing flag,
+                      sidecar_parse_error message, parse_error_raw_b64 of bad bytes,
+                      and missing_fields list.
     """
     csv_bytes = Path(csv_path).read_bytes()
-    sidecar = load_sidecar(csv_path)
+    loaded = load_sidecar(csv_path)
+    # load_sidecar returns either: parsed dict (success); {"meta": {...}} (missing/parse-error).
+    meta = dict(loaded.get("meta") or {})
+    if "meta" in loaded and len(loaded) == 1:
+        sidecar: dict = {}        # missing or parse-failed
+        if "parse_error_raw_b64" in meta and "sidecar_parse_error" not in meta:
+            meta["sidecar_parse_error"] = "non-json sidecar (raw bytes preserved as b64)"
+    else:
+        sidecar = {k: v for k, v in loaded.items() if k != "meta"}
+        meta["sidecar_present"] = True
+        meta["missing_fields"] = [
+            f for f in ("strategy", "params", "code_sha", "seed",
+                        "lookback_start", "lookback_end")
+            if f not in sidecar
+        ]
     sc_bytes = canonical_sidecar(sidecar)
     run_id = hashlib.sha256(csv_bytes + b"\n" + sc_bytes).hexdigest()
-    return SidecarResult(run_id=run_id, sidecar=sidecar, sidecar_raw=sidecar)
+    sidecar_raw = {"sidecar": sidecar, "meta": meta}
+    return SidecarResult(run_id=run_id, sidecar=sidecar, sidecar_raw=sidecar_raw)
 
 
 def friction_applied(sidecar_data: dict[str, Any], *, cli_override: bool | None = None) -> bool:
@@ -127,4 +146,6 @@ def friction_applied(sidecar_data: dict[str, Any], *, cli_override: bool | None 
 
     per_rt = sidecar_data.get("friction_per_rt_usd")
     if per_rt is not None and float(per_rt) > 0:
-        return T
+        return True
+
+    return False

@@ -523,21 +523,41 @@ def _ingest_mixed(
     run_id: str,
     header: list[str],
 ) -> tuple[int, int]:
-    """Mixed file: ingest trades AND aggregate metrics from row-0 constants."""
-    trades_n  = _ingest_trades(con, csv_path, run_id, header)
+    """Mixed file: ingest trades AND aggregate metrics from row-0 constants.
 
-    # Extract aggregate column values from row 0 via Python reader
+    Validates per spec §5.3 that the aggregate columns are constant across all
+    rows; raises ValueError if any aggregate column varies. The orchestrator's
+    per-file transaction catches this and produces status='error'.
+    """
     import csv as csv_mod
     from tools.warehouse.sniff import AGGREGATE_METRIC_COLS
 
     agg_cols = [c for c in header if c in AGGREGATE_METRIC_COLS]
+
+    # Validate constancy of aggregate columns BEFORE inserting any trades
+    if agg_cols:
+        seen: dict[str, str] = {}
+        with csv_path.open(newline="", encoding="utf-8-sig") as fh:
+            for row in csv_mod.DictReader(fh):
+                for col in agg_cols:
+                    val = (row.get(col) or "").strip()
+                    if col in seen:
+                        if seen[col] != val:
+                            raise ValueError(
+                                f"mixed-kind CSV has non-constant aggregate column "
+                                f"{col!r} in {csv_path} ({seen[col]!r} vs {val!r})"
+                            )
+                    else:
+                        seen[col] = val
+
+    trades_n  = _ingest_trades(con, csv_path, run_id, header)
+
     metrics_n = 0
     if agg_cols:
         with csv_path.open(newline="", encoding="utf-8-sig") as fh:
-            reader = csv_mod.DictReader(fh)
-            for row in reader:
+            for row in csv_mod.DictReader(fh):
                 for col in agg_cols:
-                    val = row.get(col, "").strip()
+                    val = (row.get(col) or "").strip()
                     try:
                         numeric = float(val)
                         label   = None
@@ -639,4 +659,43 @@ def _log_result(r: IngestResult) -> None:
     if r.status == "inserted":
         log.info("✅ %s  kind=%-12s  rows=%d  metrics=%d  run_id=%s...",
                  r.csv_path.name, r.csv_kind, r.rows_inserted, r.metrics_inserted,
- 
+                 (r.run_id or "")[:12])
+    elif r.status == "skipped_duplicate":
+        log.info("⏭  %s  skipped_duplicate", r.csv_path.name)
+    else:
+        log.warning("❌ %s  error=%s", r.csv_path.name, r.error)
+# Utilities
+# ──────────────────────────────────────────────────────────────
+
+def _safe_csv_path(path: Path) -> str:
+    """Return a DuckDB-safe single-quoted path string for use in SQL."""
+    escaped = str(path).replace("'", "''")
+    return f"'{escaped}'"
+
+
+def _log_error(csv_path: Path, error_class: str, error_msg: str, *, traceback: str = "") -> None:
+    import traceback as tb_mod
+    record = {
+        "ts":          datetime.now(timezone.utc).isoformat(),
+        "level":       "error",
+        "file":        str(csv_path),
+        "error_class": error_class,
+        "error":       error_msg,
+    }
+    if traceback:
+        record["traceback"] = traceback
+    ERROR_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with ERROR_LOG.open("a") as fh:
+        fh.write(json.dumps(record) + "\n")
+    log.error("ingest error [%s] %s: %s", error_class, csv_path.name, error_msg)
+
+
+def _log_result(r: IngestResult) -> None:
+    if r.status == "inserted":
+        log.info("✅ %s  kind=%-12s  rows=%d  metrics=%d  run_id=%s...",
+                 r.csv_path.name, r.csv_kind, r.rows_inserted, r.metrics_inserted,
+                 (r.run_id or "")[:12])
+    elif r.status == "skipped_duplicate":
+        log.info("⏭  %s  skipped_duplicate", r.csv_path.name)
+    else:
+        log.warning("❌ %s  error=%s", r.csv_path.name, r.error)
