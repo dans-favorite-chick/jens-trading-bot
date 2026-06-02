@@ -1116,6 +1116,15 @@ STRATEGIES = {
         # tightening (LONG=20, SHORT=14) which is a multi-knob change left
         # for operator review. The target_rr raise (2.0 -> 2.5) is the
         # trivial single-line edit landing autonomously per overnight Phase B.
+        # ── BACKTEST-ONLY KNOB (2026-06-02 bug audit H-3) ─────────────
+        # This strategy's exit_policy is chandelier(50, 3x, 1R) per
+        # PHASE_13_EXIT_ASSIGNMENTS. base_bot's Phase 13 override unconditionally
+        # overwrites signal.target_price with the chandelier policy's 10R
+        # placeholder, so the live OIF bracket is 10R and the chandelier
+        # trail governs the actual exit. target_rr below ONLY affects
+        # tools/phoenix_real_backtest.py::_resolve_stop_and_target (which
+        # reads sig.target_rr directly). Future backtest PnL projections
+        # use 2.5R as the hard target; live exits do not.
         "target_rr": 2.5,
     },
 
@@ -1141,6 +1150,12 @@ STRATEGIES = {
         # The LLM also proposed per-direction max_stop_ticks tightening
         # (LONG=8, SHORT=10) -- NOT_TRIVIAL with a single global knob;
         # queued in pending_changes.json for operator review.
+        # ── BACKTEST-ONLY KNOB (2026-06-02 bug audit H-3) ─────────────
+        # Same caveat as e_multi_day_breakout above: this strategy uses
+        # chandelier(50, 3x, 1R) per PHASE_13_EXIT_ASSIGNMENTS, so the
+        # live OIF bracket is overwritten to chandelier's 10R placeholder
+        # and the trail governs exits. target_rr below ONLY affects the
+        # backtest simulator's hard target.
         "target_rr": 3.0,
     },
 
@@ -1183,6 +1198,20 @@ STRATEGIES = {
         # The LLM also proposed per-direction max_stop_ticks (LONG=13,
         # SHORT=10) -- NOT_TRIVIAL with a single global knob; queued
         # in pending_changes.json for operator review.
+        # ── BACKTEST-ONLY KNOB (2026-06-02 bug audit C-1) ─────────────
+        # raschke_baseline uses time_exit(30min) per PHASE_13_EXIT_ASSIGNMENTS.
+        # TimeExitPolicy.compute_initial_target returns 5R, which base_bot's
+        # Phase 13 override unconditionally writes to signal.target_price
+        # before the OIF bracket is submitted. The live system therefore
+        # exits via time_exit(30min) or a 5R hard target (whichever fires
+        # first) and NEVER on the 3.5R below. The target_rr value here
+        # ONLY affects tools/phoenix_real_backtest.py simulator output --
+        # future backtest projections will under-estimate live trade
+        # duration and (depending on direction) over- or under-estimate
+        # per-trade PnL relative to live behavior. Live impact is ZERO.
+        # Operator should treat this as a backtest-simulation parameter
+        # and adjudicate alignment with PHASE_13_EXIT_ASSIGNMENTS before
+        # reading future backtest reports as live-comparable.
         "target_rr": 3.5,
         "pullback_lookback": 3,
         # 2026-05-20 SHIP AUDIT: belt-and-suspenders behind the

@@ -1046,43 +1046,59 @@ def api_market_state_per_strategy():
     from core.trade_memory import load_all_trades
     from dashboard.trade_accessors import safe_pnl_net
 
-    cutoff_iso = (datetime.datetime.now(datetime.timezone.utc)
-                  - datetime.timedelta(days=30)).isoformat()
-    trades = load_all_trades()
-    # Bucket by (strategy, entry_market_state).
-    buckets: dict[tuple[str, str], dict] = defaultdict(
-        lambda: {"n": 0, "wins": 0, "gross_w": 0.0, "gross_l": 0.0}
-    )
-    for t in trades:
-        ts = t.get("recorded_at") or t.get("close_ts") or ""
-        if ts and ts < cutoff_iso:
-            continue
-        strat = t.get("strategy") or "(unknown)"
-        ms = t.get("entry_market_state") or "(unknown)"
-        pnl = safe_pnl_net(t) or 0.0
-        b = buckets[(strat, ms)]
-        b["n"] += 1
-        if pnl > 0:
-            b["wins"] += 1
-            b["gross_w"] += pnl
-        elif pnl < 0:
-            b["gross_l"] += abs(pnl)
-    out = []
-    for (strat, ms), b in sorted(buckets.items()):
-        n = b["n"] or 1
-        wr = b["wins"] / n
-        gl = b["gross_l"] or 1e-9
-        pf = b["gross_w"] / gl if b["gross_l"] > 0 else None
-        out.append({
-            "strategy": strat,
-            "entry_market_state": ms,
-            "n_trades": b["n"],
-            "win_rate": round(wr, 3),
-            "profit_factor": round(pf, 3) if pf is not None else None,
-            "gross_win": round(b["gross_w"], 2),
-            "gross_loss": round(b["gross_l"], 2),
+    # 2026-06-02 bug audit M-1: wrap the whole flow in try/except so a
+    # missing/locked/corrupt trade_memory.json doesn't leak a Flask 500
+    # with the absolute project path. Matches api_market_state's
+    # defensive pattern.
+    try:
+        # 2026-06-02 bug audit M-2: trade_memory.record() writes
+        # `datetime.now().isoformat()` (tz-naive local time). Compare
+        # against a tz-naive local cutoff so the 30-day window doesn't
+        # mismatch within ~CT-offset hours of the boundary. If this
+        # endpoint is ever used for gating decisions, the cutoff
+        # convention here matters.
+        cutoff_iso = (datetime.datetime.now()
+                      - datetime.timedelta(days=30)).isoformat()
+        trades = load_all_trades()
+        # Bucket by (strategy, entry_market_state).
+        buckets: dict[tuple[str, str], dict] = defaultdict(
+            lambda: {"n": 0, "wins": 0, "gross_w": 0.0, "gross_l": 0.0}
+        )
+        for t in trades:
+            ts = t.get("recorded_at") or t.get("close_ts") or ""
+            if ts and ts < cutoff_iso:
+                continue
+            strat = t.get("strategy") or "(unknown)"
+            ms = t.get("entry_market_state") or "(unknown)"
+            pnl = safe_pnl_net(t) or 0.0
+            b = buckets[(strat, ms)]
+            b["n"] += 1
+            if pnl > 0:
+                b["wins"] += 1
+                b["gross_w"] += pnl
+            elif pnl < 0:
+                b["gross_l"] += abs(pnl)
+        out = []
+        for (strat, ms), b in sorted(buckets.items()):
+            n = b["n"] or 1
+            wr = b["wins"] / n
+            gl = b["gross_l"] or 1e-9
+            pf = b["gross_w"] / gl if b["gross_l"] > 0 else None
+            out.append({
+                "strategy": strat,
+                "entry_market_state": ms,
+                "n_trades": b["n"],
+                "win_rate": round(wr, 3),
+                "profit_factor": round(pf, 3) if pf is not None else None,
+                "gross_win": round(b["gross_w"], 2),
+                "gross_loss": round(b["gross_l"], 2),
+            })
+        return safe_jsonify({"rows": out, "window_days": 30})
+    except Exception as e:  # noqa: BLE001
+        logger.warning("api_market_state/per_strategy failed: %s", e)
+        return safe_jsonify({
+            "rows": [], "window_days": 30, "error": "unavailable",
         })
-    return safe_jsonify({"rows": out, "window_days": 30})
 
 
 @app.route("/api/gamma-context")

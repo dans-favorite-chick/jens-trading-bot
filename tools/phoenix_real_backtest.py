@@ -86,6 +86,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from core.tick_aggregator import Bar
+# 2026-06-02 bug audit M-3: hoisted from inner runner loop to module
+# scope so the import isn't re-resolved on every signal.
+from strategies.base_strategy import BaseStrategy as _BaseStrategy
 
 _CT = ZoneInfo("America/Chicago")
 _ET = ZoneInfo("America/New_York")
@@ -1261,7 +1264,17 @@ def simulate_trade(signal_strategy: str, signal_direction: str,
                 should_exit, reason = check_exit_fn(
                     _position, market, [bar_obj], {},
                 )
-            except Exception:  # noqa: BLE001 -- best-effort hook
+            except Exception as _ce_exc:  # noqa: BLE001 -- best-effort hook
+                # 2026-06-02 bug audit H-1: log the exception so a future
+                # check_exit regression doesn't silently degrade backtest
+                # fidelity. The path is still swallowed (intentional) but
+                # observable via debug logging.
+                logger.debug(
+                    "[%s] check_exit raised at %s; treating as no-op: %r",
+                    getattr(check_exit_fn, "__self__",
+                             type("X", (), {})).__class__.__name__,
+                    row.ts, _ce_exc,
+                )
                 should_exit, reason = (False, "")
             if should_exit:
                 res.exit_ts = row.ts
@@ -1470,13 +1483,17 @@ def run_backtest(pipeline: CSVEnrichmentPipeline, strategies: dict,
             # nq_lsr / future ones tomorrow) honor their bar-close
             # exit logic instead of riding stop/target/time only.
             # Only forward if the strategy overrides the base no-op
-            # (strict identity check on the bound method).
-            from strategies.base_strategy import BaseStrategy as _BS
+            # (strict identity check on the bound method). _BaseStrategy
+            # is imported at module scope (2026-06-02 bug audit M-3).
+            # NOTE (2026-06-02 bug audit H-2): nq_lsr.check_exit reads
+            # market["big_move_exhaustion"] which the simulator does not
+            # currently reconstruct, so nq_lsr silently no-ops in
+            # backtest. Documented; not a fix in this commit.
             _hook = None
             try:
                 if (
                     getattr(type(strat), "check_exit", None) is not None
-                    and getattr(type(strat), "check_exit", None) is not _BS.check_exit
+                    and getattr(type(strat), "check_exit", None) is not _BaseStrategy.check_exit
                 ):
                     _hook = strat.check_exit
             except Exception:  # noqa: BLE001
