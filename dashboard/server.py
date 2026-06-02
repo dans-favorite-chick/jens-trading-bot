@@ -1031,6 +1031,60 @@ def api_market_state():
     })
 
 
+@app.route("/api/market_state/per_strategy")
+def api_market_state_per_strategy():
+    """Phase D.5: per-strategy trade count + WR + PF grouped by
+    entry_market_state for the trailing 30 days.
+
+    Reads from core.trade_memory.load_all_trades() (per the operator
+    directive in CLAUDE.md). Trades without entry_market_state (everything
+    predating Phase D.5) bucket into ``(unknown)``. Powers Stage 2
+    decisions ("should this strategy gate on COMPRESSED?") in 1-2 weeks
+    once the live bot starts stamping the field on every trade.
+    """
+    from collections import defaultdict
+    from core.trade_memory import load_all_trades
+    from dashboard.trade_accessors import safe_pnl_net
+
+    cutoff_iso = (datetime.datetime.now(datetime.timezone.utc)
+                  - datetime.timedelta(days=30)).isoformat()
+    trades = load_all_trades()
+    # Bucket by (strategy, entry_market_state).
+    buckets: dict[tuple[str, str], dict] = defaultdict(
+        lambda: {"n": 0, "wins": 0, "gross_w": 0.0, "gross_l": 0.0}
+    )
+    for t in trades:
+        ts = t.get("recorded_at") or t.get("close_ts") or ""
+        if ts and ts < cutoff_iso:
+            continue
+        strat = t.get("strategy") or "(unknown)"
+        ms = t.get("entry_market_state") or "(unknown)"
+        pnl = safe_pnl_net(t) or 0.0
+        b = buckets[(strat, ms)]
+        b["n"] += 1
+        if pnl > 0:
+            b["wins"] += 1
+            b["gross_w"] += pnl
+        elif pnl < 0:
+            b["gross_l"] += abs(pnl)
+    out = []
+    for (strat, ms), b in sorted(buckets.items()):
+        n = b["n"] or 1
+        wr = b["wins"] / n
+        gl = b["gross_l"] or 1e-9
+        pf = b["gross_w"] / gl if b["gross_l"] > 0 else None
+        out.append({
+            "strategy": strat,
+            "entry_market_state": ms,
+            "n_trades": b["n"],
+            "win_rate": round(wr, 3),
+            "profit_factor": round(pf, 3) if pf is not None else None,
+            "gross_win": round(b["gross_w"], 2),
+            "gross_loss": round(b["gross_l"], 2),
+        })
+    return safe_jsonify({"rows": out, "window_days": 30})
+
+
 @app.route("/api/gamma-context")
 def api_gamma_context():
     """⚠️  RETIRED 2026-05-06 (Sprint J) — MenthorQ subscription cancelled.
