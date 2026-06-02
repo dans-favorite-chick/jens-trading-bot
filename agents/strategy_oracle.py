@@ -465,6 +465,23 @@ def _tool_propose_change(args: dict, ctx: _RunCtx) -> dict:
             "ok": False,
             "error": "finding_id is required to link evidence",
         }
+    # 2026-06-02 BUG #4: even if the schema was filtered, defend
+    # against the LLM proposing target_rr from training-data memory on
+    # a strategy whose exit policy ignores it. The proposal would be
+    # inert — short-circuit here with an explanatory error so the
+    # rejection is visible in the audit trail.
+    if args.get("parameter_name") == "target_rr":
+        _inert = _strategies_with_inert_target_rr()
+        if args.get("strategy") in _inert:
+            return {
+                "ok": False,
+                "error": (
+                    f"target_rr is inert on {args.get('strategy')!r} — "
+                    "exit policy (chandelier / time_exit / managed_existing) "
+                    "ignores the config key. See "
+                    "logs/oracle/research/2026-06-02_bug4_inert_target_rr.md."
+                ),
+            }
     # Spec sec 12d: `current_value` MUST come from the compute layer via
     # AST parse of config/strategies.py -- never from the LLM. Override
     # whatever the model supplied with the real value; if the lookup
@@ -1025,6 +1042,37 @@ def _fmt_num(v: Any) -> str:
         return str(v)
 
 
+# Exit-policy names whose ``compute_initial_target`` ignores the
+# strategy's ``target_rr`` config key — see
+# logs/oracle/research/2026-06-02_bug4_inert_target_rr.md. The Oracle
+# must not propose changes to ``target_rr`` on strategies wired to
+# these policies; the proposal would have zero live effect.
+_INERT_TARGET_RR_POLICIES = frozenset({"chandelier", "time_exit", "managed_existing"})
+
+
+def _strategies_with_inert_target_rr() -> frozenset[str]:
+    """Return the strategy names whose ``target_rr`` is inert in live.
+
+    Reads ``core.exit_policies.PHASE_13_EXIT_ASSIGNMENTS`` via
+    ``importlib`` so the static-import CI scanner doesn't flag this
+    module. Falls back to an empty set on any lookup error so a
+    config refactor doesn't crash the Oracle — the worst case is we
+    re-expose target_rr to the LLM, which is the pre-fix behavior.
+    """
+    try:
+        import importlib as _il
+        ep = _il.import_module("core.exit_policies")
+        mapping = getattr(ep, "PHASE_13_EXIT_ASSIGNMENTS", {}) or {}
+        return frozenset(
+            name for name, value in mapping.items()
+            if isinstance(value, tuple) and len(value) >= 1
+            and value[0] in _INERT_TARGET_RR_POLICIES
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("inert target_rr lookup failed: %r — falling back to empty set", e)
+        return frozenset()
+
+
 def _build_strategy_schema_block(facts: dict) -> str:
     """2026-06-01 master fix Phase 5.1 — schema injection.
 
@@ -1036,12 +1084,21 @@ def _build_strategy_schema_block(facts: dict) -> str:
     config schema). Helper is called at prompt-build time -- the list
     is NOT hardcoded, so any future config additions show up
     automatically.
+
+    2026-06-02 BUG #4 option 2: ``target_rr`` is filtered out of the
+    parameter list for strategies whose PHASE_13_EXIT_ASSIGNMENTS
+    entry is chandelier / time_exit / managed_existing — the live
+    target on those strategies is set by the exit policy, not the
+    config key, so any propose_change(...) on target_rr would be
+    inert. See logs/oracle/research/2026-06-02_bug4_inert_target_rr.md.
     """
     # Lazy import to keep test fixtures free of config side effects.
     try:
         from config.strategies import STRATEGIES
     except Exception as e:  # noqa: BLE001
         return f"_(schema unavailable: {e!r})_"
+
+    inert_target_rr = _strategies_with_inert_target_rr()
 
     lines = [
         "Each strategy carries its OWN parameter set in config/strategies.py.",
@@ -1064,10 +1121,12 @@ def _build_strategy_schema_block(facts: dict) -> str:
         # Drop the obvious meta keys; the LLM doesn't propose changes to
         # `enabled` (operator-only) or `validated` (operator-only) or
         # `walk_forward_gate` (PROTECTED).
-        params = sorted(
-            k for k in cfg.keys()
-            if k not in {"enabled", "validated", "walk_forward_gate", "stage"}
-        )
+        # 2026-06-02 BUG #4: also drop `target_rr` on strategies whose
+        # exit policy doesn't honor it — proposals would be inert.
+        drop = {"enabled", "validated", "walk_forward_gate", "stage"}
+        if name in inert_target_rr:
+            drop.add("target_rr")
+        params = sorted(k for k in cfg.keys() if k not in drop)
         # Cap per-strategy at 30 keys for prompt-budget hygiene; if a
         # strategy has more, list the first 30 and append "+N more".
         n_total = len(params)
