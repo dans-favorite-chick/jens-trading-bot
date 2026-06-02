@@ -1036,6 +1036,39 @@ class TradeResult:
     hold_min: float = 0.0
 
 
+# ── Fix B (2026-06-02): adapters that let simulate_trade call the
+# live-system check_exit() hook with the same shape it expects in
+# production. Both are intentionally minimal -- only the fields strategies
+# read in their check_exit logic are populated.
+@dataclass
+class _SimPositionAdapter:
+    """Mimics TradePosition for simulator's check_exit calls.
+
+    Only the attributes strategies' check_exit methods actually read are
+    here. Adding more is cheap as new strategies adopt the hook.
+    """
+    direction: str
+    entry_time: float            # epoch seconds (matches live TradePosition)
+    metadata: dict
+    entry_price: float
+
+
+@dataclass
+class _SimBar1m:
+    """Mimics Bar1m for simulator's check_exit calls.
+
+    Strategies reading bar attributes (close, end_time) get them here.
+    Anything beyond OHLC + end_time will be missing -- strategies
+    needing CVD / VPOC / etc. on the 1m bar object will not get that
+    state in backtest and should defensively no-op on missing attrs.
+    """
+    end_time: float              # epoch seconds (matches live Bar1m)
+    open: float
+    high: float
+    low: float
+    close: float
+
+
 # ── Execution-friction model (2026-05-27, operator-approved, flag-gated) ──
 # When APPLY_EXECUTION_DECAY is True, simulate_trade() deducts conservative
 # round-turn friction from each trade's net P&L:
@@ -1134,12 +1167,28 @@ def simulate_trade(signal_strategy: str, signal_direction: str,
                     mnq_1m_df: pd.DataFrame,
                     tick_size: float = 0.25,
                     tick_value: float = 0.50,
-                    max_hold_min: int = 240) -> TradeResult:
+                    max_hold_min: int = 240,
+                    check_exit_fn=None,
+                    signal_metadata: dict | None = None) -> TradeResult:
     """Walk MNQ 1m bars forward from entry_ts to find which of stop/target
     hits first. Matches the simulation in tools/backtest_v3.py.
 
     Conservative ordering: if BOTH stop and target are touched in the
     same 1m bar, assume stop hit first (worst case for the trader).
+
+    Fix B (2026-06-02 overnight Phase C3): optional ``check_exit_fn`` is
+    invoked on each bar AFTER the stop/target check. Precedence:
+    ``stop > target > managed_exit > time_exit``. If ``check_exit_fn``
+    raises, the exception is swallowed and the bar is treated as no-op
+    (best-effort: the live system feeds richer state — Bar1m objects,
+    full bars_1m history, session_info — than the simulator can
+    cheaply reconstruct, and some strategies' check_exit needs that
+    state). Strategies whose check_exit only needs (position.direction,
+    last bar close, market.vwap) — like noise_area — get evaluated
+    correctly here; ones needing deep state effectively no-op.
+
+    ``signal_metadata`` mirrors what base_bot stashes into
+    position.metadata (e.g., noise_area cone UB/LB at entry).
     """
     res = TradeResult(
         strategy=signal_strategy, direction=signal_direction,
@@ -1158,6 +1207,17 @@ def simulate_trade(signal_strategy: str, signal_direction: str,
         return res
     max_ts = entry_ts + pd.Timedelta(minutes=max_hold_min)
     forward = forward[forward.ts <= max_ts]
+
+    # Build the position adapter once. It carries the same attributes
+    # the live system stashes onto TradePosition: direction, entry_time
+    # (epoch seconds), metadata (per-signal context).
+    _position = _SimPositionAdapter(
+        direction=signal_direction,
+        entry_time=float(entry_ts.timestamp()),
+        metadata=signal_metadata or {},
+        entry_price=entry_price,
+    )
+
     for row in forward.itertuples(index=False):
         if signal_direction == "LONG":
             # Check stop FIRST (conservative)
@@ -1181,6 +1241,32 @@ def simulate_trade(signal_strategy: str, signal_direction: str,
                 res.exit_ts = row.ts
                 res.exit_price = target_price
                 res.exit_reason = "target"
+                break
+
+        # ── managed_exit (Fix B) — strict precedence below stop/target ──
+        if check_exit_fn is not None:
+            try:
+                bar_obj = _SimBar1m(
+                    end_time=float(row.ts.timestamp()),
+                    open=float(getattr(row, "open", row.close)),
+                    high=float(row.high),
+                    low=float(row.low),
+                    close=float(row.close),
+                )
+                market = {
+                    "price": float(row.close),
+                    "vwap": float(getattr(row, "vwap", 0) or 0),
+                    "ts": row.ts,
+                }
+                should_exit, reason = check_exit_fn(
+                    _position, market, [bar_obj], {},
+                )
+            except Exception:  # noqa: BLE001 -- best-effort hook
+                should_exit, reason = (False, "")
+            if should_exit:
+                res.exit_ts = row.ts
+                res.exit_price = float(row.close)
+                res.exit_reason = f"managed_exit:{reason}" if reason else "managed_exit"
                 break
     else:
         # No stop/target hit during the loop.
@@ -1379,6 +1465,22 @@ def run_backtest(pipeline: CSVEnrichmentPipeline, strategies: dict,
             # Resolve entry/stop/target prices via the helper below.
             entry_price = sig.entry_price if sig.entry_price else market["price"]
             stop_price, target_price = _resolve_stop_and_target(sig, entry_price)
+            # Fix B (2026-06-02): pass check_exit through to the
+            # simulator so managed-exit strategies (noise_area today;
+            # nq_lsr / future ones tomorrow) honor their bar-close
+            # exit logic instead of riding stop/target/time only.
+            # Only forward if the strategy overrides the base no-op
+            # (strict identity check on the bound method).
+            from strategies.base_strategy import BaseStrategy as _BS
+            _hook = None
+            try:
+                if (
+                    getattr(type(strat), "check_exit", None) is not None
+                    and getattr(type(strat), "check_exit", None) is not _BS.check_exit
+                ):
+                    _hook = strat.check_exit
+            except Exception:  # noqa: BLE001
+                _hook = None
             # Simulate
             tr = simulate_trade(
                 signal_strategy=name,
@@ -1388,6 +1490,8 @@ def run_backtest(pipeline: CSVEnrichmentPipeline, strategies: dict,
                 stop_price=stop_price,
                 target_price=target_price,
                 mnq_1m_df=mnq_1m_df,
+                check_exit_fn=_hook,
+                signal_metadata=dict(getattr(sig, "metadata", {}) or {}),
             )
             active[name] = tr
             completed.append(tr)
