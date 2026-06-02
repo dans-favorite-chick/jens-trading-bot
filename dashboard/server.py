@@ -971,6 +971,47 @@ def api_strategies():
     return jsonify({"prod": prod_strats, "lab": lab_strats})
 
 
+@app.route("/api/active-strategies")
+def api_active_strategies():
+    """Return the list of strategies the dashboard should display.
+
+    2026-06-02: Filters out retired strategies (retired=True in
+    config/strategies.py) so the UI no longer surfaces high_precision_only,
+    noise_area, or any future retiree. Visual fields (color + symbol) are
+    pulled from config/strategy_visuals.py so the dashboard legend and the
+    NT8 PhoenixTradeMarkers indicator can stay in sync — same source of
+    truth for both surfaces.
+
+    Each row:
+        {name, enabled, validated, color, symbol}
+
+    Reads config/strategies.py at request time — no caching beyond Flask
+    defaults — so a config edit + dashboard refresh is enough to roll out
+    a new active/retired state without restarting the dashboard.
+    """
+    try:
+        from config.strategies import STRATEGIES
+        from config.strategy_visuals import get_visual
+    except Exception as e:  # noqa: BLE001
+        logger.warning("api_active_strategies import failed: %s", e)
+        return safe_jsonify({"strategies": [], "error": str(e)}), 500
+    rows = []
+    for name, cfg in STRATEGIES.items():
+        if not isinstance(cfg, dict):
+            continue
+        if cfg.get("retired") is True:
+            continue
+        vis = get_visual(name)
+        rows.append({
+            "name": name,
+            "enabled": bool(cfg.get("enabled", False)),
+            "validated": bool(cfg.get("validated", False)),
+            "color": vis["color"],
+            "symbol": vis["symbol"],
+        })
+    return safe_jsonify({"strategies": rows, "count": len(rows)})
+
+
 # ─── NEW Sunday endpoints: composite structural bias + all new signal modules ───
 
 @app.route("/api/structural-bias")
