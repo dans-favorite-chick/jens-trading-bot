@@ -92,3 +92,17 @@ class TradeCloser:
                 exit_reason=str(trade.get("exit_reason", "unknown")),
                 pnl=float(trade.get("pnl_dollars", 0.0)),
             )
+
+            # 2026-06-02: parallel emit to phoenix_markers.jsonl consumed
+            # by the PhoenixTradeMarkers indicator. No-throw writer; never
+            # breaks the post-close pipeline if NT8 disk is unavailable.
+            try:
+                from core.nt8_chart_markers import get_chart_markers
+                get_chart_markers().record_exit(
+                    trade_id=trade.get("trade_id", ""),
+                    exit_price=float(trade.get("exit_price", 0.0) or 0.0),
+                    exit_reason=str(trade.get("exit_reason", "unknown")),
+                    pnl=float(trade.get("pnl_dollars", 0.0) or 0.0),
+                )
+            except Exception:
+                pass

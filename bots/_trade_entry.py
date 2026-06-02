@@ -690,6 +690,22 @@ class TradeEntry:
                 trade_id=tid,
             )
 
+            # 2026-06-02: parallel emit to NEW phoenix_markers.jsonl consumed
+            # by the PhoenixTradeMarkers indicator. ChartMarkerWriter is
+            # no-throw — never breaks the trading path.
+            try:
+                from core.nt8_chart_markers import get_chart_markers
+                get_chart_markers().record_entry(
+                    trade_id=tid,
+                    strategy=signal.strategy,
+                    direction=signal.direction,
+                    entry_price=float(price),
+                    stop=float(stop_price),
+                    target=float(target_price) if target_price is not None else None,
+                )
+            except Exception:
+                pass  # belt-and-suspenders; writer is already no-throw
+
             # P1-3 (F-07/F-20) portfolio risk gate — directional cap + correlation.
             # WARN-default; PHOENIX_PORTFOLIO_CAP_BLOCK=1 enforces.
             # Lazy-instantiate per-bot so the wiring works even if BaseBot.__init__

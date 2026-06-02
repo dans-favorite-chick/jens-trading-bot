@@ -637,6 +637,15 @@ def _move_nt8_stop(pos, old_stop_price: float, new_stop_price: float) -> None:
             logger.info(
                 f"[STOP_MOVED:{pos.trade_id}] {old_stop_price:.2f} -> {new_stop_price:.2f}"
             )
+            # 2026-06-02: emit stop-move event for PhoenixTradeMarkers
+            # so its dashed stop line tracks the broker's new level.
+            try:
+                from core.nt8_chart_markers import get_chart_markers
+                get_chart_markers().record_stop_update(
+                    trade_id=pos.trade_id, stop=float(new_stop_price),
+                )
+            except Exception:
+                pass
         else:
             logger.error(
                 f"[STOP_MOVE_FAILED:{pos.trade_id}] sink {resp.get('sink','?')} "
