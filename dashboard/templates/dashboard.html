@@ -785,11 +785,17 @@ function esc(s) {
 
 // ── Sprint G: refresh combined-both-bots summary from /api/today-pnl
 //    Independent of the active-tab poll so operator always sees both.
+// 2026-06-02: cache the response on window._lastTodayPnl so renderStats()
+// can pick the per-bot trade count from the SAME authoritative source as
+// the both-bots summary. Prior to this, st-trades read risk.trades_today
+// (an in-memory RiskManager counter that doesn't always reset cleanly per
+// calendar day) and the two panels disagreed on "trades today".
 async function refreshBothBotsSummary() {
   try {
     const res = await fetch('/api/today-pnl');
     if (!res.ok) return;
     const d = await res.json();
+    window._lastTodayPnl = d;
     const perBot = d.per_bot || {};
     for (const which of ['sim', 'prod']) {
       const data = perBot[which] || {pnl: 0, trades: 0, win_rate: 0};
@@ -892,7 +898,12 @@ async function refreshTapeReader() {
 // ── Polling ────────────────────────────────────────────────────────
 async function poll() {
   // Sprint G: refresh both-bots summary in parallel with main poll.
-  refreshBothBotsSummary();
+  // 2026-06-02: now await-ed because renderStats() pulls per-bot trade
+  // counts from window._lastTodayPnl that this populates. Without the
+  // await, the first paint shows risk.trades_today (RiskManager counter)
+  // before _lastTodayPnl is populated — a flicker that misled the operator
+  // into thinking the two panels disagreed.
+  await refreshBothBotsSummary();
   // Sprint K2: bias + tape reader panels (independent of main bot state)
   refreshBiasPanel();
   refreshTapeReader();
@@ -1027,13 +1038,30 @@ function renderPosition(pos) {
 }
 
 // ── Stats ──────────────────────────────────────────────────────────
+// 2026-06-02: trades / win-rate / W-L now pull from window._lastTodayPnl
+// (populated by refreshBothBotsSummary in the same poll cycle). The bot's
+// in-memory risk.trades_today counter is informational only; trade_memory
+// (the file the Both-Bots Summary uses) is the canonical truth so the
+// "Trades" stat agrees with the summary card sitting two divs above.
+// Falls back to the RiskManager values when /api/today-pnl hasn't arrived
+// yet (cold start) so the panel never blanks out.
 function renderStats(risk) {
   const pnl = risk.daily_pnl || 0;
   el('st-pnl').textContent = '$' + pnl.toFixed(2);
   el('st-pnl').className = 'val ' + (pnl >= 0 ? 'pnl-positive' : 'pnl-negative');
-  el('st-trades').textContent = risk.trades_today || 0;
-  el('st-winrate').textContent = (risk.win_rate || 0) + '%';
-  el('st-wl').textContent = (risk.wins_today || 0) + '/' + (risk.losses_today || 0);
+
+  const today = window._lastTodayPnl || {};
+  const botStats = (today.per_bot || {})[activeBot] || null;
+  if (botStats) {
+    el('st-trades').textContent = botStats.trades || 0;
+    el('st-winrate').textContent = (botStats.win_rate || 0).toFixed(0) + '%';
+    el('st-wl').textContent = (botStats.wins || 0) + '/' + (botStats.losses || 0);
+  } else {
+    el('st-trades').textContent = risk.trades_today || 0;
+    el('st-winrate').textContent = (risk.win_rate || 0) + '%';
+    el('st-wl').textContent = (risk.wins_today || 0) + '/' + (risk.losses_today || 0);
+  }
+
   const used = risk.daily_used_pct || 0;
   el('st-used').textContent = used.toFixed(0) + '%';
   const meter = el('st-meter');

@@ -38,6 +38,70 @@ def _per_bot_path(bot_id: str) -> str:
     return f"logs/trade_memory_{bot_id}.json"
 
 
+_RECOVERY_WARN_EMITTED: set[str] = set()
+
+
+def _read_trades_resilient(path: str) -> list[dict]:
+    """Read a trade_memory_*.json file, recovering from common truncation.
+
+    The 2026-06-02 incident: `trade_memory_prod.json` got truncated mid-write
+    (missing closing `]` + dangling comma), so json.load raised and the
+    dashboard silently saw zero prod trades. Pattern: an append-style writer
+    can leave the file in a half-flushed state if the process is killed
+    between bytes. We attempt ONE structural repair:
+      1. Strip trailing whitespace.
+      2. Strip a trailing comma if present.
+      3. Append "]" and re-parse.
+    On success we return the recovered records and WARN once per file. On
+    failure we ERROR and return [] — never raise. The caller treats the
+    file as empty for this poll cycle; the operator gets a loud log line
+    and can fix the file at their leisure without breaking the dashboard.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = f.read()
+        rows = json.loads(raw)
+        if not isinstance(rows, list):
+            logger.warning(
+                f"[trade_memory] {path}: top-level is {type(rows).__name__}, expected list — skipping"
+            )
+            return []
+        return rows
+    except FileNotFoundError:
+        return []
+    except json.JSONDecodeError as e:
+        stripped = (raw or "").rstrip()
+        if stripped.endswith(","):
+            stripped = stripped[:-1]
+        candidate = stripped + "]"
+        try:
+            rows = json.loads(candidate)
+            if isinstance(rows, list):
+                if path not in _RECOVERY_WARN_EMITTED:
+                    logger.warning(
+                        f"[trade_memory] RECOVERED {path}: JSONDecodeError {e.msg} "
+                        f"at line {e.lineno} col {e.colno}; recovered {len(rows)} records "
+                        f"via trailing-bracket repair"
+                    )
+                    _RECOVERY_WARN_EMITTED.add(path)
+                return rows
+            logger.error(
+                f"[trade_memory] FAILED RECOVERY {path}: candidate parsed but is "
+                f"{type(rows).__name__}, not list — treating as empty"
+            )
+            return []
+        except json.JSONDecodeError as e2:
+            logger.error(
+                f"[trade_memory] UNRECOVERABLE {path}: original {e.msg} at "
+                f"{e.lineno}:{e.colno}; repair attempt also failed ({e2.msg} at "
+                f"{e2.lineno}:{e2.colno}) — treating as empty"
+            )
+            return []
+    except Exception as e:
+        logger.error(f"[trade_memory] {path}: unexpected error {e!r} — treating as empty")
+        return []
+
+
 def load_all_trades(logs_dir: str = "logs") -> list[dict]:
     """Read legacy file + every `trade_memory_<bot>.json` and merge.
 
@@ -51,6 +115,10 @@ def load_all_trades(logs_dir: str = "logs") -> list[dict]:
 
     Used by dashboard `_load_session_trades_by_bot` and any tool that
     wants the unified history across bots.
+
+    Resilience guarantee (2026-06-02): a malformed/truncated per-bot
+    file is logged + skipped — it never zeros out the other bots' data
+    and never raises to the caller. See `_read_trades_resilient`.
     """
     out: list[dict] = []
     seen_ids: set = set()
@@ -61,37 +129,26 @@ def load_all_trades(logs_dir: str = "logs") -> list[dict]:
             if not (fname.startswith("trade_memory_") and fname.endswith(".json")):
                 continue
             path = os.path.join(logs_dir, fname)
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    rows = json.load(f)
-                if not isinstance(rows, list):
+            rows = _read_trades_resilient(path)
+            for t in rows:
+                tid = t.get("trade_id")
+                if tid and tid in seen_ids:
                     continue
-                for t in rows:
-                    tid = t.get("trade_id")
-                    if tid and tid in seen_ids:
-                        continue
-                    if tid:
-                        seen_ids.add(tid)
-                    out.append(t)
-            except Exception as e:
-                logger.warning(f"load_all_trades skip {fname}: {e}")
+                if tid:
+                    seen_ids.add(tid)
+                out.append(t)
     except FileNotFoundError:
         pass
 
     # Legacy file last; per-bot files override matching trade_ids.
     legacy_path = os.path.join(logs_dir, "trade_memory.json")
     if os.path.exists(legacy_path):
-        try:
-            with open(legacy_path, "r", encoding="utf-8") as f:
-                rows = json.load(f)
-            if isinstance(rows, list):
-                for t in rows:
-                    tid = t.get("trade_id")
-                    if tid and tid in seen_ids:
-                        continue
-                    out.append(t)
-        except Exception as e:
-            logger.warning(f"load_all_trades legacy read failed: {e}")
+        rows = _read_trades_resilient(legacy_path)
+        for t in rows:
+            tid = t.get("trade_id")
+            if tid and tid in seen_ids:
+                continue
+            out.append(t)
 
     return out
 
