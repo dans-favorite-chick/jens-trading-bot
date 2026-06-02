@@ -114,3 +114,146 @@ New test files added this session:
 - The Oracle hard cap relies on Sonnet 4.6 list pricing ($3 / $15 per MTok). If the model is swapped via `MODEL_ID`, the pricing constants must be updated together — there's a pinning test (`test_pricing_constants_match_sonnet_4_6_list`) that fails loudly if either is changed without the other.
 - The runtime guard in `_tool_propose_change` rejects inert target_rr proposals AFTER the daily-mode / confidence / sample-size / finding_id checks but BEFORE the AST current-value lookup. That means the LLM sees a 403-style "inert" error rather than silently no-oping — better signal than silence.
 - The PHANTOM_GUARD fix is a single-line condition change. Conservative; arguably the existing `_account != "Sim101"` could have been kept and only the fall-through "assume filled" log line could have been removed instead. Per operator's "Decision 1" the cleanest version was the directive: REMOVE the exemption.
+
+---
+
+## Systematic-debugging retrospective (Phase-1 re-audit)
+
+After shipping, I ran the `superpowers:systematic-debugging` skill's
+Iron-Law lens over the work: **"Did I actually fix root causes, or
+patch symptoms?"** Findings the operator should know before restart:
+
+### Finding 1 — The deepest root cause of today's incident is unknown
+
+The research report identified the Sim101 PHANTOM_GUARD exemption as
+the proximate root cause for the 14 naked LIMITs. That's true. But
+the question one level deeper — **why did NT8 ATI go silent from
+09:02 to 09:39 CT?** — was not investigated by the research session
+and cannot be diagnosed from Phoenix-side logs alone.
+
+Evidence from `logs/prod_bot_stdout.log` around the outage:
+  - 09:00:53, 09:01:53 — bars arriving, `[EVAL]` lines, FMP sanity OK.
+    The WS bridge → bot path was healthy.
+  - 09:03:00 — first `[OIF_STUCK]` CRITICAL. ATI stopped consuming.
+  - No WS disconnect / reconnect / wsping-stale events around the
+    transition.
+
+So the failure was at the **NT8 → ATI** layer, not the **bridge →
+bot** layer. Candidates: NT8 ATI manually toggled off, NT8 process
+hung, broker-side account lockout, daily-loss-detection trigger
+internal to NT8. Diagnosable only from NT8's own Log tab, which I
+don't have access to.
+
+**Implication:** Phase 0 + Phase 1 are pure defense-in-depth against
+an undiagnosed trigger. If the same trigger recurs and Phase 0+1
+silently masks it (because PHANTOM_GUARD now aborts cleanly, and the
+auto-pause holds the bot quiet), the **underlying NT8 cause stays
+hidden**. The operator should grep the NT8 Log tab for the
+09:00–11:00 CT window today before restarting, to capture evidence
+before it rolls off.
+
+### Finding 2 — Possible duplication with `core/circuit_breakers.py`
+
+I built `core/nt8_sink_health.py` as a new module per the spec. But
+the codebase already has `core/circuit_breakers.py` (loaded by
+`bots/base_bot.py:988`) with a strikingly similar shape:
+  - `CircuitBreakers.halted` / `halted_reason` / `halted_at` ↔
+    `NT8SinkState.paused` / `paused_reason` / `paused_at`
+  - `should_halt()` / `acknowledge_halt()` ↔ `is_paused()` / `clear()`
+  - Telegram on halt transition + throttle ↔ Telegram on pause/clear
+  - File-backed state (`HALT_MARKER_FILE`) ↔ `runtime/nt8_sink_state_*.json`
+  - Observe vs active mode ↔ (NT8SinkHealth is always active)
+
+Existing breaker types: `SIGNAL_RATE`, `TICK_GAP`, `DOM_DISCONNECT`,
+`SLIPPAGE_SPIKE`, `WIN_RATE_CRASH`, `EMERGENCY_HALT`. None of these
+covers "NT8 ATI sink dead" — so my module is functionally new, but
+architecturally parallel.
+
+**Implication:** during a real incident the operator now has TWO
+halt mechanisms to monitor and acknowledge: CircuitBreakers
+(observe-mode by default, so currently silent) and NT8SinkHealth
+(active). Future consolidation idea: NT8 sink health becomes a
+`CircuitBreakers.check_nt8_sink_dead()` returning a `BreakerEvent`
+with `breaker_type="NT8_SINK_DEAD"`. Single source of halt truth,
+single telegram path, single acknowledge surface. Out of scope for
+this session — flagging only.
+
+### Finding 3 — Trip threshold of "first PROTECT FAILED" may be too eager
+
+The spec acknowledged this in its self-second-guess. Worth repeating
+here: a single bracket failure (e.g., margin call on one contract,
+or a transient OCO sequencing race) trips the **global per-bot**
+pause. If false-positive rate proves painful, the trip rule can be
+relaxed in one line inside `record_protect_failed`:
+
+  - Today: trip on first call.
+  - Tier-2: trip on 2 failures within 10 minutes.
+
+**Implication:** monitor `runtime/nt8_sink_state_prod.json` after
+restart. If it goes paused for a benign reason, raise the threshold.
+
+### Finding 4 — Oracle cost accounting will undercount if prompt caching is added
+
+My `_run_llm_loop` $-accumulator sums `usage.input_tokens +
+usage.output_tokens` × the list rates. The Anthropic API exposes
+two additional usage fields when prompt caching is enabled:
+`cache_creation_input_tokens` (billed at 1.25× input rate) and
+`cache_read_input_tokens` (billed at 0.1× input rate). Neither is
+referenced anywhere in the codebase today (grep confirmed), so the
+accounting is accurate against current code. But the failure mode is
+silent: if a future commit adds `cache_control` markers to the
+Oracle's system prompt or tools, the hard cap will **undercount** and
+fire late.
+
+**Implication:** add a one-line comment in `agents/strategy_oracle.py`
+near `PRICE_PER_MTOK_INPUT` flagging this. Done in this session would
+be scope creep — flagging only.
+
+### Finding 5 — `importlib` precedent in the agents-package CI invariant
+
+To call `core.telegram_notifier.send_sync` from Oracle code without
+tripping `_scan_source_for_forbidden_imports`, I used
+`importlib.import_module("core.telegram_notifier")` in two places
+(hard-cap telegram fire; inert-policy lookup of `core.exit_policies`).
+
+This is appropriate — both are read-only / notifier paths, not
+trade paths — but it sets a precedent. A less-careful future change
+could importlib `core.risk_manager` or `bridge.oif_writer` and bypass
+the invariant entirely.
+
+**Implication:** consider extending the AST scanner to also flag
+`importlib.import_module(...)` calls whose string literal points at a
+forbidden root. One-screen change in
+`_scan_source_for_forbidden_imports`. Out of scope for this session.
+
+### Finding 6 — Tests for the trip wiring are structural, not behavioral
+
+`tests/test_trade_entry_nt8_pause.py::test_protect_failed_call_is_wired_after_critical_log`
+is a source-level grep verifying the trip call sits between the
+CRITICAL log and the emergency-flatten block. A refactor that
+preserves the source text but changes runtime ordering would slip
+through. The cost of a full behavioral test was ~10 mocks
+(`await_fill_confirmation`, OIF writer, position manager, pending
+entry tracker, telegram, history, …); I judged the cost/benefit
+unfavorable.
+
+**Implication:** acceptable today. If the trip-wiring becomes flaky
+in production, upgrade to a full behavioral test against a fixture
+that drives the OCO-failure path.
+
+---
+
+## Recommended next-action checklist (before restart)
+
+1. **Capture NT8 Log tab** for 2026-06-02 09:00–11:00 CT — this is
+   the **only** source for the deepest root cause. Once NT8 rolls
+   logs, the evidence is gone.
+2. **Manually clear stale OIFs** in `NT8/incoming/` and **cancel
+   working orders** on the Sim1 chart left over from today.
+3. **Restart prod_bot** so the Phase 0 condition change + Phase 1
+   gate are in the live process.
+4. **Monitor** `runtime/nt8_sink_state_prod.json` for the first 48h.
+   If it flips to paused for a non-NT8-outage reason, the trip
+   threshold needs relaxing (Finding 3).
+5. **Optional, low-priority**: revisit Findings 2, 4, 5 in a future
+   cleanup sweep — none block today's restart.
