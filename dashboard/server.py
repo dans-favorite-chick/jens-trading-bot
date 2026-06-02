@@ -951,6 +951,86 @@ def api_tape_reader():
     return jsonify(build_tape_reader_panel_data())
 
 
+# ─── Phase D (2026-06-02 overnight): market_state observation tile ──
+
+@app.route("/api/market_state")
+def api_market_state():
+    """Phoenix market-state classifier snapshot (Phase 8 / Phase D).
+
+    Resolution order:
+      1. live: `_state["prod"]["market_state"]` pushed by base_bot
+         (Phase D.5 will start writing this; until then, missing).
+      2. fallback: most recent row in warehouse.market_state_bars.
+
+    Returns:
+        {
+          label, realized_vol, trend_strength, choppiness_index,
+          computed_at, source ("live" | "warehouse_fallback" | "stub")
+        }
+
+    Color codes consumed by the dashboard tile:
+        TRENDING_HIGH_VOL  -> bright green (best)
+        TRENDING_NORMAL    -> green
+        CHOPPY             -> yellow
+        COMPRESSED         -> blue
+        WHIPSAW_HIGH_VOL   -> red (worst)
+        NEUTRAL            -> gray
+
+    Phase D constraint (operator): observation only. No strategy
+    consults this endpoint; no size/stop/target adjustments. Stage 2
+    (binary regime gating) is the Monday workstream.
+    """
+    # Live path first.
+    with _state_lock:
+        prod_state = _state.get("prod", {}) or {}
+    live_ms = prod_state.get("market_state")
+    if isinstance(live_ms, dict) and live_ms.get("label"):
+        out = dict(live_ms)
+        out.setdefault("computed_at",
+                        datetime.datetime.now(datetime.timezone.utc).isoformat())
+        out["source"] = "live"
+        return safe_jsonify(out)
+
+    # Fallback: most recent warehouse row.
+    try:
+        import duckdb
+        from tools.warehouse import DB_PATH
+        conn = duckdb.connect(str(DB_PATH), read_only=True)
+        try:
+            row = conn.execute("""
+                SELECT label, realized_vol, trend_strength,
+                       choppiness_index, bar_ts
+                FROM market_state_bars
+                ORDER BY bar_ts DESC
+                LIMIT 1
+            """).fetchone()
+        finally:
+            conn.close()
+        if row:
+            return safe_jsonify({
+                "label": row[0],
+                "realized_vol": row[1],
+                "trend_strength": row[2],
+                "choppiness_index": row[3],
+                "computed_at": (
+                    row[4].isoformat() if row[4] is not None else None
+                ),
+                "source": "warehouse_fallback",
+            })
+    except Exception as e:  # noqa: BLE001
+        logger.warning("market_state warehouse fallback failed: %s", e)
+
+    # Last resort: NEUTRAL stub so the dashboard tile renders something.
+    return safe_jsonify({
+        "label": "NEUTRAL",
+        "realized_vol": 0.0,
+        "trend_strength": 0.0,
+        "choppiness_index": 0.0,
+        "computed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "source": "stub",
+    })
+
+
 @app.route("/api/gamma-context")
 def api_gamma_context():
     """⚠️  RETIRED 2026-05-06 (Sprint J) — MenthorQ subscription cancelled.

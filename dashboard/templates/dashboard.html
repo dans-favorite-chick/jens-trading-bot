@@ -551,6 +551,35 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
   <div id="tape-fire" class="tape-fire idle" style="display:none;">Waiting…</div>
 </div>
 
+<!-- ===== SECTION: Market State (Phase 8 / Phase D, observation only) ===== -->
+<div class="card" style="margin-top:12px;">
+  <h3>Market State
+    <span style="font-size:10px; color:var(--text-dim); font-weight:400; text-transform:none;">
+      — Phase 8 classifier, observation only (no strategy gating)
+    </span>
+  </h3>
+  <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+    <div id="ms-label" class="ms-tile ms-NEUTRAL" style="font-weight:700; padding:8px 14px; border-radius:6px; min-width:200px; text-align:center;">
+      Loading…
+    </div>
+    <div id="ms-stats" style="font-size:11px; color:var(--text-dim);">
+      <span>RV: <span id="ms-rv">—</span></span>&nbsp;·&nbsp;
+      <span>Trend: <span id="ms-ts">—</span></span>&nbsp;·&nbsp;
+      <span>Chop: <span id="ms-ci">—</span></span>&nbsp;·&nbsp;
+      <span id="ms-source" style="font-style:italic;">source: —</span>
+    </div>
+  </div>
+  <div id="ms-asof" style="font-size:10px; color:var(--text-dim); margin-top:4px;">computed_at: —</div>
+</div>
+<style>
+  .ms-NEUTRAL          { background:#444;    color:#ddd; }
+  .ms-TRENDING_NORMAL  { background:#1e6f3a; color:#e6ffe6; }
+  .ms-TRENDING_HIGH_VOL{ background:#27c93f; color:#0a2410; }
+  .ms-CHOPPY           { background:#a07b00; color:#fff7d6; }
+  .ms-COMPRESSED       { background:#1f5a8a; color:#dbeefe; }
+  .ms-WHIPSAW_HIGH_VOL { background:#aa1a2c; color:#ffe1e6; }
+</style>
+
 <!-- ===== SECTION: Signal Activity ===== -->
 <div class="card" style="margin-top:12px;">
   <h3>Signal Activity — Last Bar Evaluation</h3>
@@ -2006,6 +2035,30 @@ async function pollLogTail() {
     el('log-tail').textContent = 'Network error: ' + e;
   }
 }
+
+// ── Phase D (2026-06-02): market state observation tile ─────────────
+async function pollMarketState() {
+  try {
+    const res = await fetch('/api/market_state');
+    if (!res.ok) return;
+    const d = await res.json();
+    const label = d.label || 'NEUTRAL';
+    const lblEl = document.getElementById('ms-label');
+    if (lblEl) {
+      lblEl.textContent = label;
+      // Strip previous ms-* classes; reapply current one.
+      lblEl.className = 'ms-tile ms-' + label;
+    }
+    const fmt = (v) => v == null ? '—' : Number(v).toFixed(3);
+    const rv = document.getElementById('ms-rv');   if (rv) rv.textContent = fmt(d.realized_vol);
+    const ts = document.getElementById('ms-ts');   if (ts) ts.textContent = fmt(d.trend_strength);
+    const ci = document.getElementById('ms-ci');   if (ci) ci.textContent = fmt(d.choppiness_index);
+    const src = document.getElementById('ms-source'); if (src) src.textContent = 'source: ' + (d.source || '?');
+    const ao  = document.getElementById('ms-asof');   if (ao)  ao.textContent  = 'computed_at: ' + (d.computed_at || '—');
+  } catch (e) { /* silent */ }
+}
+setInterval(pollMarketState, 30000);
+pollMarketState();
 
 // ── Start ──────────────────────────────────────────────────────────
 setInterval(poll, POLL_MS);
