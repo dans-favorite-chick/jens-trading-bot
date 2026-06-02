@@ -9,7 +9,7 @@ Phoenix is a local Python trading system for MNQ (Micro E-mini Nasdaq-100) futur
 NinjaTrader 8 (TickStreamer.cs indicator)
   → WebSocket CLIENT connects OUT to Python on :8765
   → bridge_server.py (WebSocket SERVER on :8765, fans out on :8766)
-  → prod_bot.py / lab_bot.py (WebSocket CLIENTS on :8766)
+  → prod_bot.py / sim_bot.py (WebSocket CLIENTS on :8766)
   → Trade signals → OIF files → NT8 incoming/ folder → execution
 ```
 
@@ -122,7 +122,7 @@ phoenix_bot/
 ├── ninjatrader/TickStreamer.cs  # Lean tick-only NT8 indicator
 ├── bots/base_bot.py            # Shared bot logic
 ├── bots/prod_bot.py            # Production bot (validated strategies)
-├── bots/lab_bot.py             # Experimental bot (sandbox)
+├── bots/sim_bot.py             # Experimental bot (sandbox)
 ├── strategies/base_strategy.py # Strategy interface
 ├── strategies/*.py             # Individual strategy files
 ├── core/tick_aggregator.py     # Builds bars, ATR, VWAP, EMA, CVD from ticks
@@ -144,7 +144,7 @@ python bridge/bridge_server.py
 
 # 3. Start bot(s)
 python bots/prod_bot.py    # Production
-python bots/lab_bot.py     # Experimental (optional)
+python bots/sim_bot.py     # Experimental (optional)
 
 # 4. Open dashboard
 python dashboard/server.py  # then visit localhost:5000
