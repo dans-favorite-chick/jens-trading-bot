@@ -735,6 +735,7 @@ class PositionManager:
             "exit_price": exit_price,
             "contracts": pos.contracts,
             "stop_price": pos.stop_price,
+            "initial_stop_price": pos.initial_stop_price,
             "target_price": pos.target_price,
             "pnl_ticks": round(ticks_pnl, 1),
             # B13: pnl_dollars defaults to NET (after all costs). Halt
@@ -929,6 +930,7 @@ class PositionManager:
             "trade_id":      pos.trade_id + "_scale1",
             "direction":     pos.direction,
             "entry_price":   pos.entry_price,
+            "initial_stop_price": pos.initial_stop_price,
             "exit_price":    exit_price,
             "contracts":     n_contracts,
             "pnl_ticks":     round(ticks_pnl, 1),
