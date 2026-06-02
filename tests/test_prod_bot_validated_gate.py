@@ -45,15 +45,18 @@ def test_prod_bot_only_validated_is_false():
     )
 
 
-def test_bias_momentum_session_block_windows_empty():
-    """Operator decision 2026-05-04: bias_momentum trades all hours."""
+def test_bias_momentum_session_block_windows_match_oracle_directive():
+    """2026-06-01 Oracle research proposal #2 (commit bfcc900) blocks Hour
+    4 CT for bias_momentum (PF=0.93 vs strategy-wide PF=1.28; the only
+    losing hour in the 5-year panel). The Sprint H all-hours stance was
+    superseded by that operator-approved Oracle finding."""
     from config.strategies import STRATEGIES
     bm = STRATEGIES["bias_momentum"]
-    assert bm["session_block_windows"] == [], (
-        "bias_momentum.session_block_windows must be empty per Sprint H "
-        "operator decision (all-hours trading for prod debug). The pre-"
-        "Sprint-H windows [08:30-08:59, 10:00-13:29] are documented in "
-        "the config comment for restoration before go-live."
+    assert bm["session_block_windows"] == [("04:00", "04:59")], (
+        f"bias_momentum.session_block_windows expected [('04:00','04:59')] "
+        f"per Oracle 2026-06-01 proposal #2; got {bm['session_block_windows']}. "
+        f"If the operator wants to revert to all-hours, update this test "
+        f"with the rationale."
     )
 
 
@@ -96,19 +99,21 @@ def test_prod_loads_same_strategies_as_sim():
 
 # ─── regression: future-tightening detection ────────────────────────
 
-def test_no_session_block_windows_re_added_silently():
-    """Defensive: if a future config edit re-adds blocks to
-    bias_momentum.session_block_windows, this test fails loudly so the
-    operator notices before deploying. Restoration is fine; silent
-    re-add is not."""
+def test_session_block_windows_only_oracle_directive():
+    """Defensive: ensure bias_momentum.session_block_windows is EXACTLY
+    the Oracle 2026-06-01 directive (Hour 4 CT block) and nothing else.
+    If a future edit adds another window silently, this test fails so
+    the operator notices before deploying."""
     from config.strategies import STRATEGIES
     bm_blocks = STRATEGIES["bias_momentum"]["session_block_windows"]
-    if bm_blocks:
+    allowed = {("04:00", "04:59")}
+    extra = set(bm_blocks) - allowed
+    if extra:
         pytest.fail(
-            f"bias_momentum.session_block_windows is non-empty: "
-            f"{bm_blocks}. If this is intentional restoration before "
-            f"go-live, update this test. If it's accidental, remove "
-            f"the windows."
+            f"bias_momentum.session_block_windows contains windows "
+            f"outside the Oracle 2026-06-01 directive: {sorted(extra)}. "
+            f"If this is intentional, update this test with a rationale; "
+            f"otherwise remove the extra windows."
         )
 
 

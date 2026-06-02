@@ -211,7 +211,12 @@ class TestModeDispatch:
     """Mode -> config lookup; token budgets; tool gating."""
 
     def test_research_budget(self):
-        assert so.MODE_CONFIG["research"]["token_budget"] == 200_000
+        # 2026-06-01 Phase 9 (commit 1042b00): bumped 200K -> 600K because
+        # Phase 6/8 added by_market_state + mae_elbow + mfe_p90 splits and
+        # pushed per-panel size from ~3 KB to 10-50 KB; loading 16 panels +
+        # 16 write_finding + ~21 propose_change in a single conversation
+        # would not fit in 200 K tokens.
+        assert so.MODE_CONFIG["research"]["token_budget"] == 600_000
 
     def test_weekly_budget(self):
         assert so.MODE_CONFIG["weekly"]["token_budget"] == 80_000
