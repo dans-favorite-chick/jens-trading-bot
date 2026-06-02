@@ -99,6 +99,34 @@ class TradeEntry:
                 self.bot.last_rejection = "Contract roll window — no new entries"
                 return
 
+            # 2026-06-02: NT8-sink-health gate (auto-pause from
+            # PROTECT-all-3-retries-failed). Lazy import so this module's
+            # import surface is unchanged.
+            from core.nt8_sink_health import get_sink_health
+            _sink = get_sink_health(self.bot.bot_name)
+            if _sink.is_paused():
+                logger.info(
+                    f"[SKIP_NT8_DEAD:{signal.trade_id}] {signal.strategy} "
+                    f"{signal.direction} — NT8 sink paused since "
+                    f"{_sink.state.paused_at} ({_sink.state.paused_reason})"
+                )
+                self.bot.last_rejection = (
+                    f"NT8 sink paused: {_sink.state.paused_reason}"
+                )
+                try:
+                    sig_dict = {
+                        "direction": signal.direction,
+                        "strategy": signal.strategy,
+                        "confidence": signal.confidence,
+                        "entry_score": signal.entry_score,
+                        "reason": signal.reason,
+                    }
+                    # Gate must be cheap — skip aggregator snapshot here.
+                    self.bot.history.log_near_miss(sig_dict, {}, "nt8_sink_paused")
+                except Exception:
+                    pass
+                return
+
             market = self.bot.aggregator.snapshot()
             # 2026-05-24 P1-1 Stage 1: merge strategy-time enrichment fields
             # (day_type, cr_verdict, cvd_health, cvd_health_short, es_nq_rs,
@@ -992,6 +1020,21 @@ class TradeEntry:
                         f"[PROTECT:{tid}] ALL 3 RETRIES FAILED — flattening "
                         f"unprotected {signal.direction} position on {_account}"
                     )
+                    # 2026-06-02: trip the NT8-sink-health auto-pause so
+                    # subsequent entries are gated upstream until the
+                    # operator clears via dashboard or /nt8_clear.
+                    try:
+                        from core.nt8_sink_health import get_sink_health
+                        get_sink_health(self.bot.bot_name).record_protect_failed(
+                            trade_id=tid,
+                            strategy=signal.strategy,
+                            direction=signal.direction,
+                            account=_account,
+                        )
+                    except Exception as _sink_err:
+                        logger.warning(
+                            f"[PROTECT:{tid}] sink-health trip failed: {_sink_err!r}"
+                        )
                     # P1-7: emergency flatten also cancels any pending LIMIT
                     # entries scoped to this account.
                     try:
