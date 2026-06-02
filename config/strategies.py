@@ -1175,7 +1175,15 @@ STRATEGIES = {
         "stop_buffer_ticks": 1,
         "min_stop_ticks": 6,
         "max_stop_ticks": 40,
-        "target_rr": 2.0,
+        # Oracle 2026-06-01 v3 finding (confirmed_raschke_baseline_2026-06-01):
+        # n=1,692, PF=2.65. MAE elbow LONG=13, SHORT=10. MFE p90 LONG=46,
+        # SHORT=38. OOS PF (3.72) > IS PF (3.23). SHORT direction stronger
+        # (PF=3.67, WR=74.3%) vs LONG (PF=2.22, WR=65.7%). target_rr
+        # 2.0 -> 3.5 reflects MFE p90 / MAE elbow ~3.5:1 ratio.
+        # The LLM also proposed per-direction max_stop_ticks (LONG=13,
+        # SHORT=10) -- NOT_TRIVIAL with a single global knob; queued
+        # in pending_changes.json for operator review.
+        "target_rr": 3.5,
         "pullback_lookback": 3,
         # 2026-05-20 SHIP AUDIT: belt-and-suspenders behind the
         # TimeExitPolicy now wired in base_bot per-bar loop.
