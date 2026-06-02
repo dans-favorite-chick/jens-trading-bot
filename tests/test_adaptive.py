@@ -519,21 +519,13 @@ def synth_warehouse(tmp_path: Path):
     db = tmp_path / "phx.duckdb"
     con = duckdb.connect(str(db))
 
-    # Apply schema — strip INSTALL/LOAD directives that need network (DuckDB
-    # bundles json; the statements are no-ops in 1.x, but use a plain con.execute
-    # skip to be safe).
+    # Apply schema. DuckDB parses multi-statement SQL natively — splitting on
+    # ';' is unsafe because schema.sql has line-comments containing ';'.
     schema_path = (
         Path(__file__).resolve().parents[1] / "tools" / "warehouse" / "schema.sql"
     )
     schema_sql = schema_path.read_text(encoding="utf-8")
-    # Execute each statement separately, skipping INSTALL/LOAD lines.
-    for stmt in schema_sql.split(";"):
-        s = stmt.strip()
-        if not s:
-            continue
-        if s.upper().startswith("INSTALL") or s.upper().startswith("LOAD"):
-            continue
-        con.execute(s)
+    con.execute(schema_sql)
 
     # Seed two runs.
     con.execute("""
