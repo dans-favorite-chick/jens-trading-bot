@@ -1022,7 +1022,13 @@ def api_equity_curve():
         dd = cum - peak  # negative or zero
 
         entry = t.get("entry_price")
-        init_stop = t.get("stop_price") or t.get("initial_stop_price")
+        # 2026-06-02 audit: R is measured against INITIAL risk, never the
+        # trailed/BE-armed stop_price. position_manager freezes
+        # initial_stop_price on open as the immutable R reference. Today
+        # close_position drops the field on serialization (Finding D in
+        # the audit) so this collapses to stop_price in practice — but
+        # the preference order is correct for when that gets fixed.
+        init_stop = t.get("initial_stop_price") or t.get("stop_price")
         contracts = t.get("contracts") or 1
         r_mult = None
         try:
