@@ -41,6 +41,30 @@ class DashboardCommandDispatcher:
         elif cmd_type == "test_trade":
             logger.info(f"[TEST TRADE] {cmd.get('action', 'ENTER_LONG')}")
             # TODO: fire test trade
+        elif cmd_type == "nt8_clear":
+            # 2026-06-02: operator-cleared resume of the NT8 sink auto-pause.
+            # Per the design spec, clear() is a no-op if the sink isn't
+            # currently paused. ``source`` is recorded in the audit trail
+            # (cleared_by field); the dashboard sends "dashboard" and the
+            # slash-command path sends "slash:/nt8_clear".
+            source = cmd.get("source", "dashboard")
+            try:
+                from core.nt8_sink_health import get_sink_health
+                _sink = get_sink_health(self.bot.bot_name)
+                if not _sink.is_paused():
+                    logger.info(
+                        "[NT8_CLEAR] sink already unpaused — no-op (source=%s)",
+                        source,
+                    )
+                else:
+                    _sink.clear(by=source)
+                    logger.warning(
+                        "[NT8_CLEAR] sink cleared via %s — bot will resume "
+                        "new entries on next eval",
+                        source,
+                    )
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"[NT8_CLEAR] failed: {e!r}")
         elif cmd_type == "shutdown":
             # 2026-05-13: graceful exit requested by dashboard / watchdog.
             # Stop scanning, close WS, let run() return → process exits
