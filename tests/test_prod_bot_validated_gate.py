@@ -56,7 +56,9 @@ def test_bias_momentum_session_block_windows_match_oracle_directive():
         f"bias_momentum.session_block_windows expected [('04:00','04:59')] "
         f"per Oracle 2026-06-01 proposal #2; got {bm['session_block_windows']}. "
         f"If the operator wants to revert to all-hours, update this test "
-        f"with the rationale."
+        f"with the rationale. (Historical Sprint-H blocks were "
+        f"[08:30-08:59, 10:00-13:29] CT — kept here so future readers "
+        f"don't need git blame to recover them.)"
     )
 
 
