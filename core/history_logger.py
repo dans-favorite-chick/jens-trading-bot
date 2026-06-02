@@ -16,6 +16,19 @@ This is the raw material for all AI learning agents:
   - Historical analyzer reads everything
 
 Schema is append-only — never modify past events.
+
+Phase 6 (2026-06-02 overnight): every event now carries a
+``market_state`` field with the classifier label
+(WHIPSAW_HIGH_VOL / CHOPPY / COMPRESSED / TRENDING_HIGH_VOL /
+TRENDING_NORMAL / NEUTRAL) or None. Resolution order:
+
+  1. ``market.get("market_state")`` if the caller already stamped it.
+  2. The zero-arg callable registered via
+     ``set_market_state_source(callable)``.
+  3. None.
+
+Old JSONL on disk simply lacks the field; readers must use
+``event.get("market_state")`` and treat missing as None.
 """
 
 import json
@@ -26,6 +39,55 @@ from datetime import datetime, date
 logger = logging.getLogger("HistoryLogger")
 
 HISTORY_DIR = os.path.join(os.path.dirname(__file__), "..", "logs", "history")
+
+
+# ─── Phase 6 (2026-06-02): market_state source registration ──────
+# base_bot will eventually register a zero-arg callable here once
+# MarketState is instantiated in the live bot. Until that wiring
+# lands, events record market_state=None unless the caller has
+# already stamped market["market_state"]. Mirrors the trade_memory
+# source-registration pattern (Phase D.5).
+_market_state_source = None  # type: ignore[var-annotated]
+
+
+def set_market_state_source(source) -> None:
+    """Register a zero-arg callable that returns the current market-state
+    label (one of {WHIPSAW_HIGH_VOL, CHOPPY, COMPRESSED, TRENDING_HIGH_VOL,
+    TRENDING_NORMAL, NEUTRAL}) or None.
+
+    Safe to call multiple times -- last registration wins.
+    """
+    global _market_state_source
+    _market_state_source = source
+
+
+def clear_market_state_source() -> None:
+    """Test-fixture helper: unregister the source."""
+    global _market_state_source
+    _market_state_source = None
+
+
+def _resolve_market_state(market: dict | None) -> str | None:
+    """Return the best-known market_state label for this event.
+
+    1. ``market["market_state"]`` -- caller-stamped wins (signal-time
+       semantics).
+    2. Registered source callable, swallowing exceptions.
+    3. None.
+    """
+    if isinstance(market, dict):
+        ms = market.get("market_state")
+        if ms:
+            return ms
+    src = _market_state_source
+    if src is None:
+        return None
+    try:
+        v = src()
+        return v or None
+    except Exception as e:  # noqa: BLE001 -- never break a log write
+        logger.warning("market_state source raised; using None: %s", e)
+        return None
 
 
 class HistoryLogger:
@@ -78,6 +140,8 @@ class HistoryLogger:
             "tick_count": bar.tick_count,
             # Market context at bar close
             "regime":    regime,
+            # Phase 6 (2026-06-02): scanner classifier label.
+            "market_state":  _resolve_market_state(market),
             "vwap":      market.get("vwap"),
             "ema9":      market.get("ema9"),
             "ema21":     market.get("ema21"),
@@ -111,6 +175,11 @@ class HistoryLogger:
             "risk_blocked": eval_record.get("risk_blocked"),
             "strategies":   eval_record.get("strategies", []),
             "best_signal":  eval_record.get("best_signal"),
+            # Phase 6 (2026-06-02): scanner classifier label. Trade
+            # tagging only sees signal-fired trades; this tags every
+            # eval (including SKIP / BLOCKED / NO_SIGNAL) so the
+            # denominator is captured.
+            "market_state":  _resolve_market_state(market),
             # Market snapshot at eval time
             "price":        market.get("price"),
             "vwap":         market.get("vwap"),
@@ -152,6 +221,8 @@ class HistoryLogger:
             "strategy":     signal.strategy,
             "reason":       signal.reason,
             "confluences":  signal.confluences,
+            # Phase 6 (2026-06-02): scanner classifier label.
+            "market_state":  _resolve_market_state(market),
             "confidence":   signal.confidence,
             "entry_score":  signal.entry_score,
             "price":        price,
@@ -192,6 +263,10 @@ class HistoryLogger:
             "duration_s":   trade.get("hold_time_s"),  # PositionManager uses hold_time_s
             "entry_reason": trade.get("entry_reason"),
             "confluences":  trade.get("confluences"),
+            # Phase 6 (2026-06-02): scanner classifier label at exit
+            # time. May differ from entry_market_state (state can
+            # transition during the trade).
+            "market_state":  _resolve_market_state(market),
             # Market at exit
             "exit_price_actual": market.get("price"),
             "vwap_at_exit":      market.get("vwap"),
@@ -218,6 +293,8 @@ class HistoryLogger:
             "entry_score":  signal.get("entry_score"),
             "reason":       signal.get("reason"),
             "skip_reason":  reason,
+            # Phase 6 (2026-06-02): scanner classifier label.
+            "market_state":  _resolve_market_state(market),
             # Market context at signal time
             "price":        market.get("price"),
             "vwap":         market.get("vwap"),
