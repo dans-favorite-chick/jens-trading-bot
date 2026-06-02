@@ -5,6 +5,31 @@ _Auto-appended by `tools/memory_writeback.py` via SessionEnd hook._
 
 ---
 
+### 2026-06-02 11:31 Central Daylight Time — Session changes: 21 files modified
+
+**Files changed:**
+- `backtest_results/portfolio_framework/wfa_summary.csv`
+- `backtest_results/portfolio_framework/wfa_summary.run.json`
+- `backtest_results/portfolio_framework/wfa_windows.csv`
+- `backtest_results/portfolio_framework/wfa_windows.run.json`
+- `backtest_results/portfolio_framework/wfa_windows_p13_asian.csv`
+- `backtest_results/portfolio_framework/wfa_windows_p13_asian.run.json`
+- `backtest_results/portfolio_framework/wfa_windows_p13_inside_bar.csv`
+- `backtest_results/portfolio_framework/wfa_windows_p13_inside_bar.run.json`
+- `backtest_results/portfolio_framework/wfa_windows_p13_multi_day.csv`
+- `backtest_results/portfolio_framework/wfa_windows_p13_multi_day.run.json`
+- `backtest_results/portfolio_framework/wfa_windows_p13_raschke.csv`
+- `backtest_results/portfolio_framework/wfa_windows_p13_raschke.run.json`
+- `backtest_results/portfolio_framework/wfa_windows_shardA.csv`
+- `backtest_results/portfolio_framework/wfa_windows_shardA.run.json`
+- `backtest_results/portfolio_framework/wfa_windows_shardB.csv`
+- `backtest_results/portfolio_framework/wfa_windows_shardB.run.json`
+- `bots/_trade_entry.py`
+- `data/historical/volumetric/_recorder.log`
+- `memory/context/CURRENT_STATE.md`
+- `strategies/bias_momentum.py`
+
+---
 ### 2026-06-01 11:58 Central Daylight Time — Session changes: 17 files modified
 
 **Files changed:**
