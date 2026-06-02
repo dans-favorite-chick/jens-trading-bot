@@ -208,8 +208,8 @@ class BiasMomentumFollow(BaseStrategy):
                 if self.config.get("ema_stack_early_session_fallback", False):
                     from datetime import datetime as _dt
                     from zoneinfo import ZoneInfo as _ZI
-                    _CT = _ZI("America/Chicago")
-                    _now_ct = market.get("now_ct") or _dt.now(_CT)
+                    _ct_tz = _ZI("America/Chicago")
+                    _now_ct = market.get("now_ct") or _dt.now(_ct_tz)
                     _cutoff_str = self.config.get(
                         "ema_stack_early_session_end_ct", "09:00"
                     )
