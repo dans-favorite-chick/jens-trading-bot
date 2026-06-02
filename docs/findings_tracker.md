@@ -1,0 +1,23 @@
+# Phoenix Findings Tracker
+
+Living ledger of every audit finding. Update on every fix-it prompt
+(Phase 0 verification + final RESOLVED phase). IDs are stable forever
+— never reuse, never delete rows, only mark superseded.
+
+Status codes:
+- OPEN          — defect confirmed in HEAD, not yet fixed
+- IN-PROGRESS   — a fix-it session is actively addressing it
+- RESOLVED      — fixed in the commit listed
+- STALE         — was OPEN, found ALREADY-FIXED off-prompt; credited commit listed
+- SUPERSEDED    — replaced by a newer finding with broader scope
+
+| ID                       | Date       | Source                       | Location                                 | Description                            | Status      | Fix commit  | Notes                                                                                              |
+|--------------------------|------------|------------------------------|------------------------------------------|----------------------------------------|-------------|-------------|----------------------------------------------------------------------------------------------------|
+| FINDING-2026-06-02-C     | 2026-06-02 | dashboard-rebuild audit      | dashboard/server.py /api/equity-curve    | r_multiple field-order bug             | RESOLVED    | cb04e61     | shipped same session                                                                               |
+| FINDING-2026-06-02-D     | 2026-06-02 | dashboard-rebuild audit      | core/position_manager.py:737, :937       | initial_stop_price not serialized      | IN-PROGRESS | —           | uncommitted in operator working tree as of seed (lines 736, 930 in unstaged diff); protected file  |
+| FINDING-2026-06-02-A     | 2026-06-02 | dashboard-rebuild audit      | core/trade_memory.py TradeMemory.save()  | non-atomic save → truncation race      | RESOLVED    | 2698323     | OPERATOR-APPROVED 2026-06-02 batch                                                                 |
+| FINDING-2026-06-02-E     | 2026-06-02 | dashboard-rebuild audit      | bots/_pending_entry_sweeper.py:132       | ISO exit_time instead of float epoch   | OPEN        | —           | defect confirmed in HEAD at seed; no fix in any commit or unstaged diff                            |
+| FINDING-2026-06-02-NOISE | 2026-06-02 | DuckDB schema-split task     | tests/test_adaptive.py:530               | 4 pre-existing ParserException errors  | RESOLVED    | 0a22cd5     | baseline noise floor cleared                                                                       |
+| FINDING-2026-06-02-BP1   | 2026-06-02 | 0a22cd5 bug sweep            | core/startup_reconciliation.py:142       | blind parts[2] indexing                | STALE       | ccb29b2     | found already-guarded by Phase 4 sweep 2026-06-02                                                  |
+| FINDING-2026-06-02-BP2   | 2026-06-02 | 0a22cd5 bug sweep            | tools/strategy_backtest_es_nq_v2.py:65   | blind parts[2] indexing                | STALE       | b498512     | found already-guarded by Phase 4 sweep 2026-06-02                                                  |
+| FINDING-2026-06-02-BP3   | 2026-06-02 | 0a22cd5 bug sweep            | bridge/oif_writer.py:882                 | blind parts[2] indexing in scan        | STALE       | 8f0ffc9     | found already-guarded by Phase 4 sweep 2026-06-02                                                  |
