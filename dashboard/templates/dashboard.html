@@ -944,6 +944,7 @@ async function poll() {
       ['insights',  () => renderAIInsights(bot)],
       ['council',   () => renderCouncil(bot.council)],
       ['filter',    () => renderFilterVerdict(bot.filter_verdict)],
+      ['breakdown', () => renderBreakdown()],
     ];
     for (const [name, fn] of renders) {
       try { fn(); } catch (e) { console.warn('Render ' + name + ':', e.message); }
@@ -965,6 +966,12 @@ async function poll() {
   if (!window._activeStrategiesTimer) {
     window._activeStrategiesTimer = setInterval(refreshActiveStrategies, 30000);
     refreshActiveStrategies();
+  }
+  // 2026-06-02: equity curve refreshes at 5s — slower than the main 2s
+  // poll because it walks the full trade_memory file each time.
+  if (!window._equityCurveTimer) {
+    window._equityCurveTimer = setInterval(refreshEquityCurve, 5000);
+    refreshEquityCurve();
   }
 }
 
@@ -1037,21 +1044,206 @@ function renderConnLog(events) {
   }).join('');
 }
 
-// ── Position Bar ───────────────────────────────────────────────────
+// ── Live Position ──────────────────────────────────────────────────
+// 2026-06-02: upgraded from a pure status bar. Fills the new Current /
+// R-to-stop / R-to-tgt fields from the bot's position dict (which carries
+// the same fields _trade_entry persists). When the bot reports no
+// open position we leave everything blanked but keep the bar in the
+// FLAT visual state. Strategy badge gets the strategy color from
+// the visuals registry so it lines up with NT8 chart markers.
 function renderPosition(pos) {
   const bar = document.getElementById('position-bar');
   const status = pos.status || 'FLAT';
   bar.className = 'position-bar ' + (status === 'FLAT' ? 'flat' : (pos.direction === 'LONG' ? 'long' : 'short'));
   el('pos-dir').textContent = status === 'FLAT' ? 'FLAT' : pos.direction;
-  el('pos-entry').textContent = pos.entry_price?.toFixed(2) || '--';
-  el('pos-stop').textContent = pos.stop_price?.toFixed(2) || '--';
-  el('pos-target').textContent = pos.target_price?.toFixed(2) || '--';
-  el('pos-qty').textContent = pos.contracts || '--';
-  el('pos-strat').textContent = pos.strategy || '--';
+  const entry  = pos.entry_price;
+  const stop   = pos.stop_price;
+  const target = pos.target_price;
+  const cur    = pos.current_price ?? pos.last_price ?? null;
+  el('pos-entry').textContent  = entry  != null ? entry.toFixed(2)  : '--';
+  el('pos-stop').textContent   = stop   != null ? stop.toFixed(2)   : '--';
+  el('pos-target').textContent = target != null ? target.toFixed(2) : '--';
+  el('pos-cur').textContent    = cur    != null ? cur.toFixed(2)    : '--';
+  el('pos-qty').textContent    = pos.contracts || '--';
+
+  // Strategy badge colored from visuals registry.
+  const strat = pos.strategy || '--';
+  const stratEl = el('pos-strat');
+  stratEl.textContent = strat;
+  const vis = (window._activeStrategies || {})[strat];
+  if (vis) {
+    stratEl.style.color = vis.color;
+    stratEl.style.fontWeight = '700';
+  } else {
+    stratEl.style.color = '';
+    stratEl.style.fontWeight = '';
+  }
+
   const pnl = pos.unrealized_pnl || 0;
   const pnlEl = el('pos-pnl');
   pnlEl.textContent = '$' + pnl.toFixed(2);
   pnlEl.style.color = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+
+  // R-to-stop / R-to-target: signed multiples in the move's reference
+  // direction. Positive R-to-tgt = moving toward target; negative R-to-
+  // stop = into the stop. Computed off the live price so it ticks.
+  function _rmove(curPx, refPx) {
+    if (curPx == null || refPx == null || entry == null || stop == null) return null;
+    const oneR = Math.abs(entry - stop);
+    if (oneR === 0) return null;
+    if (pos.direction === 'LONG') return (curPx - refPx) / oneR;
+    return (refPx - curPx) / oneR;
+  }
+  const rStop = _rmove(cur, stop);
+  const rTgt  = _rmove(cur, target);
+  el('pos-rstop').textContent = rStop != null ? rStop.toFixed(2) + 'R' : '--';
+  el('pos-rtgt').textContent  = rTgt  != null ? rTgt.toFixed(2)  + 'R' : '--';
+}
+
+// ── Per-Bot × Per-Strategy Breakdown ───────────────────────────────
+// 2026-06-02: sourced from window._lastTodayPnl.per_strategy (populated
+// by refreshBothBotsSummary). Sorted by abs(pnl) descending.
+function renderBreakdown() {
+  const el = document.getElementById('breakdown-body');
+  if (!el) return;
+  const today = window._lastTodayPnl || {};
+  const perStrat = today.per_strategy || {};
+  const rows = Object.entries(perStrat).map(([key, s]) => ({
+    key,
+    bot: s.bot || 'unknown',
+    strategy: key,
+    trades: s.trades || 0,
+    wins: s.wins || 0,
+    losses: s.losses || 0,
+    wr: s.win_rate || 0,
+    pnl: s.pnl || 0,
+    avg_r: (s.trades ? (s.pnl / s.trades / 10).toFixed(2) : '—'),  // crude proxy: $/trade ÷ ~$10 per R
+  }));
+  if (!rows.length) {
+    el.innerHTML = '<div style="color:var(--text-dim); font-size:12px; padding:8px;">No trades yet today.</div>';
+    return;
+  }
+  rows.sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl));
+  const visMap = window._activeStrategies || {};
+  el.innerHTML = `
+    <table class="trade-table" style="width:100%;">
+      <thead><tr>
+        <th>Bot</th><th>Strategy</th><th style="text-align:right;">Trades</th>
+        <th style="text-align:right;">W</th><th style="text-align:right;">L</th>
+        <th style="text-align:right;">WR%</th><th style="text-align:right;">Net P&L</th>
+        <th style="text-align:right;">Avg R*</th>
+      </tr></thead>
+      <tbody>${rows.map(r => {
+        const base = r.strategy.split('.')[0];
+        const vis = visMap[base] || {color:'#8b949e'};
+        const pnlCls = r.pnl >= 0 ? 'win' : 'loss';
+        return `<tr>
+          <td><span style="color:var(--text-dim);">${esc(r.bot)}</span></td>
+          <td><span style="display:inline-block;width:9px;height:9px;border-radius:50%;
+                          background:${esc(vis.color)};margin-right:6px;"></span>${esc(r.strategy)}</td>
+          <td style="text-align:right;">${r.trades}</td>
+          <td style="text-align:right;color:var(--green);">${r.wins}</td>
+          <td style="text-align:right;color:var(--red);">${r.losses}</td>
+          <td style="text-align:right;">${r.wr.toFixed(0)}%</td>
+          <td class="${pnlCls}" style="text-align:right;font-weight:700;">$${r.pnl.toFixed(2)}</td>
+          <td style="text-align:right;color:var(--text-dim);">${r.avg_r}</td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>
+    <div style="font-size:10px;color:var(--text-dim);margin-top:4px;padding-left:8px;">
+      *Avg R is a coarse proxy ($/trade ÷ $10/R). True per-trade R lives on the Equity Curve panel.
+    </div>`;
+}
+
+// ── Equity Curve + R-Multiple Histogram ────────────────────────────
+// 2026-06-02: vanilla SVG, no external libs. Polls /api/equity-curve
+// every 5s — same cadence as the trade log refresh.
+async function refreshEquityCurve() {
+  let data;
+  try {
+    const res = await fetch('/api/equity-curve');
+    if (!res.ok) return;
+    data = await res.json();
+  } catch (e) { return; }
+  const pts = data.points || [];
+  const meta = document.getElementById('equity-curve-meta');
+  if (meta) {
+    meta.textContent = pts.length
+      ? `${pts.length} trades · cumulative $${data.final_cumulative.toFixed(2)} · peak $${data.peak.toFixed(2)}`
+      : 'No closed trades to plot.';
+  }
+  _renderEquityLine(pts);
+  _renderRHistogram(pts);
+}
+
+function _renderEquityLine(pts) {
+  const svg = document.getElementById('equity-curve-svg');
+  if (!svg) return;
+  if (!pts.length) { svg.innerHTML = ''; return; }
+  const W = 800, H = 220, pad = 28;
+  const xs = pts.map(p => p.trade_idx);
+  const ys = pts.map(p => p.cumulative_pnl_net);
+  const xMin = Math.min(...xs), xMax = Math.max(...xs);
+  const yMin = Math.min(0, ...ys), yMax = Math.max(0, ...ys);
+  const xScale = i => pad + ((i - xMin) / Math.max(1, xMax - xMin)) * (W - 2 * pad);
+  const yScale = y => H - pad - ((y - yMin) / Math.max(1e-9, yMax - yMin)) * (H - 2 * pad);
+  const linePts = pts.map(p => `${xScale(p.trade_idx).toFixed(1)},${yScale(p.cumulative_pnl_net).toFixed(1)}`).join(' ');
+  // ATH-or-DD shading: green ribbon under curve where at peak (dd == 0),
+  // red where below peak.
+  const greenSeg = [], redSeg = [];
+  pts.forEach(p => {
+    const x = xScale(p.trade_idx).toFixed(1);
+    const y = yScale(p.cumulative_pnl_net).toFixed(1);
+    if ((p.drawdown_from_peak || 0) >= -0.01) greenSeg.push(`${x},${y}`);
+    else redSeg.push(`${x},${y}`);
+  });
+  const zero = yScale(0).toFixed(1);
+  svg.innerHTML = `
+    <line x1="${pad}" y1="${zero}" x2="${W-pad}" y2="${zero}" stroke="#30363d" stroke-dasharray="3,3"/>
+    ${redSeg.length > 1 ? `<polyline points="${redSeg.join(' ')}" stroke="${'#f85149'}" fill="none" stroke-width="2.5"/>` : ''}
+    ${greenSeg.length > 1 ? `<polyline points="${greenSeg.join(' ')}" stroke="${'#3fb950'}" fill="none" stroke-width="2.5"/>` : ''}
+    <polyline points="${linePts}" stroke="#58a6ff" fill="none" stroke-width="1.2" opacity="0.55"/>
+    <text x="${pad}" y="${pad-8}" fill="#8b949e" font-family="monospace" font-size="11">$${yMax.toFixed(2)}</text>
+    <text x="${pad}" y="${H-6}" fill="#8b949e" font-family="monospace" font-size="11">$${yMin.toFixed(2)}</text>
+  `;
+}
+
+function _renderRHistogram(pts) {
+  const svg = document.getElementById('r-histogram-svg');
+  if (!svg) return;
+  const buckets = [
+    {label: '≤-3R', min: -Infinity, max: -3, count: 0, color: '#8b1d24'},
+    {label: '-3..-2R', min: -3, max: -2, count: 0, color: '#a93e44'},
+    {label: '-2..-1R', min: -2, max: -1, count: 0, color: '#cc555c'},
+    {label: '-1..0R', min: -1, max: 0,  count: 0, color: '#e87b81'},
+    {label: '0..+1R', min: 0,  max: 1,  count: 0, color: '#85d39a'},
+    {label: '+1..+2R', min: 1, max: 2,  count: 0, color: '#56c46f'},
+    {label: '+2..+3R', min: 2, max: 3,  count: 0, color: '#39b455'},
+    {label: '+3..+4R', min: 3, max: 4,  count: 0, color: '#229540'},
+    {label: '≥+4R',   min: 4, max: Infinity, count: 0, color: '#136a2b'},
+  ];
+  pts.forEach(p => {
+    if (p.r_multiple == null) return;
+    for (const b of buckets) {
+      if (p.r_multiple >= b.min && p.r_multiple < b.max) { b.count++; break; }
+      if (b.max === Infinity && p.r_multiple >= b.min)   { b.count++; break; }
+    }
+  });
+  const W = 800, H = 140, pad = 24;
+  const maxCount = Math.max(1, ...buckets.map(b => b.count));
+  const colW = (W - 2 * pad) / buckets.length;
+  const bars = buckets.map((b, i) => {
+    const x = pad + i * colW + 2;
+    const w = colW - 4;
+    const h = (b.count / maxCount) * (H - 2 * pad - 14);
+    const y = H - pad - h;
+    return `
+      <rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" fill="${b.color}" rx="2"/>
+      <text x="${(x + w/2).toFixed(1)}" y="${(y - 3).toFixed(1)}" fill="#e6edf3" font-family="monospace" font-size="11" text-anchor="middle">${b.count}</text>
+      <text x="${(x + w/2).toFixed(1)}" y="${H - 6}" fill="#8b949e" font-family="monospace" font-size="10" text-anchor="middle">${b.label}</text>
+    `;
+  }).join('');
+  svg.innerHTML = bars;
 }
 
 // ── Stats ──────────────────────────────────────────────────────────

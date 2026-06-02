@@ -971,6 +971,90 @@ def api_strategies():
     return jsonify({"prod": prod_strats, "lab": lab_strats})
 
 
+@app.route("/api/equity-curve")
+def api_equity_curve():
+    """Cumulative net P&L curve over the last 50 closed trades (all bots).
+
+    Each row carries (trade_idx, cumulative_pnl_net, drawdown_from_peak,
+    strategy, r_multiple). The dashboard renders the cumulative curve
+    plus a histogram bucketing r_multiple into [-3, -2, -1, 0, +1, +2,
+    +3, +4+].
+
+    r_multiple = pnl_net / abs(entry - initial_stop) * dollars_per_point.
+    Falls back to None if any of the three inputs is missing; the
+    frontend skips None bars in the histogram.
+    """
+    try:
+        from core.trade_memory import load_all_trades
+        rows = load_all_trades(logs_dir=os.path.join(PROJECT_ROOT, "logs"))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("api_equity_curve load_all_trades failed: %s", e)
+        return safe_jsonify({"points": [], "error": "load_failed"})
+    if not isinstance(rows, list):
+        return safe_jsonify({"points": []})
+
+    closed = [t for t in rows if t.get("exit_time") is not None]
+
+    def _exit_key(t):
+        try:
+            return float(t.get("exit_time") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    closed.sort(key=_exit_key)
+    closed = closed[-50:]
+
+    # MNQ tick value: $0.50/tick, 4 ticks/point → $2/point on micros.
+    # Pull from settings so contract changes don't require code edits.
+    try:
+        from config.settings import TICK_SIZE, TICK_VALUE_PER_CONTRACT
+        dollars_per_point = TICK_VALUE_PER_CONTRACT / TICK_SIZE
+    except Exception:
+        dollars_per_point = 2.0  # MNQ default
+
+    points = []
+    cum = 0.0
+    peak = 0.0
+    for i, t in enumerate(closed):
+        pnl = safe_pnl_net(t) or 0.0
+        cum += pnl
+        peak = max(peak, cum)
+        dd = cum - peak  # negative or zero
+
+        entry = t.get("entry_price")
+        init_stop = t.get("stop_price") or t.get("initial_stop_price")
+        contracts = t.get("contracts") or 1
+        r_mult = None
+        try:
+            if entry is not None and init_stop is not None:
+                risk_pts = abs(float(entry) - float(init_stop))
+                if risk_pts > 0:
+                    risk_dollars = risk_pts * dollars_per_point * float(contracts)
+                    if risk_dollars > 0:
+                        r_mult = round(pnl / risk_dollars, 3)
+        except (TypeError, ValueError):
+            pass
+
+        points.append({
+            "trade_idx": i + 1,
+            "trade_id": t.get("trade_id"),
+            "cumulative_pnl_net": round(cum, 2),
+            "drawdown_from_peak": round(dd, 2),
+            "strategy": t.get("strategy") or "unknown",
+            "r_multiple": r_mult,
+            "pnl_net": round(pnl, 2),
+            "exit_ts": t.get("exit_time"),
+        })
+
+    return safe_jsonify({
+        "points": points,
+        "count": len(points),
+        "peak": round(peak, 2),
+        "final_cumulative": round(cum, 2),
+        "dollars_per_point": dollars_per_point,
+    })
+
+
 @app.route("/api/active-strategies")
 def api_active_strategies():
     """Return the list of strategies the dashboard should display.
