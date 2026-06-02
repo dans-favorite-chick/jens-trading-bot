@@ -298,6 +298,16 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
 <!-- ===== SECTION: Alert Banner ===== -->
 <div id="alert-banner" class="alert-banner">CONNECTION LOST — NT8 feed disconnected</div>
 
+<!-- ===== SECTION: NT8 Sink-Health Banner (2026-06-02 auto-pause spec) ===== -->
+<div id="nt8-sink-banner" style="display:none; background:#f85149aa; border:2px solid var(--red); color:#fff; padding:12px 20px; border-radius:8px; margin-bottom:12px; font-weight:600; font-size:14px;">
+  <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+    <span style="font-size:18px;">⚠</span>
+    <span id="nt8-sink-banner-text" style="flex:1;">NT8 sink paused</span>
+    <button id="nt8-sink-clear-prod" type="button" style="display:none; background:#fff; color:var(--red); border:none; padding:6px 14px; border-radius:4px; font-weight:700; cursor:pointer;">Clear prod</button>
+    <button id="nt8-sink-clear-sim" type="button" style="display:none; background:#fff; color:var(--red); border:none; padding:6px 14px; border-radius:4px; font-weight:700; cursor:pointer;">Clear sim</button>
+  </div>
+</div>
+
 <!-- ===== SECTION: Health Bar ===== -->
 <div class="health-bar">
   <span style="font-size:11px; color:var(--text-dim); margin-right:8px;">CONNECTIONS</span>
@@ -2059,6 +2069,65 @@ async function pollMarketState() {
 }
 setInterval(pollMarketState, 30000);
 pollMarketState();
+
+// ── NT8 sink-health banner (2026-06-02 auto-pause spec) ───────────
+async function pollNt8Health() {
+  try {
+    const r = await fetch('/api/nt8_health', { cache: 'no-store' });
+    if (!r.ok) return;
+    const d = await r.json();
+    const banner = document.getElementById('nt8-sink-banner');
+    const text = document.getElementById('nt8-sink-banner-text');
+    const btnProd = document.getElementById('nt8-sink-clear-prod');
+    const btnSim = document.getElementById('nt8-sink-clear-sim');
+    if (!banner || !text || !btnProd || !btnSim) return;
+    const prodPaused = d && d.prod && d.prod.paused;
+    const simPaused = d && d.sim && d.sim.paused;
+    if (!prodPaused && !simPaused) {
+      banner.style.display = 'none';
+      btnProd.style.display = 'none';
+      btnSim.style.display = 'none';
+      return;
+    }
+    const parts = [];
+    if (prodPaused) {
+      const reason = (d.prod.paused_reason || 'PROTECT FAILED');
+      parts.push('prod: ' + reason + ' at ' + (d.prod.paused_at || '?'));
+      btnProd.style.display = 'inline-block';
+    } else {
+      btnProd.style.display = 'none';
+    }
+    if (simPaused) {
+      const reason = (d.sim.paused_reason || 'PROTECT FAILED');
+      parts.push('sim: ' + reason + ' at ' + (d.sim.paused_at || '?'));
+      btnSim.style.display = 'inline-block';
+    } else {
+      btnSim.style.display = 'none';
+    }
+    text.textContent = 'NT8 SINK PAUSED — ' + parts.join(' | ');
+    banner.style.display = 'block';
+  } catch (e) { /* silent */ }
+}
+
+async function clearNt8Sink(botName) {
+  try {
+    const r = await fetch('/api/nt8_clear/' + botName, { method: 'POST' });
+    if (!r.ok) return;
+    // Refresh immediately so the banner clears without waiting for the
+    // next 60s poll.
+    pollNt8Health();
+  } catch (e) { /* silent */ }
+}
+
+(function wireNt8ClearButtons() {
+  const btnProd = document.getElementById('nt8-sink-clear-prod');
+  const btnSim = document.getElementById('nt8-sink-clear-sim');
+  if (btnProd) btnProd.addEventListener('click', () => clearNt8Sink('prod'));
+  if (btnSim) btnSim.addEventListener('click', () => clearNt8Sink('sim'));
+})();
+
+setInterval(pollNt8Health, 60000);
+pollNt8Health();
 
 // ── Start ──────────────────────────────────────────────────────────
 setInterval(poll, POLL_MS);

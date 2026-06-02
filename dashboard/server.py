@@ -706,6 +706,86 @@ def api_strategy_risk():
     })
 
 
+# ─── NT8 sink-health (2026-06-02 auto-pause spec) ───────────────────────
+# The dashboard runs in its own process — the bots own the truth in
+# `runtime/nt8_sink_state_{bot}.json`. Reads go to disk directly (the
+# in-process singleton would otherwise cache a stale snapshot); writes
+# are enqueued as `nt8_clear` commands that the bot's dispatcher picks
+# up on the next poll. Matches the existing POST-command pattern used
+# by `/api/runtime-controls/profile` and friends.
+
+def _read_nt8_sink_state(bot_name: str) -> dict:
+    """Read the on-disk sink state, surface the fields the banner uses.
+
+    Defensive: missing file → unpaused stub; corrupt / unreadable →
+    {"error": "unavailable"} so the dashboard tile degrades gracefully
+    instead of 500'ing. Same audit-M-1 pattern as
+    ``api_market_state_per_strategy``.
+    """
+    from pathlib import Path as _P
+    path = _P(__file__).resolve().parent.parent / "runtime" / f"nt8_sink_state_{bot_name}.json"
+    if not path.exists():
+        return {
+            "paused": False, "paused_at": None,
+            "paused_reason": None, "source": "stub",
+        }
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return {
+            "paused": bool(data.get("paused", False)),
+            "paused_at": data.get("paused_at"),
+            "paused_reason": data.get("paused_reason"),
+            "paused_strategy": data.get("paused_strategy"),
+            "paused_account": data.get("paused_account"),
+            "cleared_at": data.get("cleared_at"),
+            "cleared_by": data.get("cleared_by"),
+            "source": "disk",
+        }
+    except Exception as e:  # noqa: BLE001
+        logger.warning("nt8 sink-state read failed for %s: %s", bot_name, e)
+        return {"error": "unavailable"}
+
+
+@app.route("/api/nt8_health")
+def api_nt8_health():
+    """Per-bot NT8 sink-health snapshot for the dashboard banner.
+
+    Polled every 60s by the dashboard. When any bot returns
+    ``paused=True`` the banner appears at the top of the viewport.
+    """
+    try:
+        return safe_jsonify({
+            bot_name: _read_nt8_sink_state(bot_name)
+            for bot_name in ("prod", "sim")
+        })
+    except Exception as e:  # noqa: BLE001
+        logger.warning("api_nt8_health failed: %s", e)
+        return safe_jsonify({"error": "unavailable"}), 500
+
+
+@app.route("/api/nt8_clear/<bot_name>", methods=["POST"])
+def api_nt8_clear(bot_name):
+    """Enqueue an nt8_clear command for the named bot.
+
+    The bot's ``DashboardCommandDispatcher`` picks it up on the next
+    poll and runs ``get_sink_health(bot_name).clear(by="dashboard")``.
+    """
+    if bot_name not in ("prod", "sim", "lab"):
+        return safe_jsonify({"error": "unknown bot"}), 400
+    try:
+        with _state_lock:
+            _state.setdefault(f"_commands_{bot_name}", []).append({
+                "type": "nt8_clear",
+                "source": "dashboard",
+                "ts": time.time(),
+            })
+        logger.info("nt8_clear command enqueued for %s", bot_name)
+        return safe_jsonify({"ok": True, "bot": bot_name})
+    except Exception as e:  # noqa: BLE001
+        logger.warning("api_nt8_clear failed for %s: %s", bot_name, e)
+        return safe_jsonify({"error": "unavailable"}), 500
+
+
 @app.route("/api/today-pnl")
 def api_today_pnl():
     """B79 + B82: compute current CME-session P&L from trade_memory files
