@@ -1110,7 +1110,13 @@ STRATEGIES = {
         "stop_buffer_ticks": 2,
         "min_stop_ticks": 6,
         "max_stop_ticks": 30,
-        "target_rr": 2.0,
+        # Oracle 2026-06-01 v3 finding (confirmed_e_multi_day_breakout_2026-06-01):
+        # MAE elbow LONG=20 ticks, SHORT=14 ticks. MFE p90 LONG=50, SHORT=56.
+        # n=1,360, PF=3.48. The LLM proposed per-direction max_stop_ticks
+        # tightening (LONG=20, SHORT=14) which is a multi-knob change left
+        # for operator review. The target_rr raise (2.0 -> 2.5) is the
+        # trivial single-line edit landing autonomously per overnight Phase B.
+        "target_rr": 2.5,
     },
 
     "g_inside_bar_breakout": {
