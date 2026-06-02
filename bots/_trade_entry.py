@@ -794,12 +794,21 @@ class TradeEntry:
                                   f"Check NT8 manually for order status.")
                     self.bot.last_rejection = f"Fill timeout in LIVE mode — entry aborted"
                     return
-                # B39 hardening (B48 refinement): on sim bot, distinguish
+                # B39 hardening (B48 refinement): on any non-LIVE account,
+                # distinguish
                 #   (a) NT8 REJECTED order (OIF still in incoming/) → phantom risk,
                 #       loud alert + cleanup stop/target orphans
                 #   (b) NT8 ACCEPTED but waiting for limit/stop trigger (OIF
                 #       consumed, no fill yet) → NOT a phantom, skip quietly
-                if (_account and _account != "Sim101"):
+                # 2026-06-02 fix: the original guard exempted _account == "Sim101"
+                # on the assumption Sim101 was a fully-mocked path with no real
+                # OIFs. That assumption broke when prod_bot started writing real
+                # OIFs against Sim101 — 14 NT8-rejected entry OIFs sat in
+                # incoming/ during a 09:02-09:39 ATI outage and re-fired as
+                # naked BUY LIMITs at ~11:00 when ATI recovered. PHANTOM_GUARD
+                # now runs for ALL non-LIVE accounts. See
+                # logs/oracle/research/2026-06-02_chart_orders_root_cause.md.
+                if _account:
                     import glob as _glob
                     try:
                         from config.settings import NT8_DATA_ROOT
@@ -869,8 +878,11 @@ class TradeEntry:
                                  f"Skipping Python open (re-eval next tick). "
                                  f"Cleaned {len(orphans)} orphan OCO legs.")
                     return
-                # Paper mode (prod_bot with LIVE_TRADING=False): keep legacy
-                # "assume filled" behavior for Sim101-only mock tracking.
+                # Defensive fall-through: PHANTOM_GUARD above runs for any
+                # truthy _account, so this only fires if account resolution
+                # returned an empty string/None (should not happen in normal
+                # operation — both prod_bot and sim_bot always have an
+                # account). Kept as a safety net for the impossible case.
                 logger.info(f"[{tid}] No fill file (paper mode) — assuming filled")
 
             # Inject regime and Phase 6b data into market snapshot for analytics
