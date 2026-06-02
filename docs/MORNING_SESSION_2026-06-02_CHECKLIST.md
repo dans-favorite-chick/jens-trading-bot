@@ -1,6 +1,43 @@
 # Morning Session Checklist — 2026-06-02
 
-_Overnight master run (Phases A → J) completed on `weekly-evolution/2026-05-24`._
+_Overnight master run (Phases A → J + triangulated Phases 0 → 11) completed on `weekly-evolution/2026-05-24`._
+
+## 0. Triangulated overnight delta (since the original checklist)
+
+After Antigravity / Codex / Claude-API parallel reviewers, three correction
+streams landed:
+
+- **Antigravity `_CT` shadowing fix** is present in `strategies/bias_momentum.py:211`.
+  Without it, the `ema_stack_early_session_fallback` block at Hour 4 CT
+  would have crashed sim trades. **VERIFIED PRESENT.**
+- **Reconciliation harness already exists** at `tools/reconcile_sim_vs_backtest.py`
+  (Antigravity built it; do not re-build).
+- **Per-state PF table** (`logs/oracle/research/2026-06-02_per_strategy_per_state_pf.md`)
+  shows the warehouse-JOIN authoritative numbers and DISAGREES with the
+  Codex preview ("WHIPSAW PF=1.70 / CHOPPY PF=1.41 for bias_momentum")
+  because the friction-applied bucket has 0 trades in those states for
+  bias_momentum. The single-most-actionable insight for Monday: friction-
+  applied bias_momentum data is too thin for per-state gating decisions
+  (n=101 total across all states; no WHIPSAW or CHOPPY observations).
+
+**Eval-state logging is live** (Phase 6): every HistoryLogger event now
+carries a `market_state` field. Once the live bot starts pushing live
+state, the dashboard `/api/market_state` source flips from
+`warehouse_fallback` to `live`.
+
+**Shadow gate is ready but UNWIRED** (Phase 7): the helper
+`core/market_state_gate.py::compute_market_state_gate_decision()` is
+shipped with 15 tests. Wiring into `bots/base_bot.py` signal emission is
+queued for Monday operator-supervised review (high-blast-radius file,
+not safe to edit 3-4 hours before sim starts).
+
+**Bug audit** (`logs/oracle/research/2026-06-02_bug_audit.md`) found
+1 CRITICAL + 3 HIGH + 4 MEDIUM + 3 LOW issues. The CRITICAL (C-1) and
+3 HIGH findings landed as comments and defensive code in commit
+`de777f3`. Headline: `raschke_baseline target_rr=3.5` is INERT in live
+trading (Time/Chandelier exit policies overwrite the target); the value
+ONLY affects backtest projections. Same caveat applies to
+`e_multi_day_breakout` (2.5) and `g_inside_bar_breakout` (3.0).
 
 ## 1. Sim live-mode confirmation (the only thing that matters before market open)
 
