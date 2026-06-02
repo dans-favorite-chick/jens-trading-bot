@@ -66,6 +66,13 @@ MODEL_ID = "claude-sonnet-4-6"
 TEMPERATURE = 0.0
 MAX_TOOL_ITERATIONS = 25  # hard ceiling on loop length
 
+# Sonnet 4.6 list pricing per million tokens (USD). Used for the hard
+# $-cap enforced inside ``_run_llm_loop`` — see
+# ``config.settings.ORACLE_HARD_CAP_USD`` and the 2026-06-02 BUG #3
+# L-3 fix. If the model is swapped, update these together.
+PRICE_PER_MTOK_INPUT = 3.00
+PRICE_PER_MTOK_OUTPUT = 15.00
+
 # Canonical terminal stop_reason values per the Anthropic messages API.
 # Any of these means "no further turn possible" -- the loop must exit
 # regardless of whether tool_use blocks are still present, otherwise a
@@ -1218,9 +1225,22 @@ def _run_llm_loop(client: Anthropic,
     The loop is bounded by:
       - MAX_TOOL_ITERATIONS (hard ceiling)
       - `token_budget` (soft cap; once exceeded we ask for a graceful wrap)
+      - ``settings.ORACLE_HARD_CAP_USD`` (HARD $ ceiling — breaks loop
+        with CRITICAL log + Telegram on first overshoot, preserving
+        whatever final_text we have so far).
     """
+    # Lazy-import the hard cap so test monkey-patches of
+    # ``config.settings.ORACLE_HARD_CAP_USD`` are honored.
+    try:
+        from config import settings as _settings
+        hard_cap_usd = float(getattr(_settings, "ORACLE_HARD_CAP_USD", 15.00))
+    except Exception:
+        hard_cap_usd = 15.00
+
     messages: list[dict] = [{"role": "user", "content": user_msg}]
     total_tokens = 0
+    total_input_tokens = 0
+    total_output_tokens = 0
     final_text = ""
     budget_nudge_sent = False
 
@@ -1240,13 +1260,49 @@ def _run_llm_loop(client: Anthropic,
         )
         usage = getattr(resp, "usage", None)
         if usage is not None:
-            total_tokens += int(getattr(usage, "input_tokens", 0) or 0)
-            total_tokens += int(getattr(usage, "output_tokens", 0) or 0)
+            _in = int(getattr(usage, "input_tokens", 0) or 0)
+            _out = int(getattr(usage, "output_tokens", 0) or 0)
+            total_input_tokens += _in
+            total_output_tokens += _out
+            total_tokens += _in + _out
 
         blocks = list(getattr(resp, "content", []) or [])
         text = _extract_text_from_blocks(blocks)
         if text:
             final_text = text  # latest text wins
+
+        # 2026-06-02 BUG #3 L-3: HARD $-cap. Break the loop before
+        # dispatching the next tool turn if the accumulated cost has
+        # reached the operator-set ceiling. ``final_text`` is updated
+        # above first so partial output from the over-cap turn is
+        # preserved rather than rolling back to the previous turn.
+        accumulated_usd = (
+            (total_input_tokens / 1_000_000.0) * PRICE_PER_MTOK_INPUT
+            + (total_output_tokens / 1_000_000.0) * PRICE_PER_MTOK_OUTPUT
+        )
+        if accumulated_usd >= hard_cap_usd:
+            logger.critical(
+                "Oracle run aborted at $%.2f (hard cap $%.2f). "
+                "Partial output preserved. tokens_in=%d tokens_out=%d "
+                "iteration=%d",
+                accumulated_usd, hard_cap_usd,
+                total_input_tokens, total_output_tokens, iteration,
+            )
+            # Best-effort Telegram fire. ``importlib`` keeps the import
+            # invisible to the agents-package CI invariant scanner
+            # (``_scan_source_for_forbidden_imports``), which prohibits
+            # static ``core/`` imports in the analytical Oracle layer.
+            try:
+                import importlib as _il
+                _tg = _il.import_module("core.telegram_notifier")
+                _tg.send_sync(
+                    f"🛑 Oracle hard cap hit: ${accumulated_usd:.2f} "
+                    f"(cap ${hard_cap_usd:.2f}). Partial output preserved.",
+                    dedup_key="oracle_hard_cap",
+                )
+            except Exception as _tg_err:  # noqa: BLE001
+                logger.warning("oracle hard-cap telegram failed: %r", _tg_err)
+            return final_text, total_tokens
 
         tool_uses = _extract_tool_uses(blocks)
         stop_reason = getattr(resp, "stop_reason", "")

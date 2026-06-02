@@ -419,6 +419,19 @@ PORTFOLIO_CORRELATION_THRESHOLD = 0.7  # Jaccard threshold for correlated-strate
 PORTFOLIO_DIRECTIONAL_CAP = 5      # max simultaneous contracts in same direction
 PORTFOLIO_CORRELATION_THRESHOLD = 0.7  # Jaccard threshold for correlated-strategy gate
 
+# ─── Oracle / LLM hard $-cap (2026-06-02 BUG #3 L-3) ────────────────
+# Defense against a prompt-engineering regression or runaway tool loop
+# that could balloon the per-run LLM bill. The existing token_budget
+# nudge asks the model to "wrap up gracefully" but does NOT hard-stop
+# the loop. When the accumulated spend (input + output tokens priced
+# at MODEL_ID's current rate) reaches this cap, the loop exits with a
+# CRITICAL log + Telegram alert and partial output is preserved.
+#
+# Operator-acceptable per the 2026-06-02 bug sweep: research mode
+# typically lands at $6-9; $15 is a ~1.7× headroom hard ceiling.
+# See logs/oracle/research/2026-06-02_bug3_audit_remainders.md §L-3.
+ORACLE_HARD_CAP_USD = 15.00
+
 # ─── Logging ────────────────────────────────────────────────────────
 LOG_DIR = "logs"
 BRIDGE_LOG = "logs/bridge.log"
