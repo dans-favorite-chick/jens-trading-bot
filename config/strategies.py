@@ -1134,7 +1134,14 @@ STRATEGIES = {
         "stop_buffer_ticks": 1,
         "min_stop_ticks": 6,
         "max_stop_ticks": 30,
-        "target_rr": 2.0,
+        # Oracle 2026-06-01 v3 finding (confirmed_g_inside_bar_breakout_2026-06-01):
+        # MAE elbow LONG=8 ticks (tightest in panel), SHORT=10. MFE p90
+        # LONG=32, SHORT=30. OOS PF (3.46) exceeds IS PF (2.57). n=1,990,
+        # PF=2.47. target_rr 2.0 -> 3.0 reflects MFE p90 / MAE elbow ~3:1.
+        # The LLM also proposed per-direction max_stop_ticks tightening
+        # (LONG=8, SHORT=10) -- NOT_TRIVIAL with a single global knob;
+        # queued in pending_changes.json for operator review.
+        "target_rr": 3.0,
     },
 
     "raschke_baseline": {
