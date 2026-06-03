@@ -129,7 +129,15 @@ class PendingEntrySweeper:
                 "contracts": pe.qty,
                 "result": "NO_FILL",
                 "pnl_dollars": 0.0,
-                "exit_time": datetime.now().isoformat(),
+                # 2026-06-02 Finding E: every other trade_memory writer
+                # (position_manager close_position, scale_out_partial) uses
+                # time.time() (float epoch) here. ISO-string broke the
+                # dashboard equity-curve _exit_key float() coercion and the
+                # RiskManager hydrate_from_trades since-cutoff comparison
+                # (44 NO_FILL records silently dropped). Keep the human-
+                # readable form under exit_time_iso for forensics.
+                "exit_time": time.time(),
+                "exit_time_iso": datetime.now().isoformat(),
                 "terminal_state": pe.terminal_state,
                 "terminal_reason": pe.terminal_reason or "",
                 "reason": f"pending_entry_{pe.terminal_state}",
