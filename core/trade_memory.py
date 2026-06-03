@@ -24,6 +24,7 @@ for callers who want everything in one list.
 import json
 import os
 import logging
+import threading
 from datetime import datetime
 from typing import Optional
 
@@ -227,12 +228,34 @@ class TradeMemory:
                 logger.warning(f"legacy seed for {self._bot_id} failed: {e}")
 
     def save(self):
+        # 2026-06-02 Finding A: atomic write. Earlier `open(self.filepath, "w")`
+        # truncated the destination before any bytes landed; a SIGKILL between
+        # truncate and json.dump's last flush left a half-written file (exactly
+        # the trade_memory_prod.json failure that day). Now we write to a
+        # sibling .tmp, fsync, then os.replace into place. os.replace is atomic
+        # on POSIX and on Windows since Py3.3. On failure the destination is
+        # untouched and the half-written .tmp is best-effort removed.
+        #
+        # The .tmp filename embeds pid + thread id so two writers sharing one
+        # filepath cannot collide on the sibling tmp (Windows otherwise raises
+        # WinError 32 when the loser tries to os.replace a .tmp the winner
+        # still has open). Phoenix's per-bot file split (commit 02b0efd) makes
+        # this defense-in-depth in prod, but the unit test pins it.
+        tmp = f"{self.filepath}.tmp.{os.getpid()}.{threading.get_ident()}"
         try:
             os.makedirs(os.path.dirname(self.filepath), exist_ok=True)
-            with open(self.filepath, "w") as f:
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(self.trades, f, indent=2, default=str)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self.filepath)
         except Exception as e:
             logger.error(f"Could not save trade memory: {e}")
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except OSError:
+                pass
 
     def record(self, trade: dict, bot_id: str | None = None):
         """
