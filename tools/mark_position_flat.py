@@ -210,6 +210,12 @@ def main():
                 "tool": "mark_position_flat.py",
             })
 
+        # Subagent B 2026-06-03 flagged the read-then-rename window as
+        # a TOCTOU race: a concurrent writer touching the destination
+        # between read and rename would silently overwrite their work.
+        # Capture mtime BEFORE the read, re-stat BEFORE the rename,
+        # abort with a clear lost-update error if drift is detected.
+        _dst_mtime_before = path.stat().st_mtime_ns
         # Write THIS file back (preserve its original schema:
         # {"trades": [...]} vs [...]).
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -226,6 +232,16 @@ def main():
         tmp = path.parent / f"{path.name}.tmp.{_os.getpid()}.{_threading.get_ident()}"
         tmp.write_text(json.dumps(out_data, indent=2, default=str),
                        encoding="utf-8")
+        # Re-stat destination to detect a concurrent writer that touched
+        # the file between our read and our rename. If mtime changed,
+        # clean up the tmp and abort — operator can re-run.
+        if path.stat().st_mtime_ns != _dst_mtime_before:
+            tmp.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"Concurrent write to {path} detected (mtime changed "
+                f"during edit). Aborting to avoid lost-update. Re-run "
+                f"after the other writer is done."
+            )
         _os.replace(str(tmp), str(path))
 
     affected_files = ", ".join(path.name for path, _, _ in per_file_matches)
