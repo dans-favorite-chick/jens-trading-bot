@@ -1032,6 +1032,71 @@ class TradeEntry:
                             )
                         except Exception:
                             pass
+                        # REDTEAM-R2-1-FIX (remediation 2026-06-04 round 2):
+                        # if NT8 reports wrong_qty or wrong_direction, the new
+                        # fill DID land — it just stacked on top of an existing
+                        # position (typically a reconciled orphan on Sim101 the
+                        # B50 pre-fill verify missed due to its 0.5s file-race
+                        # returning "missing" which the gate treats as flat).
+                        # The bare `return` previously left the new `contracts`
+                        # qty NAKED on NT8 (no OCO, no Phoenix tracking) — one
+                        # timing race away from a live double-fill loss the
+                        # moment LIVE_TRADING=True flips. Mirror the existing
+                        # OCO-fail-flatten machinery (lines ~1094-1156 below)
+                        # to close out OUR portion (qty=contracts) so the
+                        # orphan + its safety-net OCO are the only thing left
+                        # on NT8 after this aborted entry.
+                        # 'flat' / 'missing' don't need flattening here —
+                        # by definition there's no Phoenix-introduced position
+                        # on NT8 to clean up. Only wrong_qty / wrong_direction
+                        # (the actual stacking scenarios) trigger the flatten.
+                        if pos_check["status"] in ("wrong_qty", "wrong_direction"):
+                            logger.critical(
+                                f"[NT8_VERIFY:{tid}] STACKED FILL DETECTED on "
+                                f"{_account} — flattening OUR {contracts}x "
+                                f"{signal.direction} portion (leaving any "
+                                f"existing orphan + its safety-net OCO intact)."
+                            )
+                            try:
+                                from core.nt8_sink_health import get_sink_health
+                                get_sink_health(self.bot.bot_name).record_protect_failed(
+                                    trade_id=tid,
+                                    strategy=signal.strategy,
+                                    direction=signal.direction,
+                                    account=_account,
+                                )
+                            except Exception as _sink_err:
+                                logger.warning(
+                                    f"[NT8_VERIFY:{tid}] sink-health trip failed: {_sink_err!r}"
+                                )
+                            try:
+                                _ef_resp = _sink_submit_exit(
+                                    qty=contracts,
+                                    trade_id=f"{tid}_redteam_r2_1_flatten",
+                                    account=_account,
+                                    reason="STACKED_FILL_FLATTEN",
+                                )
+                                if _ef_resp.get("decision") != "ACCEPT":
+                                    logger.critical(
+                                        f"[NT8_VERIFY:{tid}] STACKED FILL FLATTEN "
+                                        f"refused by sink {_ef_resp.get('sink','?')}: "
+                                        f"{_ef_resp.get('reason','?')}"
+                                    )
+                            except Exception as e:
+                                logger.critical(
+                                    f"[NT8_VERIFY:{tid}] STACKED FILL FLATTEN FAILED: {e}"
+                                )
+                            try:
+                                from core.telegram_notifier import send_sync
+                                send_sync(
+                                    f"🚨 [STACKED_FILL] {signal.strategy} → {_account}: "
+                                    f"NT8 reports {pos_check['status']} after entry. "
+                                    f"Flattened OUR {contracts}x portion. "
+                                    f"Check NT8 + reconciliation.",
+                                    dedup_key=f"stacked_fill:{signal.strategy}:{_account}",
+                                )
+                            except Exception:
+                                pass
                         return
                     logger.info(f"[NT8_VERIFY:{tid}] Position confirmed: "
                                 f"{pos_check['observed_direction']} {pos_check['observed_qty']} "
