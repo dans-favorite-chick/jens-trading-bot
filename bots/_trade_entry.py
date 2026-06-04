@@ -1032,7 +1032,8 @@ class TradeEntry:
                             )
                         except Exception:
                             pass
-                        # REDTEAM-R2-1-FIX (remediation 2026-06-04 round 2):
+                        # REDTEAM-R2-1-FIX (remediation 2026-06-04 round 2,
+                        # superseded by REDTEAM-R2-1-FIX-V2 below):
                         # if NT8 reports wrong_qty or wrong_direction, the new
                         # fill DID land — it just stacked on top of an existing
                         # position (typically a reconciled orphan on Sim101 the
@@ -1041,21 +1042,43 @@ class TradeEntry:
                         # The bare `return` previously left the new `contracts`
                         # qty NAKED on NT8 (no OCO, no Phoenix tracking) — one
                         # timing race away from a live double-fill loss the
-                        # moment LIVE_TRADING=True flips. Mirror the existing
-                        # OCO-fail-flatten machinery (lines ~1094-1156 below)
-                        # to close out OUR portion (qty=contracts) so the
-                        # orphan + its safety-net OCO are the only thing left
-                        # on NT8 after this aborted entry.
-                        # 'flat' / 'missing' don't need flattening here —
-                        # by definition there's no Phoenix-introduced position
-                        # on NT8 to clean up. Only wrong_qty / wrong_direction
-                        # (the actual stacking scenarios) trigger the flatten.
+                        # moment LIVE_TRADING=True flips.
+                        #
+                        # REDTEAM-R2-1-FIX-V2 (focused red-team round 2):
+                        # the V1 fix called the legacy full-flatten primitive
+                        # `_sink_submit_exit` with qty=contracts but that
+                        # primitive ultimately emits the OIF line
+                        #     CLOSEPOSITION;{account};{INSTRUMENT};GTC;;;;;;;;;
+                        # with the qty FIELD EMPTY (see bridge/oif_writer.py:354
+                        # close_position_line + bridge/oif_writer.py:1296). NT8
+                        # CLOSEPOSITION flattens the entire account net position
+                        # regardless of the qty arg the Python wrapper accepts —
+                        # the qty was COSMETIC. Result: the orphan + our fill
+                        # both flatten, plus the orphan's safety-net OCO becomes
+                        # zombie working orders against a flat position.
+                        #
+                        # The fix-V2 uses _sink_submit_partial_exit (a sized
+                        # PARTIAL_EXIT MARKET order NT8 honors at the requested
+                        # qty per bots/_oif_emitter.py:135-155) so only OUR
+                        # contracts qty closes and the orphan + its safety-net
+                        # OCO survive. The retry loop mirrors the OCO-fail
+                        # pattern at lines ~1050 below — 3 attempts with 1s
+                        # backoff. record_protect_failed gets an explicit
+                        # reason= so the operator's pause-message text says
+                        # "STACKED FILL" not "PROTECT FAILED" (different root
+                        # causes, different remediations).
+                        #
+                        # 'flat' / 'missing' don't reach this code path — by
+                        # definition no fill landed, so there's nothing on NT8
+                        # to clean up. Only wrong_qty / wrong_direction (the
+                        # actual stacking scenarios) trigger the flatten.
                         if pos_check["status"] in ("wrong_qty", "wrong_direction"):
                             logger.critical(
                                 f"[NT8_VERIFY:{tid}] STACKED FILL DETECTED on "
                                 f"{_account} — flattening OUR {contracts}x "
-                                f"{signal.direction} portion (leaving any "
-                                f"existing orphan + its safety-net OCO intact)."
+                                f"{signal.direction} portion via sized "
+                                f"PARTIAL_EXIT (preserving any existing orphan "
+                                f"+ its safety-net OCO)."
                             )
                             try:
                                 from core.nt8_sink_health import get_sink_health
@@ -1064,34 +1087,71 @@ class TradeEntry:
                                     strategy=signal.strategy,
                                     direction=signal.direction,
                                     account=_account,
+                                    reason=(
+                                        f"STACKED FILL on {tid} "
+                                        f"({signal.strategy} {signal.direction} "
+                                        f"on {_account})"
+                                    ),
                                 )
                             except Exception as _sink_err:
                                 logger.warning(
                                     f"[NT8_VERIFY:{tid}] sink-health trip failed: {_sink_err!r}"
                                 )
-                            try:
-                                _ef_resp = _sink_submit_exit(
-                                    qty=contracts,
-                                    trade_id=f"{tid}_redteam_r2_1_flatten",
-                                    account=_account,
-                                    reason="STACKED_FILL_FLATTEN",
-                                )
-                                if _ef_resp.get("decision") != "ACCEPT":
+                            # Retry up to 3x with 1s backoff (mirrors the
+                            # OCO-protect-fail-flatten retry pattern at lines
+                            # ~1050 below). If all three attempts fail
+                            # (REFUSE / ERROR / exception), the operator gets
+                            # the critical log + Telegram + sink-health pause
+                            # and must intervene manually.
+                            partial_exit_ok = False
+                            for _attempt in range(1, 4):
+                                try:
+                                    _ef_resp = _sink_submit_partial_exit(
+                                        direction=signal.direction,
+                                        n_contracts=contracts,
+                                        trade_id=f"{tid}_redteam_r2_1_flatten{_attempt}",
+                                        account=_account,
+                                    )
+                                    if _ef_resp.get("decision") == "ACCEPT":
+                                        logger.info(
+                                            f"[NT8_VERIFY:{tid}] STACKED FILL "
+                                            f"PARTIAL_EXIT accepted on attempt "
+                                            f"#{_attempt} (flattened OUR "
+                                            f"{contracts}x {signal.direction})."
+                                        )
+                                        partial_exit_ok = True
+                                        break
                                     logger.critical(
-                                        f"[NT8_VERIFY:{tid}] STACKED FILL FLATTEN "
-                                        f"refused by sink {_ef_resp.get('sink','?')}: "
+                                        f"[NT8_VERIFY:{tid}] STACKED FILL "
+                                        f"PARTIAL_EXIT refused on attempt "
+                                        f"#{_attempt} by sink "
+                                        f"{_ef_resp.get('sink','?')}: "
                                         f"{_ef_resp.get('reason','?')}"
                                     )
-                            except Exception as e:
+                                except Exception as _ef_err:
+                                    logger.critical(
+                                        f"[NT8_VERIFY:{tid}] STACKED FILL "
+                                        f"PARTIAL_EXIT attempt #{_attempt} "
+                                        f"error: {_ef_err}"
+                                    )
+                                if _attempt < 3:
+                                    await asyncio.sleep(1.0)
+                            if not partial_exit_ok:
                                 logger.critical(
-                                    f"[NT8_VERIFY:{tid}] STACKED FILL FLATTEN FAILED: {e}"
+                                    f"[NT8_VERIFY:{tid}] STACKED FILL "
+                                    f"PARTIAL_EXIT FAILED ALL 3 ATTEMPTS — "
+                                    f"OUR {contracts}x {signal.direction} on "
+                                    f"{_account} may remain NAKED on NT8. "
+                                    f"Operator intervention required."
                                 )
                             try:
                                 from core.telegram_notifier import send_sync
                                 send_sync(
                                     f"🚨 [STACKED_FILL] {signal.strategy} → {_account}: "
                                     f"NT8 reports {pos_check['status']} after entry. "
-                                    f"Flattened OUR {contracts}x portion. "
+                                    f"PARTIAL_EXIT "
+                                    f"{'succeeded' if partial_exit_ok else 'FAILED ALL 3 RETRIES'} "
+                                    f"for OUR {contracts}x portion. "
                                     f"Check NT8 + reconciliation.",
                                     dedup_key=f"stacked_fill:{signal.strategy}:{_account}",
                                 )
