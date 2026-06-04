@@ -254,8 +254,13 @@ def compute_guidance(market: dict, fmp_snap: Optional[dict] = None) -> AdvisorGu
     if any(f.startswith("fmp_disagrees_") for f in caution):
         rr_tier = min(rr_tier, 2.0)
 
+    # Guard against vol_ctx without 'ratio' key (e.g. insufficient_data
+    # path in _classify_volatility) — the '?' fallback is a str and
+    # would crash the :.2f format spec.
+    _ratio = vol_ctx.get("ratio")
+    _ratio_repr = f"{_ratio:.2f}" if isinstance(_ratio, (int, float)) else "?"
     reasoning = (
-        f"Volatility={volatility} (atr_ratio~{vol_ctx.get('ratio', '?'):.2f}); "
+        f"Volatility={volatility} (atr_ratio~{_ratio_repr}); "
         f"sentiment={sentiment} (score={sent_ctx.get('score', '?')}); "
         f"regime={market_regime}; rr_tier={rr_tier:.1f}; "
         f"flags={caution or 'none'}."
