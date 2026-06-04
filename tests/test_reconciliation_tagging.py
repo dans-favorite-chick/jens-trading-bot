@@ -164,3 +164,75 @@ def test_account_scoped_label_is_stable_for_other_accounts(positions):
     assert trade is not None
     assert trade.get("strategy") == "_reconciled_SimAlpha"
     assert trade.get("source") == "manual_reconciled"
+
+
+# ── R5.2-HIGH-1-FIX: scale_out_partial provenance fields ─────────────
+
+
+def test_scale_out_partial_stamps_source_manual_reconciled_on_reconciled_pos(positions):
+    """Partial scale-out on a reconciled (orphan-adopted) position must
+    carry source='manual_reconciled' on the partial trade row, mirroring
+    close_position's behavior. Without this, the dashboard's
+    source-filter would let partial scale-outs on orphans re-pollute
+    strategy aggregations."""
+    # Open a reconciled position with enough contracts to scale out of.
+    ok = positions.open_position(
+        trade_id="RECONCILED_Sim101_scaleouttest",
+        direction="SHORT",
+        entry_price=30283.0,
+        contracts=3,                               # 3 contracts so we can scale 1 out
+        stop_price=30308.0,
+        target_price=30245.5,
+        strategy="_reconciled_Sim101",
+        reason="reconciled_from_nt8",
+        market_snapshot={"reconciled": True, "account": "Sim101"},
+        metadata={
+            "source": "manual_reconciled",
+            "reconciled_from_orphan": True,
+            "strategy_original_attribution": "big_move_signal",
+        },
+        account="Sim101",
+        reconciled=True,
+    )
+    assert ok
+    partial = positions.scale_out_partial(
+        exit_price=30270.0, n_contracts=1,
+        trade_id="RECONCILED_Sim101_scaleouttest",
+    )
+    assert partial is not None
+    assert partial.get("partial") is True
+    assert partial.get("source") == "manual_reconciled", (
+        "scale_out_partial on a reconciled position MUST tag the partial "
+        "trade with source='manual_reconciled' so the dashboard aggregator "
+        "filter keeps excluding it."
+    )
+    assert partial.get("reconciled_from_orphan") is True
+    assert partial.get("strategy_original_attribution") == "big_move_signal"
+
+
+def test_scale_out_partial_stamps_source_bot_on_real_signal_trade(positions):
+    """Non-regression mirror of close_position's bot-source check: a
+    real bot trade's partial scale-out must carry source='bot' and
+    reconciled_from_orphan=False, NOT manual_reconciled."""
+    ok = positions.open_position(
+        trade_id="trade_realbot_scaleout_target",
+        direction="SHORT",
+        entry_price=30315.50,
+        contracts=3,
+        stop_price=30330.50,
+        target_price=30285.50,
+        strategy="bias_momentum",
+        reason="bias_momentum_signal",
+        market_snapshot={"price": 30315.50},
+        account="Sim101",
+    )
+    assert ok
+    partial = positions.scale_out_partial(
+        exit_price=30300.0, n_contracts=1,
+        trade_id="trade_realbot_scaleout_target",
+    )
+    assert partial is not None
+    assert partial.get("source") == "bot"
+    assert partial.get("reconciled_from_orphan") is False
+    assert partial.get("strategy_original_attribution") is None
+    assert partial.get("strategy") == "bias_momentum"

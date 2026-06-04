@@ -971,6 +971,18 @@ class PositionManager:
             "market_snapshot": pos.market_snapshot,
             # Sprint F: tier persists on partials too (see open/close hooks)
             "tier":          pos.tier,
+            # R5.2-HIGH-1-FIX (remediation 2026-06-04 round 2): mirror the
+            # provenance fields close_position stamps at 257df2f so
+            # partial scale-outs on reconciled (orphan-adopted) positions
+            # don't fall through the dashboard's source='manual_reconciled'
+            # filter and re-pollute strategy aggregations.
+            "source": "manual_reconciled" if pos.reconciled else "bot",
+            "reconciled_from_orphan": bool(pos.reconciled),
+            "strategy_original_attribution": (
+                pos.metadata.get("strategy_original_attribution")
+                if pos.reconciled and isinstance(pos.metadata, dict)
+                else None
+            ),
         }
 
         # Reduce live position by exited contracts
