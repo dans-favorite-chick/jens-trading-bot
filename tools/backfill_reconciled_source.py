@@ -72,6 +72,13 @@ REPO = HERE.parent
 DB_PATH = REPO / "data" / "trade_memory.db"
 OUT_DIR = REPO / "out"
 
+# Ensure `core.trade_memory` import resolves when run from anywhere.
+# Mirrors the pattern used in tools/daily_session_summary.py and the
+# canonical writer is the only sanctioned trade_memory mutation path
+# (operator standing instruction).
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
 # Operator-confirmed safety cap. Phase 1 diagnostic verified exactly
 # 12 RECONCILED prod-attributed rows in the DB at the time of writing.
 # Any new row that appeared since (e.g. another manual fill the bot
