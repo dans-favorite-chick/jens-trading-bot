@@ -830,6 +830,7 @@ def api_today_pnl():
     per_bot: dict = {}
     per_strategy: dict = {}
     session_rows = []
+    reconciled_rows: list = []   # FINDING-2026-06-04-DASH-ATTR
     n_pre_b13 = 0   # B13: surface mix of pre/post cost-accounting eras
     n_post_b13 = 0
     for t in rows:
@@ -842,6 +843,17 @@ def api_today_pnl():
         except Exception:
             continue
         if ts is None or ts < session_start:
+            continue
+        # FINDING-2026-06-04-DASH-ATTR: orphan fills adopted by
+        # core.startup_reconciliation are tagged source='manual_reconciled'
+        # at close time (core.position_manager.close_position). They are
+        # NOT real bot trades — they're operator manual fills that NT8
+        # surfaced as orphan positions. Track them separately so the
+        # /api/trades audit view still surfaces them, but exclude from
+        # per-bot / per-strategy aggregation here so win rate / PnL /
+        # strategy stats reflect real bot performance only.
+        if t.get("source") == "manual_reconciled":
+            reconciled_rows.append(t)
             continue
         session_rows.append(t)
         bot = t.get("bot_id") or "unknown"
@@ -910,6 +922,11 @@ def api_today_pnl():
         # pre-date cost accounting? Frontend renders a badge when > 0.
         "n_pre_b13":  n_pre_b13,
         "n_post_b13": n_post_b13,
+        # FINDING-2026-06-04-DASH-ATTR: orphan fills adopted by
+        # startup_reconciliation are excluded from the aggregation
+        # above. Surface the count so the UI can show
+        # "N manual-reconciled trades not counted in bot stats".
+        "reconciled_trade_count": len(reconciled_rows),
         "ts": time.time(),
     })
 

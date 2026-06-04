@@ -215,9 +215,18 @@ def reconcile_positions_from_nt8(
             )
             continue
 
-        # Strategy inference (best-effort).
+        # FINDING-2026-06-04-BIG-MOVE-LABEL: when multiple strategies
+        # route to the same account (e.g. big_move_signal + es_nq_confluence
+        # both → Sim101), _infer_strategy_from_account returns whichever
+        # dict iteration hits first. That mislabeled every orphan fill
+        # adopted on Sim101 as `big_move_signal`, polluting that
+        # strategy's win-rate and PnL accounting. Use an account-scoped
+        # pseudo-strategy label so reconciled trades never collide with
+        # a real strategy. The original inference is preserved in
+        # metadata for forensic audit.
         inferred = _infer_strategy_from_account(account)
-        strategy = inferred or "_reconciled"
+        strategy = f"_reconciled_{account}"
+        strategy_original_attribution = inferred  # may be None
 
         trade_id = f"RECONCILED_{account}_{uuid.uuid4().hex[:8]}"
 
@@ -241,6 +250,14 @@ def reconcile_positions_from_nt8(
             strategy=strategy,
             reason="reconciled_from_nt8",
             market_snapshot={"reconciled": True, "account": account},
+            # FINDING-2026-06-04-DASH-ATTR: tag the orphan adoption so
+            # downstream consumers (dashboard aggregations, win-rate
+            # math) can exclude it from real bot performance.
+            metadata={
+                "source": "manual_reconciled",
+                "reconciled_from_orphan": True,
+                "strategy_original_attribution": strategy_original_attribution,
+            },
             account=account,
             reconciled=True,
         )

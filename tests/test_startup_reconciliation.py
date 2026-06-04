@@ -75,8 +75,13 @@ def test_reconcile_adopts_nonflat_and_attaches_oco(outgoing_dir):
     assert long_pos.entry_price == 26741.25
     assert long_pos.account == "SimBias Momentum"
     assert long_pos.trade_id.startswith("RECONCILED_")
-    # Strategy inferred from routing table
-    assert long_pos.strategy == "bias_momentum"
+    # FINDING-2026-06-04-BIG-MOVE-LABEL: strategy MUST be the
+    # account-scoped pseudo-strategy label, not the inferred real
+    # strategy. The inferred name is preserved in metadata for audit.
+    assert long_pos.strategy == "_reconciled_SimBias Momentum"
+    assert long_pos.metadata.get("source") == "manual_reconciled"
+    assert long_pos.metadata.get("reconciled_from_orphan") is True
+    assert long_pos.metadata.get("strategy_original_attribution") == "bias_momentum"
     # Safety-net stop sits 100 ticks below entry (0.25 tick_size) = 25pts
     assert long_pos.stop_price == pytest.approx(26741.25 - 25.0)
     assert long_pos.target_price == pytest.approx(26741.25 + 37.5)
@@ -86,7 +91,10 @@ def test_reconcile_adopts_nonflat_and_attaches_oco(outgoing_dir):
     assert short_pos.reconciled is True
     assert short_pos.contracts == 2
     assert short_pos.entry_price == 26800.00
-    assert short_pos.strategy == "vwap_pullback"
+    # Account-scoped label + audit metadata mirror the LONG check.
+    assert short_pos.strategy == "_reconciled_SimVWapp Pullback"
+    assert short_pos.metadata.get("source") == "manual_reconciled"
+    assert short_pos.metadata.get("strategy_original_attribution") == "vwap_pullback"
     assert short_pos.stop_price == pytest.approx(26800.00 + 25.0)
     assert short_pos.target_price == pytest.approx(26800.00 - 37.5)
 
@@ -124,7 +132,15 @@ def test_missing_position_files_are_ignored(outgoing_dir):
 
 
 def test_uninferable_account_gets_reconciled_placeholder(outgoing_dir):
-    """Account with no entry in STRATEGY_ACCOUNT_MAP still adopts with placeholder strategy."""
+    """Account with no entry in STRATEGY_ACCOUNT_MAP still adopts with
+    an account-scoped placeholder strategy.
+
+    FINDING-2026-06-04-BIG-MOVE-LABEL: even when the strategy is
+    uninferable, the new label format is `_reconciled_<account>` (not
+    a bare `_reconciled` that would collide across accounts) and
+    `strategy_original_attribution` stays None so audit consumers
+    can distinguish "no strategy mapping found" from "ambiguous mapping".
+    """
     _write_pos_file(outgoing_dir, "SimRandomUnknownAccount", "LONG;3;27000.00")
 
     pm = PositionManager()
@@ -137,9 +153,12 @@ def test_uninferable_account_gets_reconciled_placeholder(outgoing_dir):
     )
     assert len(adopted) == 1
     pos = pm.active_positions[0]
-    assert pos.strategy == "_reconciled"
+    assert pos.strategy == "_reconciled_SimRandomUnknownAccount"
     assert pos.reconciled is True
     assert pos.contracts == 3
+    assert pos.metadata.get("source") == "manual_reconciled"
+    assert pos.metadata.get("reconciled_from_orphan") is True
+    assert pos.metadata.get("strategy_original_attribution") is None
 
 
 def test_reconciled_flag_defaults_false_for_normal_positions():

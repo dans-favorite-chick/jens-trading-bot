@@ -805,6 +805,20 @@ class PositionManager:
             # defaults legacy rows to None and reports INSUFFICIENT_DATA).
             "agent_verdicts":       getattr(pos, "agent_verdicts", None),
             "agent_decision_ts_ct": getattr(pos, "agent_decision_ts_ct", None),
+            # FINDING-2026-06-04-DASH-ATTR: provenance flag so dashboard
+            # aggregations (win rate, PnL, per-strategy stats) can
+            # exclude orphan-adopted trades from bot performance math.
+            # The full trade log keeps every row visible — only the
+            # aggregator filters. pos.reconciled is set by the B77
+            # startup-reconciliation path (2026-04-21); pre-existing
+            # bot trades carry source='bot'.
+            "source": "manual_reconciled" if pos.reconciled else "bot",
+            "reconciled_from_orphan": bool(pos.reconciled),
+            "strategy_original_attribution": (
+                pos.metadata.get("strategy_original_attribution")
+                if pos.reconciled and isinstance(pos.metadata, dict)
+                else None
+            ),
         }
 
         self.trade_history.append(trade)
