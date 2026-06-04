@@ -75,10 +75,12 @@ def test_reconcile_adopts_nonflat_and_attaches_oco(outgoing_dir):
     assert long_pos.entry_price == 26741.25
     assert long_pos.account == "SimBias Momentum"
     assert long_pos.trade_id.startswith("RECONCILED_")
-    # FINDING-2026-06-04-BIG-MOVE-LABEL: strategy MUST be the
-    # account-scoped pseudo-strategy label, not the inferred real
-    # strategy. The inferred name is preserved in metadata for audit.
-    assert long_pos.strategy == "_reconciled_SimBias Momentum"
+    # REDTEAM-1-FIX-3A (2026-06-04 round 2): single-strategy account
+    # (SimBias Momentum routes ONLY to bias_momentum in the production
+    # map) takes the REAL strategy name back, restoring the is_flat_for
+    # slot interlock against double-fill. Provenance fields still set
+    # so dashboard aggregator excludes the row from stats.
+    assert long_pos.strategy == "bias_momentum"
     assert long_pos.metadata.get("source") == "manual_reconciled"
     assert long_pos.metadata.get("reconciled_from_orphan") is True
     assert long_pos.metadata.get("strategy_original_attribution") == "bias_momentum"
@@ -91,8 +93,9 @@ def test_reconcile_adopts_nonflat_and_attaches_oco(outgoing_dir):
     assert short_pos.reconciled is True
     assert short_pos.contracts == 2
     assert short_pos.entry_price == 26800.00
-    # Account-scoped label + audit metadata mirror the LONG check.
-    assert short_pos.strategy == "_reconciled_SimVWapp Pullback"
+    # SimVWapp Pullback also routes only to vwap_pullback — same topology
+    # branch as the LONG case above.
+    assert short_pos.strategy == "vwap_pullback"
     assert short_pos.metadata.get("source") == "manual_reconciled"
     assert short_pos.metadata.get("strategy_original_attribution") == "vwap_pullback"
     assert short_pos.stop_price == pytest.approx(26800.00 + 25.0)

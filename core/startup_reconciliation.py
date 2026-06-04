@@ -215,18 +215,46 @@ def reconcile_positions_from_nt8(
             )
             continue
 
-        # FINDING-2026-06-04-BIG-MOVE-LABEL: when multiple strategies
-        # route to the same account (e.g. big_move_signal + es_nq_confluence
-        # both → Sim101), _infer_strategy_from_account returns whichever
-        # dict iteration hits first. That mislabeled every orphan fill
-        # adopted on Sim101 as `big_move_signal`, polluting that
-        # strategy's win-rate and PnL accounting. Use an account-scoped
-        # pseudo-strategy label so reconciled trades never collide with
-        # a real strategy. The original inference is preserved in
-        # metadata for forensic audit.
-        inferred = _infer_strategy_from_account(account)
-        strategy = f"_reconciled_{account}"
-        strategy_original_attribution = inferred  # may be None
+        # FINDING-2026-06-04-BIG-MOVE-LABEL (257df2f) + remediation
+        # REDTEAM-1-FIX-3A (2026-06-04 round 2): topology-aware labeling.
+        #
+        # 257df2f unconditionally rewrote the label to `_reconciled_<account>`
+        # to stop multi-strategy-account misattribution (e.g. Sim101 →
+        # big_move_signal). But that broke the `is_flat_for` strategy-slot
+        # interlock on SINGLE-STRATEGY accounts: pre-fix, an orphan adoption
+        # on SimBias Momentum was labeled `bias_momentum`, so a real
+        # bias_momentum signal collided in the slot and was blocked.
+        # Post-fix, the orphan got `_reconciled_SimBias Momentum` and a
+        # real bias_momentum signal could double-fill on top of it (red-team
+        # REDTEAM-1 CRITICAL on live canary path).
+        #
+        # Resolution:
+        #   - single-strategy account   → real strategy name (slot collision
+        #                                 blocks double-fill; clean attribution
+        #                                 via source='manual_reconciled' so
+        #                                 dashboard still excludes from stats)
+        #   - multi-strategy account    → `_reconciled_<account>` pseudo-label
+        #                                 (concurrent multi-strategy is by
+        #                                 design on Sim101; no slot collision
+        #                                 desired)
+        #   - unrouted (defensive)      → `_reconciled_<account>` plus
+        #                                 strategy_original_attribution=None
+        try:
+            from config.account_routing import strategies_for_account
+            routed_strategies = strategies_for_account(account)
+        except Exception:
+            # If config import fails (extremely unusual), fall back to
+            # the multi-strategy/account-scoped branch defensively.
+            routed_strategies = []
+        if len(routed_strategies) == 1:
+            strategy = routed_strategies[0]
+            strategy_original_attribution = routed_strategies[0]
+        elif len(routed_strategies) > 1:
+            strategy = f"_reconciled_{account}"
+            strategy_original_attribution = _infer_strategy_from_account(account)
+        else:
+            strategy = f"_reconciled_{account}"
+            strategy_original_attribution = None
 
         trade_id = f"RECONCILED_{account}_{uuid.uuid4().hex[:8]}"
 

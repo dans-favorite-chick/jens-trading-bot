@@ -197,3 +197,43 @@ def validate_account_map() -> List[str]:
         elif isinstance(value, dict):
             accounts.update(value.values())
     return sorted(accounts)
+
+
+def strategies_for_account(account: str) -> List[str]:
+    """Return every strategy key whose dedicated NT8 account is ``account``.
+
+    Skips the ``_default`` fallback bucket (its value designates the
+    "what gets returned on lookup miss" account, not a strategy mapping).
+    Nested strategies (currently only ``opening_session``) are returned as
+    ``parent:sub`` colon-joined keys to preserve the sub-strategy granularity.
+
+    Topology-aware orphan labeling (FINDING-2026-06-04-REDTEAM-1, remediation
+    2026-06-04) uses this to decide between:
+
+    - ``len(result) == 1`` → real strategy name (preserves ``is_flat_for``
+      strategy-slot interlock; a real signal for the same strategy will
+      collide with an orphan on that account and be blocked).
+    - ``len(result) > 1``  → ``_reconciled_<account>`` pseudo-label (multi-
+      strategy accounts like Sim101 host legitimately concurrent positions;
+      no slot collision desired).
+    - ``len(result) == 0`` → unrouted; caller falls back to
+      ``_reconciled_<account>`` defensively.
+
+    Live-mode override (``LIVE_TRADING=True`` or
+    ``MULTI_ACCOUNT_ROUTING_ENABLED=False``) collapses runtime routing to
+    Sim101, but this helper operates on the STATIC map only — orphans
+    inherit the account they were originally signaled into, not the
+    runtime-override target.
+    """
+    matches: List[str] = []
+    for strat_name, mapping in STRATEGY_ACCOUNT_MAP.items():
+        if strat_name == "_default":
+            continue
+        if isinstance(mapping, str):
+            if mapping == account:
+                matches.append(strat_name)
+        elif isinstance(mapping, dict):
+            for sub, acct in mapping.items():
+                if acct == account:
+                    matches.append(f"{strat_name}:{sub}")
+    return matches
