@@ -172,82 +172,86 @@ class TradeMemoryDB:
 
     def _init_schema(self) -> None:
         cur = self._conn.cursor()
-        cur.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS trades (
-                trade_id TEXT PRIMARY KEY,
-                bot_id TEXT NOT NULL,
-                strategy TEXT NOT NULL,
-                sub_strategy TEXT,
-                direction TEXT NOT NULL,
-                entry_time REAL NOT NULL,
-                exit_time REAL,
-                entry_price REAL,
-                exit_price REAL,
-                contracts INTEGER,
-                stop_price REAL,
-                initial_stop_price REAL,
-                target_price REAL,
-                pnl_dollars REAL,
-                pnl_ticks INTEGER,
-                r_multiple REAL,
-                exit_reason TEXT,
-                result TEXT,
-                account TEXT,
-                recorded_at REAL,
-                trace_id TEXT,
-                market_snapshot_json TEXT,
-                raw_json TEXT NOT NULL
-            );
+        # Wrap the entire schema init in a single SQLite transaction so two
+        # concurrent processes (sim_bot + prod_bot starting against the same
+        # DB) cannot interleave the PRAGMA write and the schema_meta INSERT.
+        # Subagent B 2026-06-03 flagged the unwrapped sequence as a race.
+        with self._conn:
+            cur.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS trades (
+                    trade_id TEXT PRIMARY KEY,
+                    bot_id TEXT NOT NULL,
+                    strategy TEXT NOT NULL,
+                    sub_strategy TEXT,
+                    direction TEXT NOT NULL,
+                    entry_time REAL NOT NULL,
+                    exit_time REAL,
+                    entry_price REAL,
+                    exit_price REAL,
+                    contracts INTEGER,
+                    stop_price REAL,
+                    initial_stop_price REAL,
+                    target_price REAL,
+                    pnl_dollars REAL,
+                    pnl_ticks INTEGER,
+                    r_multiple REAL,
+                    exit_reason TEXT,
+                    result TEXT,
+                    account TEXT,
+                    recorded_at REAL,
+                    trace_id TEXT,
+                    market_snapshot_json TEXT,
+                    raw_json TEXT NOT NULL
+                );
 
-            CREATE INDEX IF NOT EXISTS idx_trades_strategy_time
-                ON trades (strategy, entry_time DESC);
+                CREATE INDEX IF NOT EXISTS idx_trades_strategy_time
+                    ON trades (strategy, entry_time DESC);
 
-            CREATE INDEX IF NOT EXISTS idx_trades_bot
-                ON trades (bot_id, entry_time DESC);
+                CREATE INDEX IF NOT EXISTS idx_trades_bot
+                    ON trades (bot_id, entry_time DESC);
 
-            CREATE TABLE IF NOT EXISTS strategy_halts (
-                strategy TEXT NOT NULL,
-                sub_strategy TEXT,
-                halted_at REAL NOT NULL,
-                reason TEXT,
-                cleared_at REAL,
-                PRIMARY KEY (strategy, sub_strategy, halted_at)
-            );
+                CREATE TABLE IF NOT EXISTS strategy_halts (
+                    strategy TEXT NOT NULL,
+                    sub_strategy TEXT,
+                    halted_at REAL NOT NULL,
+                    reason TEXT,
+                    cleared_at REAL,
+                    PRIMARY KEY (strategy, sub_strategy, halted_at)
+                );
 
-            CREATE TABLE IF NOT EXISTS equity_state (
-                ts REAL PRIMARY KEY,
-                equity REAL NOT NULL,
-                ath REAL,
-                consecutive_losses INTEGER,
-                raw_json TEXT
-            );
+                CREATE TABLE IF NOT EXISTS equity_state (
+                    ts REAL PRIMARY KEY,
+                    equity REAL NOT NULL,
+                    ath REAL,
+                    consecutive_losses INTEGER,
+                    raw_json TEXT
+                );
 
-            CREATE TABLE IF NOT EXISTS schema_meta (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            );
-            """
-        )
-        # Schema v1 → v2 migration: add initial_stop_price column to existing
-        # DBs. Idempotent — fresh DBs already have the column from the
-        # CREATE TABLE above, so ALTER raises "duplicate column name" which
-        # we swallow. Any other OperationalError is a real problem and
-        # propagates.
-        try:
-            self._conn.execute(
-                "ALTER TABLE trades ADD COLUMN initial_stop_price REAL"
+                CREATE TABLE IF NOT EXISTS schema_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                );
+                """
             )
-        except sqlite3.OperationalError as e:
-            if "duplicate column name" not in str(e).lower():
-                raise
-        # PRAGMA user_version isn't a parameterizable statement.
-        cur.execute(f"PRAGMA user_version = {SCHEMA_VERSION};")
-        cur.execute(
-            "INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?);",
-            ("schema_version", str(SCHEMA_VERSION)),
-        )
-        self._conn.commit()
+            # Schema v1 → v2 migration: add initial_stop_price column to existing
+            # DBs. Idempotent — fresh DBs already have the column from the
+            # CREATE TABLE above, so ALTER raises "duplicate column name" which
+            # we swallow. Any other OperationalError is a real problem and
+            # propagates.
+            try:
+                self._conn.execute(
+                    "ALTER TABLE trades ADD COLUMN initial_stop_price REAL"
+                )
+            except sqlite3.OperationalError as e:
+                if "duplicate column name" not in str(e).lower():
+                    raise
+            # PRAGMA user_version isn't a parameterizable statement.
+            cur.execute(f"PRAGMA user_version = {SCHEMA_VERSION};")
+            cur.execute(
+                "INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?);",
+                ("schema_version", str(SCHEMA_VERSION)),
+            )
 
     # ------------------------------------------------------------------
     # trades
