@@ -187,7 +187,9 @@ def main():
             if args.exit_price is not None:
                 t["exit_price"] = args.exit_price
                 if not t.get("exit_time"):
-                    t["exit_time"] = now_iso
+                    import time as _time
+                    t["exit_time"] = _time.time()
+                    t["exit_time_iso"] = now_iso
             if not t.get("exit_reason"):
                 t["exit_reason"] = "manual_flatten"
             modified += 1
