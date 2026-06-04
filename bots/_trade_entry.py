@@ -54,6 +54,44 @@ from strategies.base_strategy import Signal
 logger = logging.getLogger("Bot")
 
 
+def should_run_inverse_phantom_guard(account, position_manager) -> bool:
+    """REDTEAM-1-FIX-3B: decide whether to run the B50 inverse-phantom
+    `verify_nt8_position` check before a new entry on ``account``.
+
+    Returns True for any non-empty, non-Sim101 account (unchanged behavior).
+
+    Returns True for Sim101 iff the local PositionManager has zero
+    NON-RECONCILED open positions on Sim101 — i.e. either the slot is
+    empty or the only open positions there are reconciled orphans. In
+    that case the guard MUST run, because any NT8-reported position
+    discovered by ``verify_nt8_position`` is by definition an
+    orphan-vs-real-signal double-fill in flight.
+
+    Returns False for Sim101 when at least one non-reconciled (real
+    bot) position is already open there — the legit multi-strategy
+    concurrent-entry path. The verify would false-positive on that
+    real bot position.
+
+    Returns False for an empty/None account string (defensive — no
+    routing target means nothing to verify against).
+
+    Extracted to module scope so the regression can be unit-tested
+    without rebuilding the full TradeEntry stack (await_fill_confirmation,
+    OIF writer, pending_entry_tracker, telegram, history). See
+    ``tests/test_trade_entry_inverse_phantom_guard.py``.
+    """
+    if not account:
+        return False
+    if account != "Sim101":
+        return True
+    open_on_sim101 = [
+        p for p in position_manager.active_positions
+        if getattr(p, "account", None) == "Sim101"
+    ]
+    # If empty OR every open position is reconciled (orphan), run the guard.
+    return all(p.reconciled for p in open_on_sim101)
+
+
 class TradeEntry:
     """Wraps BaseBot._enter_trade. See module docstring for the full
     read/write surface and behavior-preservation invariants."""
@@ -653,7 +691,26 @@ class TradeEntry:
             # state was lost on restart but NT8 still holds the real fill),
             # abort the new entry — otherwise NT8 rejects with "Exceeds
             # account's maximum position quantity" and leaves orphan OCO legs.
-            if (_account and _account != "Sim101"):
+            #
+            # REDTEAM-1-FIX-3B (remediation 2026-06-04 round 2): the original
+            # wholesale-skip on Sim101 was historically necessary because
+            # Sim101 (multi-strategy account / live-mode catch-all) legit-
+            # imately hosts concurrent positions from different strategies,
+            # and the inverse-phantom check would false-positive on those.
+            # But once startup_reconciliation began adopting orphan NT8
+            # fills as `reconciled=True` positions, the wholesale-skip
+            # decoupled Sim101 from any defense-in-depth against orphan-
+            # vs-real-signal double-fill. Topology-aware labeling (Phase 3a)
+            # restores the strategy-slot interlock for SINGLE-strategy
+            # accounts, but Sim101 itself is multi-strategy by design, so
+            # the slot interlock can't help there. Narrow the skip:
+            #
+            #   - Sim101 + a non-reconciled (real bot) position open →
+            #     skip the verify (preserve legit multi-strategy concurrency).
+            #   - Sim101 + zero or only-reconciled positions open →
+            #     RUN the verify (catch the orphan-vs-real double-fill).
+            #   - Non-Sim101 → run the verify as before.
+            if should_run_inverse_phantom_guard(_account, self.bot.positions):
                 try:
                     from bridge.oif_writer import verify_nt8_position
                     pre = verify_nt8_position(
@@ -938,7 +995,12 @@ class TradeEntry:
             # B47: For sim_bot, verify the fill actually happened by reading
             # NT8's outgoing/ position file for this account. If NT8 reports
             # FLAT or wrong direction/qty, we have a phantom — reject the entry.
-            if (_account and _account != "Sim101"):
+            #
+            # REDTEAM-1-FIX-3B: same wholesale-skip-on-Sim101 issue as the
+            # B50 pre-entry guard above — Sim101 hosts legitimate concurrent
+            # multi-strategy positions, but skipping the check wholesale also
+            # masks orphan-stacking. Same helper, same narrowing logic.
+            if should_run_inverse_phantom_guard(_account, self.bot.positions):
                 try:
                     from bridge.oif_writer import verify_nt8_position
                     pos_check = verify_nt8_position(
