@@ -178,3 +178,130 @@ def test_today_pnl_unflagged_legacy_rows_still_aggregate(client, monkeypatch):
     assert payload["trade_count"] == 1
     assert payload["per_strategy"]["bias_momentum"]["trades"] == 1
     assert payload.get("reconciled_trade_count") == 0
+
+
+# ── R5.2-HIGH-2-FIX: sibling aggregators ────────────────────────────
+
+
+def test_equity_curve_excludes_reconciled(client, monkeypatch):
+    """``/api/equity-curve`` plots the last 50 closed trades' cumulative
+    P&L. Reconciled (orphan-adopted) rows are operator manual fills and
+    would distort the curve + peak/drawdown numbers — they must NOT
+    appear in the plot.
+    """
+    reconciled = _mk_trade(
+        trade_id="RECONCILED_Sim101_aaaaaaaa",
+        bot_id="prod",
+        strategy="_reconciled_Sim101",
+        source="manual_reconciled",
+        pnl=100.0,
+    )
+    real_bot = _mk_trade(
+        trade_id="trade_realbot_bbbbbbbb",
+        bot_id="prod",
+        strategy="bias_momentum",
+        source="bot",
+        pnl=10.0,
+        exit_offset=60,
+    )
+    from core import trade_memory as tm
+    monkeypatch.setattr(tm, "load_all_trades", lambda **kw: [reconciled, real_bot])
+
+    resp = client.get("/api/equity-curve")
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    # Only one point — the real bot trade.
+    assert payload["count"] == 1
+    assert len(payload["points"]) == 1
+    p = payload["points"][0]
+    assert p["trade_id"] == "trade_realbot_bbbbbbbb"
+    assert p["strategy"] == "bias_momentum"
+    # Cumulative PnL = 10.0 (not 110.0 — the reconciled row is filtered).
+    assert p["cumulative_pnl_net"] == pytest.approx(10.0)
+    assert payload["final_cumulative"] == pytest.approx(10.0)
+
+
+def test_feed_trades_excludes_reconciled(client, monkeypatch):
+    """``/api/feed-trades`` returns the most recent 10 closed trades for
+    the live activity tile. Reconciled rows must NOT surface there —
+    the audit view at /api/trades shows them; the live-activity feed
+    reflects real bot trades only."""
+    reconciled = _mk_trade(
+        trade_id="RECONCILED_Sim101_feedrec",
+        bot_id="prod",
+        strategy="_reconciled_Sim101",
+        source="manual_reconciled",
+        pnl=50.0,
+    )
+    real_bot = _mk_trade(
+        trade_id="trade_realbot_feed",
+        bot_id="prod",
+        strategy="bias_momentum",
+        source="bot",
+        pnl=20.0,
+        exit_offset=30,
+    )
+    from core import trade_memory as tm
+    monkeypatch.setattr(tm, "load_all_trades", lambda **kw: [reconciled, real_bot])
+
+    resp = client.get("/api/feed-trades")
+    assert resp.status_code == 200
+    rows = resp.get_json()
+    assert isinstance(rows, list)
+    trade_ids = {r["trade_id"] for r in rows}
+    assert "RECONCILED_Sim101_feedrec" not in trade_ids
+    assert "trade_realbot_feed" in trade_ids
+
+
+def test_market_state_per_strategy_excludes_reconciled(client, monkeypatch):
+    """``/api/market_state/per_strategy`` powers Stage 2 gating decisions
+    ("should this strategy gate on COMPRESSED?"). Reconciled rows would
+    pollute the per-(strategy, market_state) WR/PF aggregation and
+    bias the decision toward false-positive gating.
+    """
+    import time as _time
+    now_iso_recent = (
+        __import__("datetime").datetime.now().isoformat()
+    )
+    reconciled = _mk_trade(
+        trade_id="RECONCILED_Sim101_msps",
+        bot_id="prod",
+        strategy="_reconciled_Sim101",
+        source="manual_reconciled",
+        pnl=100.0,
+    )
+    real_bot = _mk_trade(
+        trade_id="trade_realbot_msps",
+        bot_id="prod",
+        strategy="bias_momentum",
+        source="bot",
+        pnl=25.0,
+    )
+    # The endpoint compares an ISO timestamp on each trade against
+    # `cutoff_iso = (now - 30d).isoformat()`. Stamp both rows with a
+    # recent recorded_at so they pass the trailing-30-day filter.
+    reconciled["recorded_at"] = now_iso_recent
+    real_bot["recorded_at"] = now_iso_recent
+    reconciled["entry_market_state"] = "NEUTRAL"
+    real_bot["entry_market_state"] = "NEUTRAL"
+
+    from core import trade_memory as tm
+    monkeypatch.setattr(tm, "load_all_trades", lambda **kw: [reconciled, real_bot])
+
+    resp = client.get("/api/market_state/per_strategy")
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    # The response shape is a list of {strategy, market_state, n, ...}
+    # entries (see api_market_state_per_strategy line ~1310). The
+    # `_reconciled_Sim101` bucket must NOT appear; bias_momentum
+    # appears with n=1, not n=2.
+    entries = payload if isinstance(payload, list) else payload.get("rows") or payload.get("buckets") or []
+    by_strat = {}
+    for e in entries:
+        key = (e.get("strategy"), e.get("entry_market_state"))
+        by_strat[key] = e
+    assert ("_reconciled_Sim101", "NEUTRAL") not in by_strat, (
+        "Reconciled row leaked into the per-(strategy, market_state) bucket map"
+    )
+    assert ("bias_momentum", "NEUTRAL") in by_strat
+    assert by_strat[("bias_momentum", "NEUTRAL")]["n_trades"] == 1

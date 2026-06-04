@@ -649,7 +649,14 @@ def api_feed_signals():
 @app.route("/api/feed-trades")
 def api_feed_trades():
     """Last 10 closed trades across all bots, newest first. Uses canonical
-    reader per memory/trade_memory_canonical_reader.md."""
+    reader per memory/trade_memory_canonical_reader.md.
+
+    R5.2-HIGH-2-FIX (remediation 2026-06-04): excludes
+    source='manual_reconciled' so the live trade-feed tile reflects
+    real bot activity only. Operator manual fills adopted via
+    startup_reconciliation surface in the audit view (/api/trades)
+    instead.
+    """
     try:
         from core.trade_memory import load_all_trades
         rows = load_all_trades(logs_dir=os.path.join(PROJECT_ROOT, "logs"))
@@ -658,6 +665,7 @@ def api_feed_trades():
         return safe_jsonify([])
     if not isinstance(rows, list):
         return safe_jsonify([])
+    rows = [t for t in rows if t.get("source") != "manual_reconciled"]
     def _key(t):
         try: return float(t.get("exit_time") or 0)
         except (TypeError, ValueError): return 0.0
@@ -1010,7 +1018,16 @@ def api_equity_curve():
     if not isinstance(rows, list):
         return safe_jsonify({"points": []})
 
-    closed = [t for t in rows if t.get("exit_time") is not None]
+    # R5.2-HIGH-2-FIX (remediation 2026-06-04): exclude orphan-adopted
+    # rows from the cumulative-PnL / peak / drawdown plot. They're
+    # operator manual fills, not bot performance — including them
+    # distorts the equity curve and the peak/drawdown calculation.
+    # Mirrors the /api/today-pnl source-filter shipped in 257df2f.
+    closed = [
+        t for t in rows
+        if t.get("exit_time") is not None
+        and t.get("source") != "manual_reconciled"
+    ]
 
     def _exit_key(t):
         try:
@@ -1295,6 +1312,13 @@ def api_market_state_per_strategy():
         for t in trades:
             ts = t.get("recorded_at") or t.get("close_ts") or ""
             if ts and ts < cutoff_iso:
+                continue
+            # R5.2-HIGH-2-FIX (remediation 2026-06-04): exclude
+            # orphan-adopted rows from the per-(strategy,market_state)
+            # WR/PF aggregation — they're operator manual fills, not
+            # signaled bot trades, and would pollute the Stage 2
+            # gating decisions this endpoint informs.
+            if t.get("source") == "manual_reconciled":
                 continue
             strat = t.get("strategy") or "(unknown)"
             ms = t.get("entry_market_state") or "(unknown)"
