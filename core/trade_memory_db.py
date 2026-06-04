@@ -15,7 +15,7 @@ ACID + a single connection per process eliminates that whole bug
 class. See ``docs/audits/SYNTHESIS_2026-05-24.md`` §4 P4-4 and
 ``memory/MEMORY.md`` -> trade_memory_canonical_reader.md.
 
-Schema (PRAGMA user_version = 1):
+Schema (PRAGMA user_version = 2):
     trades (
         trade_id TEXT PRIMARY KEY,
         bot_id TEXT NOT NULL,
@@ -28,6 +28,7 @@ Schema (PRAGMA user_version = 1):
         exit_price REAL,
         contracts INTEGER,
         stop_price REAL,
+        initial_stop_price REAL,
         target_price REAL,
         pnl_dollars REAL,
         pnl_ticks INTEGER,
@@ -81,7 +82,7 @@ logger = logging.getLogger("TradeMemoryDB")
 PHOENIX_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = PHOENIX_ROOT / "data" / "trade_memory.db"
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Columns that map 1:1 from a trade dict to the trades table. Anything
 # not in this list lands in ``raw_json`` only.
@@ -97,6 +98,7 @@ _TRADE_COLUMNS: tuple[str, ...] = (
     "exit_price",
     "contracts",
     "stop_price",
+    "initial_stop_price",
     "target_price",
     "pnl_dollars",
     "pnl_ticks",
@@ -184,6 +186,7 @@ class TradeMemoryDB:
                 exit_price REAL,
                 contracts INTEGER,
                 stop_price REAL,
+                initial_stop_price REAL,
                 target_price REAL,
                 pnl_dollars REAL,
                 pnl_ticks INTEGER,
@@ -226,6 +229,18 @@ class TradeMemoryDB:
             );
             """
         )
+        # Schema v1 → v2 migration: add initial_stop_price column to existing
+        # DBs. Idempotent — fresh DBs already have the column from the
+        # CREATE TABLE above, so ALTER raises "duplicate column name" which
+        # we swallow. Any other OperationalError is a real problem and
+        # propagates.
+        try:
+            self._conn.execute(
+                "ALTER TABLE trades ADD COLUMN initial_stop_price REAL"
+            )
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
         # PRAGMA user_version isn't a parameterizable statement.
         cur.execute(f"PRAGMA user_version = {SCHEMA_VERSION};")
         cur.execute(
@@ -285,6 +300,7 @@ class TradeMemoryDB:
             "exit_price": trade.get("exit_price"),
             "contracts": trade.get("contracts"),
             "stop_price": trade.get("stop_price"),
+            "initial_stop_price": trade.get("initial_stop_price"),
             "target_price": trade.get("target_price"),
             "pnl_dollars": trade.get("pnl_dollars"),
             "pnl_ticks": trade.get("pnl_ticks"),
