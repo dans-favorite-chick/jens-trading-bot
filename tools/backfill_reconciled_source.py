@@ -1,40 +1,70 @@
-"""FINDING-2026-06-04-HIST-MIGRATE: backfill provenance flags on
-historical RECONCILED_* rows in trade_memory.
+"""REDTEAM-2-FIX-SCRIPT (remediation 2026-06-04 round 2) +
+FINDING-2026-06-04-HIST-MIGRATE: backfill provenance flags on every
+historical orphan-adoption row across the canonical trade_memory view.
 
-Context
--------
+Why this exists (round 1 + round 2)
+-----------------------------------
 Until commit 257df2f, the B77 startup-reconciliation path adopted
-orphan NT8 positions and labeled them with whatever strategy
-`_infer_strategy_from_account()` returned. For accounts with multiple
-strategies routed to them (Sim101 → big_move_signal, es_nq_confluence,
-etc.) this returned the FIRST dict-order match, which was always
-`big_move_signal`. Twelve operator manual fills were therefore credited
-to prod_bot's big_move_signal strategy (8W/4L, +$504 totalPnL).
+orphan NT8 positions and labeled them with whatever
+`_infer_strategy_from_account()` returned. For multi-strategy
+accounts (Sim101 hosts big_move_signal, es_nq_confluence, and the
+_default fallback) the inferred name was always whichever entry hit
+first in dict iteration, so operator manual fills were credited to
+the wrong strategy — most visibly inflating big_move_signal's win-
+rate accounting.
 
-Post-fix (257df2f), NEW reconciled trades are tagged at close time with:
-    source='manual_reconciled'
-    reconciled_from_orphan=True
-    strategy='_reconciled_<account>'                  (was: inferred name)
-    strategy_original_attribution=<inferred name>     (audit)
+Round 1 of this script (dafaeec, 2026-06-04) intended to backfill 16
+rows. Two problems came out of red-team round 1:
 
-The dashboard /api/today-pnl aggregator already filters on
-source=='manual_reconciled'. But the 12 historical rows on disk still
-carry source=None and strategy='big_move_signal', so the dashboard
-keeps treating them as real bot trades. This script backfills the
-provenance fields so the dashboard filter applies retroactively.
+  REDTEAM-2: scope. The script queried the SQLite shadow only, so
+  it never enumerated the ~104 unique orphan rows that exist only in
+  the JSON files (`logs/trade_memory.json` plus `logs/trade_memory_<bot>.json`
+  per-bot files). The DB shadow started 2026-05-25 (P4-4 dual-write)
+  and is incomplete for historical data.
+
+  Migration race: even for the 16 rows it did enumerate, prod_bot's
+  TradeMemory in-memory cache wiped the JSON updates on the next
+  bot save(). DB shadow stuck, JSON didn't — and the dashboard reads
+  JSON via `load_all_trades()`.
+
+Round 2 (this version) fixes both:
+
+  * iterates the canonical deduplicated view via
+    `core.trade_memory.load_all_trades(logs_dir=...)`, picking up
+    every JSON-only row regardless of DB presence;
+  * matches trade_ids against a configurable regex pattern (default
+    `^RECONCILED_`, --patterns extends for future formats);
+  * applies the TOPOLOGY-AWARE label produced by Phase 3a (84ebf28):
+      single-strategy account → real strategy name
+      multi-strategy account  → `_reconciled_<account>`
+      unrouted (defensive)    → `_reconciled_<account>`
+  * still writes through `TradeMemory.update_trade()` — the canonical
+    writer that atomically rewrites the per-bot JSON file AND syncs
+    the SQLite shadow. NEVER raw-opens JSON.
+  * idempotent in the strict sense — a row that already has
+    `source='manual_reconciled'` AND a strategy field consistent with
+    the topology rule is skipped. A row with source set but stale
+    strategy label (e.g. an early-round-1-migrated SimBias Momentum
+    row that got the `_reconciled_<account>` label before topology
+    awareness landed) will be re-migrated to the canonical label
+    while preserving its `strategy_original_attribution`.
+  * MUST be run with the bots quiesced (operator-actioned). The
+    JSON-clobber race made round 1 a partial no-op for prod; round 2
+    relies on the operator stopping prod_bot + sim_bot before
+    `--apply`, then restarting them after the commit lands. The
+    coordinated-restart steps live in the master prompt's
+    `PHASE 3-RESTART` block, not here.
 
 Behavior
 --------
-* Default mode is DRY-RUN — no writes. Outputs the proposed changes
-  to `out/hist_migrate_dryrun_<YYYY-MM-DD>.md` and prints a summary.
+* Default mode is DRY-RUN — no writes. Writes a per-row plan to
+  `out/hist_migrate_dryrun_<YYYY-MM-DD>.md`.
 * `--apply` performs the migration via the canonical
-  `core.trade_memory.TradeMemory.update_trade(...)` API. That writer
-  atomically updates the per-bot JSON file AND syncs the SQLite
-  shadow (P4-4 dual-write). NEVER raw-opens trade_memory.json.
-* Idempotent — re-running on already-migrated rows is a no-op.
-* Validates row scope: any row from an unexpected account or any
-  count > 12 (the operator-confirmed target) HALTS before writing.
-  Caller must pass `--allow-count N` to override.
+  `core.trade_memory.TradeMemory.update_trade(...)` API.
+* `--patterns RE[,RE...]` extends the trade_id match regex set.
+  Default: `^RECONCILED_`.
+* `--logs-dir <path>` overrides the trade_memory directory (tests
+  pass a tmp dir; production defaults to `<repo>/logs`).
 
 Usage
 -----
@@ -44,8 +74,8 @@ Usage
     # Apply
     python tools/backfill_reconciled_source.py --apply
 
-    # Override the 12-row safety cap (do not use without operator OK)
-    python tools/backfill_reconciled_source.py --apply --allow-count 25
+    # Custom pattern set (e.g. legacy RECONCILED + ORPHAN_ prefixes)
+    python tools/backfill_reconciled_source.py --patterns "^RECONCILED_,^ORPHAN_"
 
 Output reports
 --------------
@@ -53,6 +83,7 @@ Output reports
     out/hist_migrate_applied_<YYYY-MM-DD>.md    (post --apply)
 
 Refs: FINDING-2026-06-04-HIST-MIGRATE
+Refs: REDTEAM-2-FIX-SCRIPT
 """
 from __future__ import annotations
 
@@ -60,6 +91,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import sqlite3
 import sys
 from collections import Counter
@@ -70,6 +102,7 @@ from typing import Iterable, Optional
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
 DB_PATH = REPO / "data" / "trade_memory.db"
+DEFAULT_LOGS_DIR = REPO / "logs"
 OUT_DIR = REPO / "out"
 
 # Ensure `core.trade_memory` import resolves when run from anywhere.
@@ -79,100 +112,159 @@ OUT_DIR = REPO / "out"
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-# Operator-confirmed safety cap. Phase 1 diagnostic verified exactly
-# 12 RECONCILED prod-attributed rows in the DB at the time of writing.
-# Any new row that appeared since (e.g. another manual fill the bot
-# reconciled after Phase 1) will land naturally via the post-257df2f
-# fix and won't need migrating — but a count mismatch should HALT and
-# surface the new row for explicit operator approval.
-DEFAULT_ALLOW_COUNT = 12
-
-# Sim101 is the only account expected per Phase 1. If a row from any
-# other account appears here, HALT — could be a legitimate per-account
-# routing that this migration should NOT touch.
-EXPECTED_ACCOUNTS = {"Sim101"}
+DEFAULT_PATTERNS: tuple[str, ...] = (r"^RECONCILED_",)
 
 
 def _today_tag() -> str:
     return dt.datetime.now().strftime("%Y-%m-%d")
 
 
-def _read_db_reconciled_rows() -> list[dict]:
-    """Pull every RECONCILED_* row from the SQLite shadow with the
-    fields we need to plan + verify the migration.
+# ── Topology-aware target label ────────────────────────────────────────
+#
+# Mirrors core/startup_reconciliation.py post-84ebf28. Imported lazily
+# so this script can run even if the config import path is broken in
+# some unusual repo state.
 
-    Returns dicts with keys: trade_id, bot_id, strategy, account,
-    direction, entry_time, exit_time, pnl_dollars, result, raw_json.
+def _target_strategy_label(account: str) -> tuple[str, list[str]]:
+    """Return ``(strategy_label, routed_strategies)`` for ``account``
+    per the topology rule. Empty account string is treated as unrouted.
     """
-    if not DB_PATH.exists():
-        raise SystemExit(
-            f"FATAL: {DB_PATH} not found. Run from repo root or fix DB_PATH."
-        )
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    cur = conn.execute(
-        """
-        SELECT trade_id, bot_id, strategy, account, direction,
-               entry_time, exit_time, pnl_dollars, result, raw_json
-        FROM trades
-        WHERE trade_id LIKE 'RECONCILED_%'
-        ORDER BY entry_time
-        """
-    )
-    rows = [dict(r) for r in cur.fetchall()]
-    conn.close()
-    return rows
-
-
-def _already_migrated(row: dict) -> bool:
-    """A row is migrated when raw_json carries source='manual_reconciled'.
-    The new column-mapped strategy alone is not sufficient — could be a
-    fresh post-fix row that was BORN with _reconciled_<account>.
-    """
+    if not account:
+        return f"_reconciled_", []
     try:
-        rj = json.loads(row.get("raw_json") or "{}")
-    except (TypeError, json.JSONDecodeError):
-        return False
-    return rj.get("source") == "manual_reconciled"
+        from config.account_routing import strategies_for_account
+        routed = strategies_for_account(account)
+    except Exception:
+        routed = []
+    if len(routed) == 1:
+        return routed[0], routed
+    return f"_reconciled_{account}", routed
+
+
+def _matches_pattern(trade_id: str, patterns: tuple[re.Pattern, ...]) -> bool:
+    return any(p.search(trade_id) for p in patterns)
+
+
+def _read_canonical_rows(
+    logs_dir: Path, patterns: tuple[re.Pattern, ...]
+) -> list[dict]:
+    """Iterate the canonical deduplicated trade_memory view via
+    `core.trade_memory.load_all_trades()` and return every row whose
+    ``trade_id`` matches at least one pattern.
+    """
+    from core.trade_memory import load_all_trades
+
+    rows = load_all_trades(logs_dir=str(logs_dir))
+    matched: list[dict] = []
+    for t in rows:
+        tid = str(t.get("trade_id") or "")
+        if tid and _matches_pattern(tid, patterns):
+            matched.append(t)
+    return matched
 
 
 def _plan_update(row: dict) -> Optional[dict]:
-    """Return the dict of fields to merge onto the trade row, or None
-    if the row is already migrated.
+    """Compute the canonical update for ``row`` per the topology rule,
+    or return ``None`` if the row is already in its final canonical
+    state (idempotency skip).
 
-    The merge dict is the same shape `TradeMemory.update_trade(...)`
-    expects.
+    A row is in its canonical state when:
+      * ``source == 'manual_reconciled'``, AND
+      * ``reconciled_from_orphan == True``, AND
+      * ``strategy == _target_strategy_label(account)[0]``.
+
+    Otherwise the returned dict contains the fields to merge:
+      * ``source='manual_reconciled'``
+      * ``reconciled_from_orphan=True``
+      * ``strategy_original_attribution`` — preserves any existing value;
+        on a fresh row falls back to the current ``strategy`` field
+        (which is the pre-fix mislabel we want preserved for audit);
+        unrouted/empty-account rows get None.
+      * ``strategy`` — topology-derived label.
+
+    Empty ``account`` returns a ``_skip_reason`` sentinel so the dry-run
+    can surface the row for operator inspection rather than silently
+    fabricating a label.
     """
-    if _already_migrated(row):
-        return None
     account = row.get("account") or ""
     if not account:
-        # Cannot derive _reconciled_<account>; refuse silently. The
-        # dry-run report surfaces this row so operator can decide.
         return {
             "_skip_reason": "account is NULL/empty — refusing to fabricate label",
         }
-    original = row.get("strategy") or None
+
+    target_strategy, routed = _target_strategy_label(account)
+    current_source = row.get("source")
+    current_strategy = row.get("strategy")
+    current_orphan_flag = row.get("reconciled_from_orphan")
+
+    fully_canonical = (
+        current_source == "manual_reconciled"
+        and current_orphan_flag is True
+        and current_strategy == target_strategy
+    )
+    if fully_canonical:
+        return None
+
+    # Preserve strategy_original_attribution if it's already set; this
+    # keeps the audit trail across multiple migration rounds. Only fall
+    # back to the current strategy when no original was ever recorded.
+    existing_original = row.get("strategy_original_attribution")
+    if existing_original is not None:
+        target_original = existing_original
+    elif len(routed) == 0:
+        target_original = None
+    else:
+        target_original = current_strategy
+
     return {
         "source": "manual_reconciled",
         "reconciled_from_orphan": True,
-        "strategy_original_attribution": original,
-        # Replace the misleading inferred label (e.g. 'big_move_signal')
-        # with the new account-scoped pseudo-strategy.
-        "strategy": f"_reconciled_{account}",
+        "strategy_original_attribution": target_original,
+        "strategy": target_strategy,
     }
 
 
-def _apply_one(row: dict, update: dict) -> tuple[bool, str]:
+class _Cwd:
+    """Context manager to temporarily chdir. The canonical
+    `core.trade_memory` module resolves both ``LEGACY_FILE`` and
+    ``_per_bot_path`` relative to CWD; this scopes any chdir to the
+    apply call so tests with a synthetic logs_dir work without
+    permanently moving the process CWD.
+    """
+
+    def __init__(self, target: Path):
+        self.target = target
+        self._old: Optional[str] = None
+
+    def __enter__(self):
+        self._old = os.getcwd()
+        os.chdir(str(self.target))
+
+    def __exit__(self, exc_type, exc_val, tb):
+        if self._old is not None:
+            os.chdir(self._old)
+
+
+def _apply_one(row: dict, update: dict, logs_dir: Path) -> tuple[bool, str]:
     """Call canonical writer for one row. Returns (ok, message).
-    The writer atomically updates the per-bot JSON file AND syncs the
-    SQLite shadow. Never raw-opens trade_memory.json.
+
+    The writer (``core.trade_memory.TradeMemory.update_trade``) atomically
+    updates the per-bot JSON file via os.replace AND syncs the SQLite
+    shadow (P4-4 dual-write). NEVER raw-opens trade_memory.json.
+
+    ``logs_dir`` is honored by chdir-ing the process into
+    ``logs_dir.parent`` for the duration of the call so the canonical
+    writer's CWD-relative paths
+    (``logs/trade_memory.json`` legacy + ``logs/trade_memory_<bot>.json``
+    per-bot) resolve into the chosen tree. The CWD is restored on exit.
     """
     from core.trade_memory import TradeMemory
 
     bot_id = row.get("bot_id") or "unknown"
-    tm = TradeMemory(bot_id=bot_id)
-    ok = tm.update_trade(row["trade_id"], update)
+    cwd_target = logs_dir.parent
+    with _Cwd(cwd_target):
+        tm = TradeMemory(bot_id=bot_id)
+        ok = tm.update_trade(row["trade_id"], update)
     if not ok:
         return False, (
             f"update_trade returned False — trade_id not present in "
@@ -181,135 +273,145 @@ def _apply_one(row: dict, update: dict) -> tuple[bool, str]:
     return True, "updated"
 
 
-def _write_dryrun_report(rows: list[dict], plans: list[Optional[dict]]) -> Path:
+def _write_dryrun_report(
+    rows: list[dict], plans: list[Optional[dict]], out_path: Path
+) -> Path:
     OUT_DIR.mkdir(exist_ok=True)
-    path = OUT_DIR / f"hist_migrate_dryrun_{_today_tag()}.md"
     lines: list[str] = []
     lines.append(f"# HIST-MIGRATE Dry-Run Report — {_today_tag()}\n")
-    lines.append(f"_Source DB:_ `{DB_PATH}`\n")
     lines.append(
-        f"_Rows found matching `RECONCILED_%`:_ **{len(rows)}** "
-        f"(operator-confirmed cap: {DEFAULT_ALLOW_COUNT})\n"
+        f"_Source:_ canonical view via `core.trade_memory.load_all_trades()`\n"
+    )
+    lines.append(
+        f"_Rows matched by patterns:_ **{len(rows)}**\n"
     )
     accounts = Counter(r.get("account") for r in rows)
-    lines.append(
-        f"_Accounts seen:_ {dict(accounts)} "
-        f"(expected: {sorted(EXPECTED_ACCOUNTS)})\n"
-    )
+    bots = Counter(r.get("bot_id") for r in rows)
+    lines.append(f"_Accounts seen:_ {dict(accounts)}\n")
+    lines.append(f"_Bot attribution:_ {dict(bots)}\n")
     lines.append("\n## Per-row plan\n")
     lines.append(
         "| # | trade_id | bot_id | strategy (current) | strategy (after) | "
-        "account | pnl | already_migrated? | _skip_reason |\n"
+        "account | source (current) | status |\n"
     )
-    lines.append("|---|---|---|---|---|---|---|---|---|\n")
+    lines.append("|---|---|---|---|---|---|---|---|\n")
     n_to_migrate = n_skipped_done = n_skipped_other = 0
     for i, (row, plan) in enumerate(zip(rows, plans), start=1):
         if plan is None:
-            status = "YES — skip"
+            status = "ALREADY CANONICAL — skip (idempotent)"
             new_strat = row.get("strategy")
-            skip = "row already has source='manual_reconciled'"
             n_skipped_done += 1
         elif "_skip_reason" in plan:
-            status = "NO — but skip"
+            status = f"SKIP: {plan['_skip_reason']}"
             new_strat = row.get("strategy")
-            skip = plan["_skip_reason"]
             n_skipped_other += 1
         else:
-            status = "NO"
+            status = "MIGRATE"
             new_strat = plan["strategy"]
-            skip = ""
             n_to_migrate += 1
         lines.append(
-            f"| {i} | `{row['trade_id']}` | {row.get('bot_id')} | "
+            f"| {i} | `{row.get('trade_id')}` | {row.get('bot_id')} | "
             f"`{row.get('strategy')}` | `{new_strat}` | "
-            f"{row.get('account')} | ${row.get('pnl_dollars')} | "
-            f"{status} | {skip} |\n"
+            f"{row.get('account')} | {row.get('source','<absent>')} | "
+            f"{status} |\n"
         )
     lines.append("\n## Summary\n")
     lines.append(f"- Rows to migrate (`--apply` would change): **{n_to_migrate}**\n")
-    lines.append(f"- Rows already migrated (skip, idempotent): **{n_skipped_done}**\n")
+    lines.append(f"- Rows already canonical (skip): **{n_skipped_done}**\n")
     lines.append(f"- Rows skipped for other reason: **{n_skipped_other}**\n")
     lines.append("\n## Next step\n")
     if n_to_migrate == 0:
-        lines.append("Nothing to do. All rows already migrated.\n")
+        lines.append("Nothing to do. All matching rows already canonical.\n")
     else:
         lines.append(
-            "If this plan looks right, re-run with `--apply`. Each row\n"
-            "is updated via `core.trade_memory.TradeMemory.update_trade`,\n"
-            "which atomically rewrites the per-bot JSON file and syncs\n"
-            "the SQLite shadow. NEVER raw-opens trade_memory.json.\n"
+            "Re-run with `--apply` to perform the migration. Updates land\n"
+            "via `core.trade_memory.TradeMemory.update_trade`, which writes\n"
+            "atomically to the per-bot JSON file AND syncs the SQLite\n"
+            "shadow. Bots MUST be quiesced first — otherwise the in-memory\n"
+            "TradeMemory cache in a running bot will clobber the JSON on\n"
+            "its next save() call (REDTEAM-2 round-1 root cause).\n"
         )
-    path.write_text("".join(lines), encoding="utf-8")
-    return path
+    out_path.write_text("".join(lines), encoding="utf-8")
+    return out_path
 
 
 def _write_applied_report(
-    rows: list[dict], results: list[tuple[bool, str]]
+    rows: list[dict],
+    results: list[tuple[bool, str]],
+    out_path: Path,
+    logs_dir: Path,
 ) -> Path:
     OUT_DIR.mkdir(exist_ok=True)
-    path = OUT_DIR / f"hist_migrate_applied_{_today_tag()}.md"
     lines: list[str] = []
     lines.append(f"# HIST-MIGRATE Applied Report — {_today_tag()}\n")
-    lines.append(f"_Source DB:_ `{DB_PATH}`\n")
     n_ok = sum(1 for ok, _ in results if ok)
     n_fail = sum(1 for ok, _ in results if not ok)
-    lines.append(f"_Migrated successfully:_ **{n_ok}**, _failed/skipped:_ **{n_fail}**\n")
+    lines.append(
+        f"_Migrated successfully:_ **{n_ok}**, _failed/skipped:_ **{n_fail}**\n"
+    )
     lines.append("\n## Per-row outcome\n")
     lines.append("| # | trade_id | bot_id | account | ok? | message |\n")
     lines.append("|---|---|---|---|---|---|\n")
     for i, (row, (ok, msg)) in enumerate(zip(rows, results), start=1):
         flag = "OK" if ok else "FAIL"
         lines.append(
-            f"| {i} | `{row['trade_id']}` | {row.get('bot_id')} | "
+            f"| {i} | `{row.get('trade_id')}` | {row.get('bot_id')} | "
             f"{row.get('account')} | {flag} | {msg} |\n"
         )
 
-    # Post-condition: re-read the DB shadow and confirm each migrated
-    # row now carries source='manual_reconciled' in raw_json.
-    lines.append("\n## Post-apply DB shadow verification\n")
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    verified = []
+    # Post-condition: re-read the canonical view and verify each migrated
+    # row now carries the target fields. Catches the round-1 silent
+    # clobber: a successful apply that disagrees with what's on disk.
+    lines.append("\n## Post-apply canonical-view verification\n")
+    try:
+        from core.trade_memory import load_all_trades
+        all_rows = load_all_trades(logs_dir=str(logs_dir))
+        by_id = {r.get("trade_id"): r for r in all_rows if r.get("trade_id")}
+    except Exception as e:
+        lines.append(f"\n_load_all_trades failed: {e!r}_\n")
+        by_id = {}
+
+    verified: list[tuple[str, bool, str]] = []
     for row, (ok, _) in zip(rows, results):
         if not ok:
             continue
-        cur = conn.execute(
-            "SELECT strategy, raw_json FROM trades WHERE trade_id = ?",
-            (row["trade_id"],),
-        )
-        r = cur.fetchone()
-        if r is None:
-            verified.append((row["trade_id"], False, "row missing post-write"))
+        tid = row.get("trade_id")
+        canonical_row = by_id.get(tid)
+        if canonical_row is None:
+            verified.append((tid, False, "trade_id missing from canonical view"))
             continue
-        try:
-            rj = json.loads(r["raw_json"] or "{}")
-        except Exception:
-            verified.append((row["trade_id"], False, "raw_json unparseable"))
-            continue
+        target_strategy, _ = _target_strategy_label(canonical_row.get("account") or "")
         ok_v = (
-            rj.get("source") == "manual_reconciled"
-            and rj.get("reconciled_from_orphan") is True
-            and r["strategy"].startswith("_reconciled_")
+            canonical_row.get("source") == "manual_reconciled"
+            and canonical_row.get("reconciled_from_orphan") is True
+            and canonical_row.get("strategy") == target_strategy
         )
         verified.append(
-            (row["trade_id"], ok_v,
-             f"strategy={r['strategy']!r} source={rj.get('source')!r} "
-             f"reconciled_from_orphan={rj.get('reconciled_from_orphan')!r} "
-             f"strategy_original_attribution="
-             f"{rj.get('strategy_original_attribution')!r}")
+            (
+                tid,
+                ok_v,
+                f"strategy={canonical_row.get('strategy')!r} "
+                f"source={canonical_row.get('source')!r} "
+                f"reconciled_from_orphan={canonical_row.get('reconciled_from_orphan')!r} "
+                f"strategy_original_attribution={canonical_row.get('strategy_original_attribution')!r}",
+            )
         )
-    conn.close()
-    lines.append("| trade_id | post-write verified? | shadow state |\n")
+    lines.append("| trade_id | post-write verified? | canonical state |\n")
     lines.append("|---|---|---|\n")
     for tid, ok_v, msg in verified:
         lines.append(f"| `{tid}` | {'YES' if ok_v else 'NO'} | {msg} |\n")
-    path.write_text("".join(lines), encoding="utf-8")
-    return path
+    out_path.write_text("".join(lines), encoding="utf-8")
+    return out_path
 
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Backfill source flag on RECONCILED_* rows in trade memory."
+        description=(
+            "Backfill source flag on RECONCILED_* rows across the canonical "
+            "trade_memory view. Operates on JSON via TradeMemory.update_trade — "
+            "never raw-opens trade_memory.json. Run with bots quiesced "
+            "(REDTEAM-2 round-1 race)."
+        )
     )
     parser.add_argument(
         "--apply",
@@ -317,66 +419,51 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         help="Actually perform the migration. Default is dry-run.",
     )
     parser.add_argument(
-        "--allow-count",
-        type=int,
-        default=DEFAULT_ALLOW_COUNT,
+        "--patterns",
+        type=str,
+        default=",".join(DEFAULT_PATTERNS),
         help=(
-            f"Cap on rows-to-migrate. HALTs if the DB has more than this "
-            f"many RECONCILED_* rows not yet migrated. Default {DEFAULT_ALLOW_COUNT}."
+            "Comma-separated regexes to match trade_ids against. "
+            f"Default: {','.join(DEFAULT_PATTERNS)!r}."
         ),
     )
     parser.add_argument(
-        "--allow-account",
-        action="append",
+        "--logs-dir",
+        type=str,
+        default=str(DEFAULT_LOGS_DIR),
+        help=f"Override the trade_memory directory. Default: {DEFAULT_LOGS_DIR}.",
+    )
+    parser.add_argument(
+        "--out",
+        type=str,
         default=None,
         help=(
-            "Add an account to the expected-account allowlist. Repeat to "
-            "add multiple. Default allowlist: " + ",".join(sorted(EXPECTED_ACCOUNTS))
+            "Override the dry-run / applied-report output path. Default: "
+            "out/hist_migrate_{dryrun,applied}_<date>.md"
         ),
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
-    expected_accounts = set(EXPECTED_ACCOUNTS)
-    if args.allow_account:
-        expected_accounts.update(args.allow_account)
+    patterns = tuple(re.compile(p) for p in args.patterns.split(",") if p.strip())
+    if not patterns:
+        print(
+            "FATAL: --patterns produced an empty pattern set; nothing to match.",
+            file=sys.stderr,
+        )
+        return 2
+    logs_dir = Path(args.logs_dir)
 
-    rows = _read_db_reconciled_rows()
+    rows = _read_canonical_rows(logs_dir, patterns)
     plans = [_plan_update(r) for r in rows]
     n_to_migrate = sum(1 for p in plans if p and "_skip_reason" not in p)
 
-    # Safety: HALT if we'd migrate more rows than operator approved.
-    if n_to_migrate > args.allow_count:
-        print(
-            f"HALT: {n_to_migrate} rows would be migrated, but --allow-count is "
-            f"{args.allow_count}. Re-run with --allow-count {n_to_migrate} after "
-            f"explicit operator approval.",
-            file=sys.stderr,
-        )
-        report = _write_dryrun_report(rows, plans)
-        print(f"Dry-run report written to: {report}")
-        return 2
-
-    # Safety: HALT if any row is from an unexpected account.
-    unexpected = [
-        r["trade_id"] for r in rows if (r.get("account") or "") not in expected_accounts
-    ]
-    if unexpected:
-        print(
-            "HALT: rows from accounts NOT in the expected allowlist:\n  "
-            + "\n  ".join(unexpected)
-            + f"\nExpected: {sorted(expected_accounts)}\n"
-              "Re-run with --allow-account <name> for each new account after "
-              "explicit operator approval.",
-            file=sys.stderr,
-        )
-        report = _write_dryrun_report(rows, plans)
-        print(f"Dry-run report written to: {report}")
-        return 2
-
     if not args.apply:
-        report = _write_dryrun_report(rows, plans)
+        out_path = Path(args.out) if args.out else (
+            OUT_DIR / f"hist_migrate_dryrun_{_today_tag()}.md"
+        )
+        _write_dryrun_report(rows, plans, out_path)
         print(f"DRY-RUN — {n_to_migrate} rows would be migrated.")
-        print(f"Report: {report}")
+        print(f"Report: {out_path}")
         print("Re-run with --apply to perform the migration.")
         return 0
 
@@ -384,19 +471,22 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     results: list[tuple[bool, str]] = []
     for row, plan in zip(rows, plans):
         if plan is None:
-            results.append((True, "skip (already migrated)"))
+            results.append((True, "skip (already canonical)"))
             continue
         if "_skip_reason" in plan:
             results.append((False, plan["_skip_reason"]))
             continue
-        ok, msg = _apply_one(row, plan)
+        ok, msg = _apply_one(row, plan, logs_dir)
         results.append((ok, msg))
 
-    report = _write_applied_report(rows, results)
+    out_path = Path(args.out) if args.out else (
+        OUT_DIR / f"hist_migrate_applied_{_today_tag()}.md"
+    )
+    _write_applied_report(rows, results, out_path, logs_dir)
     n_ok = sum(1 for ok, _ in results if ok)
     n_fail = sum(1 for ok, _ in results if not ok)
     print(f"APPLIED — ok={n_ok}, failed/skipped={n_fail}.")
-    print(f"Report: {report}")
+    print(f"Report: {out_path}")
     return 0 if n_fail == 0 else 1
 
 
