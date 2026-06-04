@@ -13,7 +13,9 @@ timestamped backup before writing. Supports --dry-run.
 
 import argparse
 import json
+import os
 import shutil
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -77,8 +79,10 @@ def main():
     shutil.copy2(path, backup)
     print(f"Backup saved: {backup}")
 
-    with path.open("w") as f:
-        json.dump(trades, f, indent=2, default=str)
+    tmp = path.parent / f"{path.name}.tmp.{os.getpid()}.{threading.get_ident()}"
+    tmp.write_text(json.dumps(trades, indent=2, default=str),
+                   encoding="utf-8")
+    os.replace(str(tmp), str(path))
 
     print(summary)
     return 0
