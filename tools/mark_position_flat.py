@@ -218,11 +218,15 @@ def main():
             out_data = raw
         else:
             out_data = trades
-        # Atomic write via temp + rename
-        tmp = path.with_suffix(".json.tmp")
+        # Atomic write via temp + rename (pid/tid-suffixed tmp so two
+        # concurrent invocations on the same destination don't collide
+        # on Windows — same idiom as core/trade_memory.py:save()).
+        import os as _os
+        import threading as _threading
+        tmp = path.parent / f"{path.name}.tmp.{_os.getpid()}.{_threading.get_ident()}"
         tmp.write_text(json.dumps(out_data, indent=2, default=str),
                        encoding="utf-8")
-        tmp.replace(path)
+        _os.replace(str(tmp), str(path))
 
     affected_files = ", ".join(path.name for path, _, _ in per_file_matches)
     print(f"\n[APPLIED] Modified {modified} trade record(s) "
