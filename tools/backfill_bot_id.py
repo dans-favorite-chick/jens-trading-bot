@@ -51,7 +51,7 @@ def main():
         print(f"File not found: {path}")
         return 1
 
-    with path.open("r") as f:
+    with path.open("r", encoding="utf-8") as f:
         trades = json.load(f)
 
     counts = {"prod": 0, "sim": 0, "legacy": 0, "unknown": 0}
