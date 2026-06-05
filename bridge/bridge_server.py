@@ -28,7 +28,7 @@ from config.settings import (
     DISCONNECT_THRESHOLD_S, TICK_BUFFER_SIZE, FILE_FALLBACK_PATH,
     FILE_POLL_INTERVAL_S, LOG_DIR,
 )
-from bridge.oif_writer import write_oif, check_latest_fill
+from bridge.oif_writer import write_oif, write_partial_exit, check_latest_fill
 
 try:
     import websockets
@@ -636,9 +636,111 @@ class BridgeServer:
         # The action carries "direction" = LONG/SHORT of the filled position;
         # stop/target exits go the opposite way.
         direction = data.get("direction")
-        paths = write_oif(action, qty, stop_price, target_price, trade_id=trade_id,
-                          order_type=order_type, limit_price=limit_price,
-                          account=account, direction=direction)
+
+        # ── 2026-06-05 SLOT-INTERLOCK-BYPASS T-BRIDGE swap ──────────────
+        # OPERATOR-APPROVED: 2026-06-05.
+        #
+        # Closes FINDING-2026-06-05-SLOT-INTERLOCK-BYPASS-T-BRIDGE per
+        # Option A of out/propose_bridge_server_ws_exit_sized_2026-06-05.md.
+        #
+        # For action="EXIT" with qty>0 + valid direction, translate the
+        # legacy account-wide CLOSEPOSITION emit (write_oif("EXIT", ...) →
+        # PLACE;<acct>;<inst>;<side>;;MARKET;...; qty-empty, NT8 flattens
+        # net position across all strategies on the account) into a sized
+        # PARTIAL_EXIT_<dir> emit (write_partial_exit → write_oif with
+        # action="PARTIAL_EXIT_LONG"|"PARTIAL_EXIT_SHORT" → PLACE;<acct>;
+        # <inst>;<opp_side>;<qty>;MARKET;...; qty honored).
+        #
+        # This is the bridge-layer counterpart to the Cluster 2 swaps at:
+        #   - bots/_trade_entry.py:1255 (T1 OCO-fail flatten, 8db98ac)
+        #   - bots/_trade_exit.py:146 (T2 OIF fallback, 8db98ac)
+        # and inherits the same proven semantics as the older
+        # bots/_trade_entry.py:1109 (REDTEAM-R2-1-FIX-V2, 354bb3c) and
+        # bots/_scale_out.py:92 swaps.
+        #
+        # Preserve carve-outs:
+        #   - qty=0 explicit  → CLOSEPOSITION (canonical kill-switch /
+        #                       panic-flatten path; intentionally account-
+        #                       wide).
+        #   - qty key MISSING → CLOSEPOSITION + warn (backward-compat for
+        #                       malformed bot messages; bots SHOULD always
+        #                       send qty=N for normal exits).
+        #   - direction invalid (anything but LONG/SHORT) → REJECT + log
+        #                       error, emit nothing. Silent fall-through
+        #                       to CLOSEPOSITION here would re-open the
+        #                       multi-strategy wipeout hole the swap closes.
+        use_sized_partial_exit = False
+        if action == "EXIT":
+            qty_was_in_data = "qty" in data
+            direction_was_in_data = "direction" in data
+            try:
+                qty_int = int(qty) if qty is not None else 0
+            except (TypeError, ValueError):
+                qty_int = 0
+            dir_upper = str(direction or "").upper()
+            valid_dirs = ("LONG", "SHORT")
+
+            if not qty_was_in_data:
+                # Backward-compat: malformed bot messages without qty.
+                # Bot SHOULD always send qty=N for normal exits.
+                trade_log.warning(
+                    f"[SLOT-INTERLOCK] [T-BRIDGE:{trade_id}] EXIT message "
+                    f"from bot={bot_name} missing 'qty' field — falling "
+                    f"back to legacy CLOSEPOSITION. Bot should always "
+                    f"send qty=N for normal exits."
+                )
+            elif qty_int <= 0:
+                # qty=0 (or negative): canonical kill-switch / panic
+                # flatten. Falls through to legacy CLOSEPOSITION.
+                pass
+            elif not direction_was_in_data:
+                # Backward-compat: bot is on the older WS schema that
+                # doesn't include `direction` in the EXIT payload. The
+                # sized swap engages only when the bot is updated to
+                # send `direction: pos.direction` (see Cluster 2
+                # bots/_trade_exit.py + bots/sim_bot.py + bots/base_bot.py).
+                # Falls through to legacy CLOSEPOSITION — preserves
+                # current behavior verbatim for any caller that hasn't
+                # opted in to the sized payload yet.
+                trade_log.warning(
+                    f"[SLOT-INTERLOCK] [T-BRIDGE:{trade_id}] EXIT message "
+                    f"from bot={bot_name} has qty={qty_int} but no "
+                    f"'direction' field — falling back to legacy "
+                    f"CLOSEPOSITION. For sized PARTIAL_EXIT engagement, "
+                    f"add direction=LONG|SHORT to the WS payload."
+                )
+            elif dir_upper in valid_dirs:
+                use_sized_partial_exit = True
+            else:
+                # Direction key PRESENT but value unrecognized.
+                # REJECT — silent fall-through to CLOSEPOSITION here
+                # would silently re-open the bypass we're closing,
+                # because a bot that bothered to include `direction`
+                # is signaling it wants the sized path; an unrecognized
+                # value is a malformed message that must not be silently
+                # treated as account-wide flatten.
+                trade_log.error(
+                    f"[SLOT-INTERLOCK] [T-BRIDGE:{trade_id}] EXIT REJECTED "
+                    f"from bot={bot_name}: invalid direction "
+                    f"{direction!r} with qty={qty_int}. Valid values: "
+                    f"LONG, SHORT. No OIF emitted."
+                )
+                return  # Skip emit, skip ack — operator/bot must retry.
+
+        if use_sized_partial_exit:
+            trade_log.info(
+                f"[SLOT-INTERLOCK] [T-BRIDGE:{trade_id}] EXIT translated "
+                f"to sized PARTIAL_EXIT — direction={dir_upper} "
+                f"n_contracts={qty_int} account={account} bot={bot_name}"
+            )
+            paths = write_partial_exit(
+                direction=dir_upper, n_contracts=qty_int,
+                trade_id=trade_id, account=account,
+            )
+        else:
+            paths = write_oif(action, qty, stop_price, target_price, trade_id=trade_id,
+                              order_type=order_type, limit_price=limit_price,
+                              account=account, direction=direction)
 
         if not paths and action not in ("CANCEL_ALL", "CANCELALLORDERS"):
             trade_log.error(f"[OIF FAIL:{trade_id}] write_oif returned 0 files for {action}!")

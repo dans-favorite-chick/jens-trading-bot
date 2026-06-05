@@ -26,7 +26,7 @@ Sibling concerns:
 | 1 | `bots/_ws_dispatcher.py:725` | (dispatch gate) | n/a | n/a | `candidate.strategy` | n/a | ✓ ENTRY GATE | **A** | Per-signal interlock check before processing |
 | 2 | `bots/_ws_dispatcher.py:730` | (dispatch gate) | n/a | n/a | `_pending_signal.strategy` | n/a | ✓ ENTRY GATE | **A** | Pending-signal interlock check |
 | 3 | `bots/sim_bot.py:694` | (dispatch gate) | n/a | n/a | `strat.name` | n/a | ✓ ENTRY GATE | **A** | Sim-bot eval loop interlock |
-| 4 | `bridge/bridge_server.py:639` | `write_oif(action, qty, ...)` | `data["qty"]` | `data["account"]` | implicit (action-dispatched) | YES (action=PLACE) | downstream of entry gate | **A*** | Receives WS-validated actions; bot has passed gate. **WS EXIT path uses CLOSEPOSITION** (see protected-file proposal). |
+| 4 | `bridge/bridge_server.py:639` | `write_oif(action, qty, ...)` + (NEW 2026-06-05) `write_partial_exit` for action="EXIT" + qty>0 + valid direction | `data["qty"]` | `data["account"]` | `data["direction"]` (validated LONG/SHORT only for sized swap) | YES (action=PLACE) but receives prior gate | downstream of entry gate | **A** | **Site 4 closed at T-BRIDGE sprint** — action="EXIT" with qty>0 + valid direction translates to sized `write_partial_exit`; qty=0 retains CLOSEPOSITION (kill-switch); missing qty falls through to legacy with warn; invalid direction REJECTS the emit. See FINDING-2026-06-05-SLOT-INTERLOCK-BYPASS-T-BRIDGE + FINDING-2026-06-05-T-BRIDGE-SIZED-EXIT-RESOLVED. |
 | 5 | `bots/_trade_entry.py:1109` | `_sink_submit_partial_exit` (STACKED FILL recovery) | `contracts` (entry's) | `_account` | `signal.strategy` (in tid + log) | NO (PARTIAL_EXIT, sized) | N (exit semantics) | **A** | Already remediated in `354bb3c` (REDTEAM-R2-1-FIX-V2). Mature pattern. |
 | 6 | `bots/_trade_entry.py:1177` | `_sink_submit_protect` (OCO post-fill) | `contracts` | `_account` | `signal.strategy` (in tid) | NO (stop+target OCO only) | N | **A** | OCO bracket attaches to confirmed position; no new entry |
 | 7 | `bots/_trade_entry.py:1255` | `_sink_submit_exit` (OCO-fail EMERGENCY FLATTEN) | `contracts` | `_account` | (no strategy passed) | NO (CLOSEPOSITION) | N (exit semantics) but **unbounded primitive** | **B** | Closed in this sprint: swapped to `_sink_submit_partial_exit` sized to `contracts`. Account-wide CLOSEPOSITION would flatten unrelated strategies on multi-strategy Sim101. |
@@ -34,9 +34,13 @@ Sibling concerns:
 | 9 | `bots/_scale_out.py:92` | `_sink_submit_partial_exit` (SCALE-OUT) | `n_exit=1` | `pos.account` | implicit (from pos) | NO (PARTIAL_EXIT, sized) | N | **A** | Sized exit, position-attributed |
 | 10 | `bots/base_bot.py:625` | `_sink_submit_modify_stop` (stop cancel+replace) | `pos.contracts` | `pos.account` | implicit (from pos) | NO (modify existing stop) | N | **A** | Sized cancel+replace |
 
-## A* note on site 4 (bridge_server.py:639)
+## A* note on site 4 (bridge_server.py:639) — CLOSED at T-BRIDGE sprint
 
-The bridge-level `write_oif` is the WS-message handler that the bot uses for primary action dispatch (entry PLACE, OCO PROTECT, EXIT, MODIFY_STOP, CANCEL). The bot has ALREADY passed `is_flat_for` before reaching this point for entry signals. For EXIT action specifically, the bridge writes an unbounded CLOSEPOSITION line — the same primitive that sites 7 & 8 used until this sprint. The bridge fix is documented in `out/propose_bridge_server_ws_exit_sized_2026-06-05.md` — DEFERRED to a protected-file sprint with operator OA.
+The bridge-level `write_oif` is the WS-message handler that the bot uses for primary action dispatch (entry PLACE, OCO PROTECT, EXIT, MODIFY_STOP, CANCEL). The bot has ALREADY passed `is_flat_for` before reaching this point for entry signals. For EXIT action specifically, the bridge previously wrote an unbounded CLOSEPOSITION line — the same primitive that sites 7 & 8 used until Cluster 2.
+
+**2026-06-05 update: T-BRIDGE protected-edit sprint shipped Option A** (`OPERATOR-APPROVED 2026-06-05`). The bridge now translates `action="EXIT"` with `qty > 0` and a valid `direction` (LONG/SHORT) into a sized `write_partial_exit(direction, n_contracts=qty, ...)` call. The kill-switch path (`qty=0`) retains intentional account-wide CLOSEPOSITION semantics. Missing `qty` key falls through to legacy with a `[SLOT-INTERLOCK]` warn. An invalid direction REJECTS the emit entirely rather than silently fall through (the silent fall-through would have re-opened the multi-strategy wipeout hole).
+
+8 behavioral tests in `tests/test_bridge_ws_exit_partial_exit_translation.py` pin the swap + the carve-outs + the OIF byte-level output. With this sprint shipped, the audit's bypass-closure coverage is complete across the full exit topology — no normal-path code path emits account-wide CLOSEPOSITION on multi-strategy Sim101.
 
 ## `original_contracts` hazard (Phase 3)
 
@@ -63,12 +67,13 @@ Any future PR that violates the sentinel trips the test and forces a tracker dis
 
 | Tag | Count | Sites |
 |---|---|---|
-| (A) Safe | 7 | 1, 2, 3, 5, 6, 9, 10 |
-| (A*) Safe via upstream gate, with separate protected-file fix proposal | 1 | 4 |
-| (B) Bypass — closed in this sprint | 2 | 7, 8 (OIF fallback half only) |
+| (A) Safe | 8 | 1, 2, 3, 4 (closed at T-BRIDGE sprint 2026-06-05), 5, 6, 9, 10 |
+| (B) Bypass — closed | 2 | 7, 8 (OIF fallback at Cluster 2 8db98ac; PRIMARY WS path closed at T-BRIDGE sprint) |
 | (C) Bypass-likely | 0 | — |
 
-**Net unprotected bypasses fixed: 2.** **Protected-file proposals filed: 1.** **Sentinels shipped: 2.**
+**Net unprotected bypasses fixed: 2 (Cluster 2 sites 7+8).** **Protected-file proposals filed: 1 (T-BRIDGE — SHIPPED at T-BRIDGE sprint with OPERATOR-APPROVED 2026-06-05).** **Sentinels shipped: 2 (Cluster 2).** **Bridge-layer CLOSEPOSITION translation: SHIPPED.**
+
+After T-BRIDGE: ALL normal-path exit OIFs emit sized PARTIAL_EXIT. Kill-switch path (qty=0) retains intentional CLOSEPOSITION. NO multi-strategy Sim101 wipeout exposure on any normal-exit emit.
 
 ## Cross-references
 
