@@ -109,6 +109,26 @@ TICK_FRESH_WARN_S = 2 * 60
 TICK_FRESH_CRIT_S = 5 * 60
 STALE_OIF_AGE_S = 30
 LOG_TAIL_LINES = 50
+
+# 2026-06-05 NT8 DISCONNECT — compound signal (tick_age > 300s AND
+# heartbeat_age > 60s). Distinguishes "NT8 application disconnected"
+# from SILENT_STALL ("heartbeat fresh, ticks stale, NT8 LOOKS
+# connected"). Pure tick-age would false-positive during legitimate
+# quiet periods; pairing with heartbeat-age (a separate TCP signal)
+# eliminates that.
+NT8_DISCONNECT_TICK_S = 5 * 60     # 300s
+NT8_DISCONNECT_HB_S = 60           # 60s
+
+# 2026-06-05 PHANTOMGUARD DEDUP — when a condition stays ACTIVE for
+# this long without an emit, fire ONE escalation incident at the
+# default interval. Default 15 min mirrors the operator's "page me
+# again if it's still broken after 15 minutes" expectation.
+# (FINDING-2026-06-05-PHANTOMGUARD-DEDUP-BUG: pre-fix watcher emitted
+# one incident per spot/deep cycle for the entire duration of an
+# active condition. The 12h 2026-06-04 SILENT_STALL produced 700+
+# incident files and 29k overall, blowing up the operator's SMS
+# channel.)
+PHANTOMGUARD_ESCALATION_INTERVAL_S = 15 * 60
 RISK_PER_TRADE_MAX_USD = 200.0     # Per Jennifer 2026-04-24: $200/day replaces legacy $20
 DAILY_STRATEGY_LOSS_CAP_USD = 200.0
 DAILY_STRATEGY_FLOOR_USD = 1500.0
@@ -165,15 +185,213 @@ class Finding:
     context: dict = field(default_factory=dict)
     timestamp: str = field(default_factory=lambda: datetime.now(CT_TZ).isoformat())
 
+    @property
+    def phase(self) -> str:
+        """Convenience: the phase tag injected by FindingDedup.
+        Empty string when dedup hasn't tagged this finding (e.g.,
+        in legacy code paths that bypass the cycle wrapper).
+        """
+        try:
+            return str((self.context or {}).get("phase", ""))
+        except Exception:
+            return ""
+
     def as_sms(self) -> str:
         cst = datetime.fromisoformat(self.timestamp).strftime("%Y-%m-%d %H:%M:%S CT")
+        # 2026-06-05 PHANTOMGUARD DEDUP: surface phase in the SMS so the
+        # operator knows whether this is an open / escalation / clear.
+        # Phase is empty when the finding bypassed the dedup wrapper
+        # (e.g., legacy direct-_handle call from tests).
+        phase = self.phase
+        phase_prefix = f" [{phase}]" if phase else ""
         return (
-            f"PHOENIX BOT {self.severity}\n"
+            f"PHOENIX BOT {self.severity}{phase_prefix}\n"
             f"Time: {cst}\n"
             f"Issue: {self.category}\n"
             f"Detail: {self.detail[:140]}\n"
             f"Check logs/incidents/ for full report."
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# FindingDedup — incident-emit state machine
+#
+# FINDING-2026-06-05-PHANTOMGUARD-DEDUP-BUG: pre-fix, the spot and deep
+# loops emitted one Finding per check-cycle for every active condition.
+# A 12-hour SILENT_STALL produced 700+ incident files; over months the
+# operator accumulated 29k incident files and a flooded SMS channel.
+# She silenced SMS to stop the noise — which is precisely why today's
+# real 12-hour SILENT_STALL went undetected.
+#
+# This state machine collapses the per-cycle emit pattern to a per-
+# transition emit pattern:
+#
+#   - phase=OPEN       on RESOLVED→ACTIVE (or first-ever ACTIVE)
+#   - phase=ESCALATED  while ACTIVE and elapsed >= ESCALATION_INTERVAL_S
+#                       since last emit (defaults to 15 min)
+#   - phase=RESOLVED   on ACTIVE→RESOLVED (when a category that was
+#                       active in the prior cycle is absent from the
+#                       current cycle's findings)
+#   - silent           otherwise (the gap that fixes the flood)
+#
+# Operates per WatcherAgent loop (spot vs deep get separate instances)
+# so the disjoint category sets don't cross-contaminate.
+# ═══════════════════════════════════════════════════════════════════════
+
+class FindingDedup:
+    """Per-category OPEN/ESCALATED/RESOLVED state machine.
+
+    Thread-affinity: each instance owns its state dict and must not be
+    shared across threads. The watcher's spot_loop and deep_loop each
+    instantiate their own.
+
+    State shape per category:
+        {
+          "status":        "ACTIVE",
+          "since_ts":      <isoformat string of first OPEN emit>,
+          "since_mono":    <monotonic float of OPEN, for elapsed math>,
+          "last_emit_ts":  <isoformat string of most recent emit>,
+          "last_emit_mono": <monotonic of most recent emit>,
+          "emit_count":    <int>,
+        }
+    """
+
+    def __init__(self, escalation_interval_s: Optional[float] = None,
+                 now_fn: Optional[Callable[[], float]] = None,
+                 iso_now_fn: Optional[Callable[[], str]] = None):
+        self._escalation_interval_s = (
+            float(escalation_interval_s)
+            if escalation_interval_s is not None
+            else float(PHANTOMGUARD_ESCALATION_INTERVAL_S)
+        )
+        # now_fn returns a monotonic-style float; iso_now_fn returns an
+        # ISO timestamp. Both are injection points for tests so we
+        # don't have to monkeypatch time.monotonic / datetime.now.
+        self._now = now_fn if now_fn is not None else time.monotonic
+        self._iso_now = (
+            iso_now_fn if iso_now_fn is not None
+            else (lambda: datetime.now(CT_TZ).isoformat())
+        )
+        self._state: dict[str, dict] = {}
+
+    @property
+    def state(self) -> dict[str, dict]:
+        """Read-only view of the per-category state. Tests inspect this."""
+        return self._state
+
+    def cycle(self, findings: list["Finding"]) -> list["Finding"]:
+        """Process one watcher cycle.
+
+        Input: every Finding the check methods produced this cycle.
+        Output: only the Findings that should actually be emitted to
+        the incident pipeline (OPEN, ESCALATED, or RESOLVED phase).
+        """
+        try:
+            now_mono = float(self._now())
+        except Exception:
+            now_mono = time.monotonic()
+        try:
+            iso_now = str(self._iso_now())
+        except Exception:
+            iso_now = datetime.now(CT_TZ).isoformat()
+
+        # Map category -> first representative finding so we keep the
+        # original severity/detail/context. If multiple findings share
+        # a category in one cycle (e.g., tick_freshness MINOR + RED
+        # variants — see _check_bridge_health) the first one wins —
+        # the later same-category finding is silently dropped.
+        category_findings: dict[str, "Finding"] = {}
+        for f in findings:
+            if f.category not in category_findings:
+                category_findings[f.category] = f
+        active_categories = set(category_findings.keys())
+
+        emits: list["Finding"] = []
+
+        # ── OPEN + ESCALATED transitions ─────────────────────────
+        for cat, finding in category_findings.items():
+            st = self._state.get(cat)
+            if st is None or st.get("status") == "RESOLVED":
+                # RESOLVED→ACTIVE transition (or first-ever sighting).
+                self._state[cat] = {
+                    "status":         "ACTIVE",
+                    "since_ts":       iso_now,
+                    "since_mono":     now_mono,
+                    "last_emit_ts":   iso_now,
+                    "last_emit_mono": now_mono,
+                    "emit_count":     1,
+                }
+                self._tag(finding, phase="OPEN", emit_count=1,
+                          since_ts=iso_now)
+                emits.append(finding)
+                continue
+            # status == "ACTIVE" — check escalation interval.
+            elapsed = now_mono - float(st.get("last_emit_mono", now_mono))
+            if elapsed >= self._escalation_interval_s:
+                st["last_emit_ts"] = iso_now
+                st["last_emit_mono"] = now_mono
+                st["emit_count"] = int(st.get("emit_count", 1)) + 1
+                self._tag(
+                    finding,
+                    phase="ESCALATED",
+                    emit_count=st["emit_count"],
+                    since_ts=st.get("since_ts", iso_now),
+                    elapsed_s=round(elapsed, 1),
+                )
+                emits.append(finding)
+            # else: silent suppress — the dedup half of the fix.
+
+        # ── RESOLVED transitions ─────────────────────────────────
+        # Any category currently ACTIVE in our state that is NOT in
+        # this cycle's findings has cleared. Synthesize a clear
+        # finding and flip state.
+        for cat, st in list(self._state.items()):
+            if st.get("status") != "ACTIVE":
+                continue
+            if cat in active_categories:
+                continue
+            st["status"] = "RESOLVED"
+            elapsed = now_mono - float(st.get("since_mono", now_mono))
+            clear = Finding(
+                severity="MINOR",  # all-clear is informational
+                category=cat,
+                detail=(
+                    f"{cat} CLEARED — active for "
+                    f"{round(elapsed, 1)}s "
+                    f"({st.get('emit_count', 1)} emit(s) during window)."
+                ),
+                context={
+                    "since_ts":         st.get("since_ts"),
+                    "active_duration_s": round(elapsed, 1),
+                    "active_emit_count": st.get("emit_count", 1),
+                },
+            )
+            self._tag(clear, phase="RESOLVED",
+                      emit_count=st.get("emit_count", 1),
+                      since_ts=st.get("since_ts"))
+            emits.append(clear)
+
+        return emits
+
+    @staticmethod
+    def _tag(finding: "Finding", **kwargs) -> None:
+        """Inject phase + dedup metadata into the finding's context
+        so the downstream incident file + SMS can surface it."""
+        try:
+            if finding.context is None:
+                finding.context = {}
+            elif not isinstance(finding.context, dict):
+                # Defensive — context should always be a dict per
+                # dataclass default, but be loud if it isn't.
+                logger.warning(
+                    "[FindingDedup] finding context was %r, expected dict",
+                    type(finding.context).__name__,
+                )
+                finding.context = {}
+            finding.context.update({k: v for k, v in kwargs.items()
+                                    if v is not None})
+        except Exception as e:
+            logger.warning("[FindingDedup] tagging failed: %r", e)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -616,6 +834,12 @@ class WatcherAgent:
         self._last_trade_ts: Optional[float] = None
         self._last_deep_run: Optional[datetime] = None
 
+        # 2026-06-05 PHANTOMGUARD DEDUP — separate state machines
+        # for spot vs deep so disjoint category sets don't cross-
+        # contaminate. See FINDING-2026-06-05-PHANTOMGUARD-DEDUP-BUG.
+        self._spot_dedup = FindingDedup()
+        self._deep_dedup = FindingDedup()
+
     # ── Severity dispatcher ────────────────────────────────────────
     def _handle(self, finding: Finding) -> None:
         logger.info(f"[{finding.severity}] {finding.category}: {finding.detail}")
@@ -691,6 +915,52 @@ class WatcherAgent:
                     "stall_message": recent_stall.get("message"),
                     "tick_age_s": tick_age,
                     "heartbeat_age_s": hb_age,
+                    "in_market_hours": _is_market_hours(),
+                },
+            ))
+
+        # 2026-06-05 NT8_DISCONNECTED — distinct from SILENT_STALL.
+        # Compound signal: tick stale AND heartbeat stale = NT8 is
+        # fully disconnected (or shut down). Distinguishes the
+        # 2026-06-04 21:43→2026-06-05 09:00 12h outage (NT8 was
+        # offline per operator confirmation) from a chart-lockup
+        # SILENT_STALL (heartbeats stay fresh). Watcher emits this
+        # as a DISCRETE category so the operator's recovery doc
+        # (docs/operator/nt8_disconnect_recovery.md) maps cleanly.
+        # The bridge ALSO emits "NT8 SOCKET_DEAD" event when
+        # hb_age > DISCONNECT_THRESHOLD_S — we honor that signal
+        # too as a stronger indicator.
+        bridge_says_dead = False
+        for ev in reversed(events[-30:]):
+            msg = (ev or {}).get("message") or ""
+            if "SOCKET_DEAD" in msg or "SOCKET DEAD" in msg:
+                bridge_says_dead = True
+                break
+            if "SOCKET RESUMED" in msg:
+                break
+        compound_disconnect = (
+            tick_age is not None and hb_age is not None
+            and tick_age > NT8_DISCONNECT_TICK_S
+            and hb_age > NT8_DISCONNECT_HB_S
+        )
+        if bridge_says_dead or compound_disconnect:
+            sev = "RED_ALERT" if _is_market_hours() else "MINOR"
+            trigger = ("bridge SOCKET_DEAD" if bridge_says_dead
+                       else "compound (tick_age > {0}s AND hb_age > {1}s)".format(
+                           NT8_DISCONNECT_TICK_S, NT8_DISCONNECT_HB_S))
+            findings.append(Finding(
+                severity=sev, category="nt8_disconnected",
+                detail=(
+                    f"NT8 appears DISCONNECTED (trigger={trigger}). "
+                    f"Distinct from SILENT_STALL (which would have heartbeats "
+                    f"fresh). See docs/operator/nt8_disconnect_recovery.md "
+                    f"for the first-things-to-check list."
+                ),
+                context={
+                    "tick_age_s": tick_age,
+                    "heartbeat_age_s": hb_age,
+                    "trigger": trigger,
+                    "bridge_says_socket_dead": bridge_says_dead,
                     "in_market_hours": _is_market_hours(),
                 },
             ))
@@ -806,7 +1076,12 @@ class WatcherAgent:
         findings += self._check_oif_folders()
         findings += self._check_processes()
         findings += self._check_log_tails()
-        for f in findings:
+        # 2026-06-05 PHANTOMGUARD DEDUP — collapse per-cycle re-emits
+        # to per-transition emits. The check methods produce findings
+        # on every active condition; the dedup layer decides which
+        # ones become actual incident files.
+        emit_findings = self._spot_dedup.cycle(findings)
+        for f in emit_findings:
             self._handle(f)
         return findings
 
@@ -974,7 +1249,12 @@ class WatcherAgent:
         findings += self._check_risk_rules()
         findings += self._check_ai_health()
         findings += self._check_fmp_sanity_mode()
-        for f in findings:
+        # 2026-06-05 PHANTOMGUARD DEDUP — see run_spot_checks comment.
+        # Deep loop uses its own dedup instance so spot categories
+        # (silent_stall, bridge_down, etc.) and deep categories
+        # (ai_unresponsive, risk_rules, etc.) don't share state.
+        emit_findings = self._deep_dedup.cycle(findings)
+        for f in emit_findings:
             self._handle(f)
         self._last_deep_run = _now_ct()
         return findings
