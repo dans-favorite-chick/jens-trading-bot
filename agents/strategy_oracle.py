@@ -622,6 +622,27 @@ def _check_regime_gate(conn, mode: str) -> dict:
 
     use_filter_raw = os.environ.get("ORACLE_REGIME_GATE_FILTER", "")
     use_filter = use_filter_raw.strip().lower() not in ("", "0", "false", "no", "off")
+    use_detrend_raw = os.environ.get("ORACLE_REGIME_GATE_DETREND", "")
+    use_detrend = use_detrend_raw.strip().lower() not in ("", "0", "false", "no", "off")
+
+    # Mutual exclusion: the two variants test different methodology
+    # questions (sparse-month contamination vs gradual drift) and combining
+    # them produces a meaningless cross-method result. Fail loud at call
+    # site so the operator picks one. 2026-06-05 R2 Finding 3 sprint.
+    if use_filter and use_detrend:
+        raise ValueError(
+            "ORACLE_REGIME_GATE_FILTER and ORACLE_REGIME_GATE_DETREND are "
+            "mutually exclusive — pick one variant per Oracle run."
+        )
+
+    if use_detrend:
+        kwargs = {}
+        if z_threshold is not None:
+            kwargs["z_threshold"] = z_threshold
+        return regime_gate.check_regime_stability_detrended(
+            conn, mode, **kwargs
+        )
+
     if use_filter:
         try:
             sparse_factor = float(

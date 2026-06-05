@@ -48,6 +48,7 @@ import math
 from typing import Literal
 
 import duckdb
+import numpy as np
 import pandas as pd
 
 from analytics import prepared_queries
@@ -63,12 +64,19 @@ Z_THRESHOLD_DEFAULT = 1.5
 # this we report insufficient-data rather than running a degenerate test.
 _MIN_BASELINE_MONTHS = 4
 
-# We pull 7 months from monthly_sharpe_proxy. Typical result: 6 baseline + 1 latest.
-# Early in a calendar month the rolling 7-month SQL window can produce up to 8 distinct
-# months (now() - 7 mo cutoff straddles an extra month boundary), so baseline_n_months
-# may occasionally be 7 instead of 6. This is statistically fine -- more baseline data
-# only improves the z-score's reliability.
-_PULL_MONTHS = 7
+# We pull 13 months from monthly_sharpe_proxy. Typical result: 12 baseline +
+# 1 latest. Early in a calendar month the rolling 13-month SQL window can
+# produce up to 14 distinct months (now() - 13 mo cutoff straddles an extra
+# month boundary), so baseline_n_months may occasionally be 13 instead of 12.
+# This is statistically fine -- more baseline data only improves z reliability.
+#
+# 2026-06-05 (R2 Finding 3 sprint): bumped from 7 to 13 in response to the
+# Phase 4.7 red-team CRITICAL finding on the filtered-baseline diagnostic:
+# at _PULL_MONTHS=7 against the filter's default floor=6, any sparse-month
+# drop forced INSUFFICIENT_BASELINE rather than drop-and-recompute. The
+# bump gives the filtered AND the detrended variant statistical headroom.
+# See FINDING-2026-06-05-ORACLE-FILTERED-GATE-FLOOR-METHODOLOGY.
+_PULL_MONTHS = 13
 
 Mode = Literal["research", "weekly", "daily"]
 
@@ -85,6 +93,7 @@ _MIN_BASELINE_N_AFTER_FILTER_DEFAULT = 6
 __all__ = [
     "check_regime_stability",
     "check_regime_stability_with_filter",
+    "check_regime_stability_detrended",
     "Z_THRESHOLD_DEFAULT",
 ]
 
@@ -115,10 +124,12 @@ def check_regime_stability(
 
     For research and weekly modes:
 
-    1. Pull last ~6 months of portfolio-wide monthly sharpe-proxy via
-       ``prepared_queries.monthly_sharpe_proxy(conn, months_back=6)``.
+    1. Pull last ~12 months of portfolio-wide monthly sharpe-proxy via
+       ``prepared_queries.monthly_sharpe_proxy(conn, months_back=13)``.
     2. Drop the most recent month's row to form the baseline (the
-       "trailing 6 months excluding latest" baseline).
+       "trailing 12 months excluding latest" baseline). Note: the
+       window was 6 prior to the 2026-06-05 R2 Finding 3 sprint; see
+       _PULL_MONTHS at module top for the rationale.
     3. Compute baseline_mean and baseline_std of the sharpe_proxy column.
     4. Compute ``z = (latest_sharpe_proxy - baseline_mean) / baseline_std``.
     5. If ``|z| > z_threshold`` -> stable=False with a structured warning.
@@ -193,7 +204,7 @@ def check_regime_stability(
             "z_score": float("nan"),
             "warning": (
                 "Regime gate could not run: no friction-applied trades found "
-                "in the trailing 6 months. Analysis not halted on missing data."
+                "in the trailing 12 months. Analysis not halted on missing data."
             ),
             "mode_skipped": False,
             "baseline_n_months": 0,
@@ -767,4 +778,357 @@ def check_regime_stability_with_filter(
         "latest_month": latest_month,
         "latest_sharpe_proxy": latest_sharpe,
         **filter_diagnostics,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Detrended-baseline variant — R2 Finding 3 sprint, 2026-06-05
+# ---------------------------------------------------------------------------
+
+
+def check_regime_stability_detrended(
+    conn: duckdb.DuckDBPyConnection,
+    mode: Mode,
+    *,
+    z_threshold: float = Z_THRESHOLD_DEFAULT,
+) -> dict:
+    """R2-Finding-3 variant of :func:`check_regime_stability`.
+
+    Tests whether the elevated z under the stock gate is driven by a
+    GRADUAL DRIFT in the baseline rather than a regime shift at the
+    latest month. The diagnostic fits a linear trend to the baseline
+    monthly sharpe-proxies, computes residuals, and reports z on the
+    latest month's residual against the baseline residual std.
+
+    Mathematical formulation:
+        Let baseline months be x = [0, 1, ..., n-1] (chronological index).
+        Fit y = slope * x + intercept by ordinary least squares.
+        Residuals r_i = y_i - (slope * x_i + intercept).
+        Predicted latest = slope * n + intercept.
+        Latest residual = latest_sharpe - predicted_latest.
+        Residual std = std(r, ddof=2)  -- two fit parameters.
+        z_detrended = latest_residual / residual_std.
+
+    Returns the same key set as :func:`check_regime_stability` plus:
+
+    - ``detrended_applied`` (bool): True iff the regression ran.
+    - ``baseline_slope`` (float | None): slope of the linear fit.
+    - ``baseline_intercept`` (float | None): intercept of the linear fit.
+    - ``baseline_r_squared`` (float | None): R^2 of the fit, in [0, 1].
+    - ``residuals`` (list[float]): per-month residuals in chronological order.
+    - ``latest_residual`` (float | None): residual of the latest month.
+    - ``z_score_detrended`` (float): z of the latest residual; NaN when
+      not computable.
+
+    Pre-decision rule (per 2026-06-05 sprint spec — operator applies):
+
+    - ``|z_detrended| > 3.0`` -> REGIME SHIFT IS REAL (HALT stands;
+      drift is NOT the cause).
+    - ``|z_detrended| < 2.0`` AND ``baseline_r_squared > 0.5`` ->
+      HALT WAS DRIFT ARTIFACT (freeze-lift can advance pending PHANTOM-NT8).
+    - ``|z_detrended| < 2.0`` AND ``baseline_r_squared < 0.5`` ->
+      AMBIGUOUS (noisy baseline, no clear trend; wait).
+    - ``2.0 <= |z_detrended| <= 3.0`` -> MARGINAL (wait + monitor).
+    - ``baseline_n_months < 4`` -> INSUFFICIENT_BASELINE.
+
+    Same per-shape safety contract as the stock gate: NEVER halts on
+    missing data; only on a detected regime shift.
+    """
+    # --- daily mode short-circuit ---
+    if mode == "daily":
+        return {
+            "stable": True,
+            "z_score": float("nan"),
+            "warning": None,
+            "mode_skipped": True,
+            "baseline_n_months": 0,
+            "latest_month": None,
+            "latest_sharpe_proxy": None,
+            "detrended_applied": False,
+            "baseline_slope": None,
+            "baseline_intercept": None,
+            "baseline_r_squared": None,
+            "residuals": [],
+            "latest_residual": None,
+            "z_score_detrended": float("nan"),
+        }
+
+    def _detrended_diag_stub() -> dict:
+        return {
+            "detrended_applied": False,
+            "baseline_slope": None,
+            "baseline_intercept": None,
+            "baseline_r_squared": None,
+            "residuals": [],
+            "latest_residual": None,
+            "z_score_detrended": float("nan"),
+        }
+
+    # --- query (mirror stock function) ---
+    try:
+        df = prepared_queries.monthly_sharpe_proxy(conn, months_back=_PULL_MONTHS)
+    except Exception as e:  # pragma: no cover -- operator visibility
+        logger.warning(
+            "regime_gate(detrended): monthly_sharpe_proxy query failed "
+            "(%s); treating as insufficient data, returning stable=True.",
+            e,
+        )
+        return {
+            "stable": True,
+            "z_score": float("nan"),
+            "warning": (
+                "Regime gate (detrended) could not run: warehouse query "
+                f"failed ({type(e).__name__}). Analysis not halted on "
+                "missing data."
+            ),
+            "mode_skipped": False,
+            "baseline_n_months": 0,
+            "latest_month": None,
+            "latest_sharpe_proxy": None,
+            **_detrended_diag_stub(),
+        }
+
+    if df is None or df.empty:
+        return {
+            "stable": True,
+            "z_score": float("nan"),
+            "warning": (
+                "Regime gate (detrended) could not run: no friction-applied "
+                "trades found in the trailing window. Analysis not halted "
+                "on missing data."
+            ),
+            "mode_skipped": False,
+            "baseline_n_months": 0,
+            "latest_month": None,
+            "latest_sharpe_proxy": None,
+            **_detrended_diag_stub(),
+        }
+
+    required_columns = {"month", "sharpe_proxy"}
+    missing = required_columns - set(df.columns)
+    if missing:
+        return {
+            "stable": True,
+            "z_score": float("nan"),
+            "warning": (
+                "Regime gate (detrended) could not run: prepared_queries"
+                ".monthly_sharpe_proxy is missing required columns "
+                f"{sorted(missing)}. Schema may have drifted."
+            ),
+            "mode_skipped": False,
+            "baseline_n_months": 0,
+            "latest_month": None,
+            "latest_sharpe_proxy": None,
+            **_detrended_diag_stub(),
+        }
+
+    try:
+        df = df.sort_values("month").reset_index(drop=True)
+        latest_row = df.iloc[-1]
+        latest_month = _latest_month_str(latest_row["month"])
+        latest_sharpe = latest_row["sharpe_proxy"]
+        if pd.notna(latest_sharpe):
+            latest_sharpe = float(latest_sharpe)
+        else:
+            latest_sharpe = None
+
+        baseline_df = df.iloc[:-1].copy()
+        baseline_df = baseline_df[baseline_df["sharpe_proxy"].notna()]
+        baseline_n = int(len(baseline_df))
+    except (KeyError, TypeError, AttributeError, ValueError) as e:
+        logger.warning(
+            "regime_gate(detrended): unexpected DataFrame shape (%s: %s); "
+            "treating as schema drift and returning stable=True.",
+            type(e).__name__, e,
+        )
+        return {
+            "stable": True,
+            "z_score": float("nan"),
+            "warning": (
+                "Regime gate (detrended) could not run: unexpected "
+                f"DataFrame shape ({type(e).__name__}). Schema may have "
+                "drifted."
+            ),
+            "mode_skipped": False,
+            "baseline_n_months": 0,
+            "latest_month": None,
+            "latest_sharpe_proxy": None,
+            **_detrended_diag_stub(),
+        }
+
+    detrended_meta = {
+        "detrended_applied": True,
+    }
+
+    # --- legacy minimum baseline (defensive; same as stock function) ---
+    if baseline_n < _MIN_BASELINE_MONTHS:
+        return {
+            "stable": True,
+            "z_score": float("nan"),
+            "warning": (
+                f"Regime gate (detrended) could not run: only {baseline_n} "
+                f"baseline month(s) of usable sharpe-proxy data available "
+                f"(need >= {_MIN_BASELINE_MONTHS}). Insufficient data; "
+                "analysis not halted."
+            ),
+            "mode_skipped": False,
+            "baseline_n_months": baseline_n,
+            "latest_month": latest_month,
+            "latest_sharpe_proxy": latest_sharpe,
+            "baseline_slope": None,
+            "baseline_intercept": None,
+            "baseline_r_squared": None,
+            "residuals": [],
+            "latest_residual": None,
+            "z_score_detrended": float("nan"),
+            **detrended_meta,
+        }
+
+    if latest_sharpe is None:
+        return {
+            "stable": True,
+            "z_score": float("nan"),
+            "warning": (
+                "Regime gate (detrended) could not run: latest month has "
+                "no usable sharpe-proxy value (single trade or zero "
+                "variance). Insufficient data; analysis not halted."
+            ),
+            "mode_skipped": False,
+            "baseline_n_months": baseline_n,
+            "latest_month": latest_month,
+            "latest_sharpe_proxy": None,
+            "baseline_slope": None,
+            "baseline_intercept": None,
+            "baseline_r_squared": None,
+            "residuals": [],
+            "latest_residual": None,
+            "z_score_detrended": float("nan"),
+            **detrended_meta,
+        }
+
+    # --- linear regression on baseline ---
+    try:
+        y = baseline_df["sharpe_proxy"].astype(float).to_numpy()
+        x = np.arange(len(y), dtype=float)
+        # Use lstsq via polyfit; fall back to NaN on degenerate matrix.
+        coefs = np.polyfit(x, y, deg=1)
+        slope = float(coefs[0])
+        intercept = float(coefs[1])
+    except (np.linalg.LinAlgError, ValueError, TypeError) as e:
+        logger.warning(
+            "regime_gate(detrended): polyfit failed (%s: %s); returning "
+            "stable=True with NaN z.",
+            type(e).__name__, e,
+        )
+        return {
+            "stable": True,
+            "z_score": float("nan"),
+            "warning": (
+                "Regime gate (detrended) could not run: linear-fit "
+                f"failed ({type(e).__name__}). Degenerate baseline; "
+                "analysis not halted."
+            ),
+            "mode_skipped": False,
+            "baseline_n_months": baseline_n,
+            "latest_month": latest_month,
+            "latest_sharpe_proxy": latest_sharpe,
+            "baseline_slope": None,
+            "baseline_intercept": None,
+            "baseline_r_squared": None,
+            "residuals": [],
+            "latest_residual": None,
+            "z_score_detrended": float("nan"),
+            **detrended_meta,
+        }
+
+    predicted = slope * x + intercept
+    residuals = (y - predicted).tolist()
+    predicted_latest = slope * float(len(y)) + intercept
+    latest_residual = float(latest_sharpe - predicted_latest)
+
+    # Residual std with ddof=2 (intercept + slope consume 2 df).
+    if len(residuals) > 2:
+        residual_std = float(np.std(np.asarray(residuals), ddof=2))
+    else:
+        residual_std = float("nan")
+
+    # R-squared.
+    y_mean = float(np.mean(y))
+    ss_res = float(np.sum((y - predicted) ** 2))
+    ss_tot = float(np.sum((y - y_mean) ** 2))
+    if ss_tot > 1e-12:
+        r_squared = 1.0 - (ss_res / ss_tot)
+        r_squared = max(0.0, min(1.0, r_squared))  # clamp
+    else:
+        # All baseline sharpes identical -> trend is undefined (any line
+        # works); report r_squared=0 by convention (no explained variance).
+        r_squared = 0.0
+
+    diagnostics = {
+        "detrended_applied": True,
+        "baseline_slope": slope,
+        "baseline_intercept": intercept,
+        "baseline_r_squared": r_squared,
+        "residuals": [float(r) for r in residuals],
+        "latest_residual": latest_residual,
+    }
+
+    # Degenerate residual-std: e.g. perfect collinearity in baseline.
+    if (
+        not math.isfinite(residual_std)
+        or residual_std < 1e-10
+    ):
+        return {
+            "stable": True,
+            "z_score": float("nan"),
+            "warning": (
+                "Regime gate (detrended) could not run: residual standard "
+                "deviation is zero (baseline is a perfect linear fit or "
+                "degenerate). Z-score undefined; analysis not halted."
+            ),
+            "mode_skipped": False,
+            "baseline_n_months": baseline_n,
+            "latest_month": latest_month,
+            "latest_sharpe_proxy": latest_sharpe,
+            "z_score_detrended": float("nan"),
+            **diagnostics,
+        }
+
+    z_detrended = float(latest_residual / residual_std)
+
+    if abs(z_detrended) > z_threshold:
+        warning = (
+            f"Regime instability detected (detrended): latest-month "
+            f"residual z-score = {z_detrended:+.2f} (threshold +/- "
+            f"{z_threshold:.2f}). Baseline trend slope={slope:+.5f} "
+            f"per month, intercept={intercept:+.5f}, r^2={r_squared:.3f}. "
+            f"Latest sharpe {latest_sharpe:.3f} ({latest_month}) vs "
+            f"projection {predicted_latest:.3f} -> residual "
+            f"{latest_residual:+.3f}. Analysis halted."
+        )
+        logger.warning("regime_gate(detrended): %s", warning)
+        return {
+            "stable": False,
+            # Legacy key: report the detrended z so existing callers that
+            # read z_score still get the operative number.
+            "z_score": z_detrended,
+            "warning": warning,
+            "mode_skipped": False,
+            "baseline_n_months": baseline_n,
+            "latest_month": latest_month,
+            "latest_sharpe_proxy": latest_sharpe,
+            "z_score_detrended": z_detrended,
+            **diagnostics,
+        }
+
+    return {
+        "stable": True,
+        "z_score": z_detrended,
+        "warning": None,
+        "mode_skipped": False,
+        "baseline_n_months": baseline_n,
+        "latest_month": latest_month,
+        "latest_sharpe_proxy": latest_sharpe,
+        "z_score_detrended": z_detrended,
+        **diagnostics,
     }
