@@ -1247,16 +1247,33 @@ class TradeEntry:
                             )
                     except Exception:
                         pass
+                    # 2026-06-05 FINDING-2026-06-05-SLOT-INTERLOCK-BYPASS T1
+                    # (Cluster 2 audit): swap to sized PARTIAL_EXIT. The prior
+                    # _sink_submit_exit emitted CLOSEPOSITION (account-wide,
+                    # qty-ignored), which on multi-strategy Sim101 would have
+                    # flattened OTHER strategies' positions too. Same root
+                    # cause class as the Phase 3g (REDTEAM-R2-1-FIX-V2,
+                    # commit 354bb3c) swap at the B47 STACKED FILL block
+                    # above. _sink_submit_partial_exit packages op="PARTIAL_EXIT"
+                    # with qty=n_contracts and NT8 honors the qty per
+                    # bots/_oif_emitter.py:135-155.
+                    logger.info(
+                        f"[SLOT-INTERLOCK] [PROTECT:{tid}] EMERGENCY FLATTEN "
+                        f"via sized PARTIAL_EXIT — strategy={signal.strategy} "
+                        f"account={_account} direction={signal.direction} "
+                        f"n_contracts={contracts}"
+                    )
                     try:
-                        # Sink-mediated emergency flatten. With the gate engaged,
-                        # an EXIT op should always be ACCEPT'd (the gate doesn't
-                        # block close-position orders); fail-soft fallback covers
-                        # the case where the gate is unreachable.
-                        _ef_resp = _sink_submit_exit(
-                            qty=contracts,
+                        # Sink-mediated emergency flatten via sized PARTIAL_EXIT.
+                        # With the gate engaged, a PARTIAL_EXIT op should always
+                        # be ACCEPT'd (the gate doesn't block close-position
+                        # orders); fail-soft fallback covers the case where
+                        # the gate is unreachable.
+                        _ef_resp = _sink_submit_partial_exit(
+                            direction=signal.direction,
+                            n_contracts=contracts,
                             trade_id=f"{tid}_emergency_flatten",
                             account=_account,
-                            reason="UNPROTECTED_FLATTEN",
                         )
                         if _ef_resp.get("decision") != "ACCEPT":
                             logger.critical(

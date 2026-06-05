@@ -18,6 +18,7 @@ import time
 from datetime import datetime
 
 from bots._oif_emitter import submit_exit as _sink_submit_exit
+from bots._oif_emitter import submit_partial_exit as _sink_submit_partial_exit
 from core import telegram_notifier as tg
 
 logger = logging.getLogger("TradeExit")
@@ -140,19 +141,44 @@ class TradeExit:
                     exit_sent = True
                 except Exception as e:
                     logger.error(f"[EXIT:{tid}] WS send failed: {e} — writing OIF fallback")
+                # 2026-06-05 FINDING-2026-06-05-SLOT-INTERLOCK-BYPASS T2
+                # (Cluster 2 audit): swap OIF EXIT fallback to sized
+                # PARTIAL_EXIT. The prior _sink_submit_exit emitted
+                # CLOSEPOSITION (account-wide, qty-ignored). On
+                # multi-strategy Sim101 that flattens other strategies'
+                # positions. Mirrors the Phase 3g (REDTEAM-R2-1-FIX-V2,
+                # commit 354bb3c) pattern at bots/_trade_entry.py:1109
+                # and bots/_trade_entry.py:1255 (this sprint's T1 swap).
+                #
+                # NOTE: the PRIMARY exit path is the WS send above
+                # (action="EXIT"), which hits bridge_server.py:639 →
+                # write_oif("EXIT") and emits CLOSEPOSITION at the
+                # bridge layer (PROTECTED). The bridge-side fix is
+                # documented in out/propose_bridge_server_ws_exit_sized_
+                # 2026-06-05.md and DEFERRED to a protected-edit sprint
+                # with operator OA. This OIF fallback only fires when
+                # the WS send fails — partial coverage but real value.
+                logger.info(
+                    f"[SLOT-INTERLOCK] [EXIT:{tid}] OIF fallback via sized "
+                    f"PARTIAL_EXIT — account={pos.account} "
+                    f"direction={pos.direction} n_contracts={pos.contracts} "
+                    f"reason={reason}"
+                )
                 try:
-                    # Sink-mediated EXIT fallback. Identical to the legacy
-                    # write_oif('EXIT', ...) call when PHOENIX_RISK_GATE=0.
-                    _ex_resp = _sink_submit_exit(
-                        qty=pos.contracts, trade_id=tid, account=pos.account,
-                        reason=reason,
+                    # Sink-mediated EXIT fallback via sized PARTIAL_EXIT.
+                    _ex_resp = _sink_submit_partial_exit(
+                        direction=pos.direction,
+                        n_contracts=pos.contracts,
+                        trade_id=tid,
+                        account=pos.account,
                     )
                     if _ex_resp.get("decision") == "ACCEPT":
                         exit_sent = True
                     else:
                         logger.error(
                             f"[EXIT:{tid}] sink {_ex_resp.get('sink','?')} "
-                            f"REFUSED EXIT: {_ex_resp.get('reason','?')}"
+                            f"REFUSED PARTIAL_EXIT (fallback): "
+                            f"{_ex_resp.get('reason','?')}"
                         )
                 except Exception as e2:
                     logger.error(f"[EXIT:{tid}] OIF fallback ALSO failed: {e2} — MANUAL EXIT NEEDED")
