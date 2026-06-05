@@ -11,6 +11,18 @@ echo   Phoenix Trading Bot - Launcher
 echo ========================================
 echo.
 
+REM 2026-06-04 FINDING-2026-06-04-MULTI-PID: runtime guard refuses
+REM to start under the WindowsApps shim. Catches the foot-gun before
+REM we spawn 3 separate cmd windows that would each inherit the bad
+REM resolution. See docs/operator/safe_launch.md.
+%PY% tools\check_interpreter.py
+if errorlevel 1 (
+    echo ERROR: Phoenix interpreter check FAILED — see stderr above.
+    echo See docs\operator\safe_launch.md for the safe-launch pattern.
+    pause
+    exit /b 1
+)
+
 REM Check if bridge is already running on port 8765
 netstat -ano | findstr "127.0.0.1:8765.*LISTENING" >nul 2>&1
 if %errorlevel%==0 (

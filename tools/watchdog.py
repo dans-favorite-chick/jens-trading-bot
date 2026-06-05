@@ -319,6 +319,12 @@ class Watchdog:
         self._start_time = time.time()
         self._checks = 0
         self._last_status_line = ""
+        # 2026-06-04 FINDING-2026-06-04-WATCHDOG-OPACITY:
+        # /api/bot/status surfaces interpreter + parent_pid + shim_warn
+        # per bot. Cache the latest view so print_status can show it
+        # and shim transitions can be detected.
+        self._dashboard_processes: dict | None = None
+        self._last_shim_warn: dict[str, bool] = {}
 
     def check_bridge(self) -> dict | None:
         """Check bridge health. Returns health dict or None if unreachable."""
@@ -337,7 +343,14 @@ class Watchdog:
         return health
 
     def check_dashboard(self) -> bool:
-        """Check if dashboard is responding."""
+        """Check if dashboard is responding + parse interpreter metadata.
+
+        Beyond the boolean liveness check, the response carries a
+        `processes` dict (per FINDING-2026-06-04-WATCHDOG-OPACITY)
+        with each bot's interpreter, parent_pid, external, and
+        shim_warn. We cache it for print_status and emit a LOUD
+        WARN on any shim_warn transition False→True.
+        """
         result = _fetch_json(
             f"http://127.0.0.1:{DASHBOARD_PORT}/api/bot/status",
             timeout=DASHBOARD_TIMEOUT_S,
@@ -351,7 +364,46 @@ class Watchdog:
         elif self.dashboard_alive and not was_alive:
             logger.info("DASHBOARD UP — API responding")
 
+        # Parse + cache processes view (WATCHDOG-OPACITY)
+        if not self.dashboard_alive:
+            self._dashboard_processes = None
+        else:
+            procs = (result or {}).get("processes") or {}
+            self._dashboard_processes = procs
+            self._emit_shim_warnings(procs)
+
         return self.dashboard_alive
+
+    def _emit_shim_warnings(self, procs: dict) -> None:
+        """LOUD WARN when shim_warn transitions False→True for any bot.
+
+        The dashboard's _bot_process_meta() flags any bot whose
+        interpreter or parent process lives under \\WindowsApps\\.
+        That's the foot-gun pattern documented in
+        docs/operator/safe_launch.md. Catching the transition
+        (rather than spamming on every poll cycle) keeps the log
+        signal-rich.
+        """
+        for name, entry in procs.items():
+            if not isinstance(entry, dict):
+                continue
+            current = bool(entry.get("shim_warn"))
+            previous = bool(self._last_shim_warn.get(name, False))
+            if current and not previous:
+                interp = entry.get("interpreter") or "?"
+                logger.error(
+                    f"[{name}] WINDOWS_APPS_SHIM detected — bot is running "
+                    f"via the foot-gun interpreter path. interpreter={interp!r} "
+                    f"parent_pid={entry.get('parent_pid')!r}. See "
+                    f"docs/operator/safe_launch.md."
+                )
+                _log_forensic({
+                    "event": "shim_detected",
+                    "bot": name,
+                    "interpreter": interp,
+                    "parent_pid": entry.get("parent_pid"),
+                })
+            self._last_shim_warn[name] = current
 
     def check_bots(self, bridge_health: dict | None):
         """Check bot connectivity from bridge health data."""

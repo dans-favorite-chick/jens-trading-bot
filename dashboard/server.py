@@ -336,6 +336,53 @@ def _stop_bot(name: str, force: bool = False) -> dict:
                 except Exception: pass
         killed_pids.append(proc.pid)
 
+    # Path 1.5: graceful-shutdown-via-command-queue for externally-
+    # detected bots. Added 2026-06-04 as the SUPERVISOR-DRIFT fix.
+    # Only runs when force=True (preserves the 2026-05-13 8b471af
+    # watchdog-safety invariant — watchdog auto-restart cycles still
+    # default force=False and never kill operator-launched bots).
+    #
+    # Externally-launched bots (round-2 PS, launch_all.bat, manual
+    # `python bots/prod_bot.py`) are NOT in _bot_processes but ARE
+    # polling /api/commands. Queueing a shutdown command lets them
+    # exit cleanly with state-saved via the same path Path 1 uses
+    # for registry-tracked subprocesses. If the bot honors the
+    # command within _GRACEFUL_SHUTDOWN_TIMEOUT_S, this is strictly
+    # better than psutil.terminate(): no half-written state, no
+    # orphaned brackets in NT8.
+    #
+    # Falls through to Path 2 if the bot ignores the command (older
+    # code without the shutdown handler, stuck event loop, etc.).
+    if force and not proc and _bot_status(name) == "running":
+        with _state_lock:
+            _state.setdefault(f"_commands_{name}", []).append({
+                "type": "shutdown",
+                "ts": time.time(),
+                "source": "dashboard_external_stop",
+            })
+        deadline = time.time() + _GRACEFUL_SHUTDOWN_TIMEOUT_S
+        while time.time() < deadline:
+            if _bot_status(name) != "running":
+                logger.info(
+                    f"{name} bot (external) exited gracefully via "
+                    f"/shutdown command queue"
+                )
+                return {
+                    "ok": True,
+                    "path": "graceful",
+                    "force": force,
+                    "message": (
+                        f"{name} bot (externally-launched) honored "
+                        f"shutdown command and exited cleanly"
+                    ),
+                }
+            time.sleep(0.1)
+        logger.warning(
+            f"{name} bot (external) did not honor shutdown command "
+            f"within {_GRACEFUL_SHUTDOWN_TIMEOUT_S}s — falling through "
+            f"to psutil terminate"
+        )
+
     # Path 2: externally-started bots — only kill when force=True.
     # When force=False (the safe default), operator-launched cmd-window
     # prod_bots survive watchdog restart cycles and manual scripts that
@@ -1541,11 +1588,118 @@ def api_stop_bot():
     return jsonify(result)
 
 
+# ─── WATCHDOG-OPACITY (2026-06-04) ─────────────────────────────────
+# The interpreter-fingerprint introspection lets operator + watchdog
+# see at a glance whether a bot is on the safe pythoncore-3.14 path
+# or has been accidentally launched via the WindowsApps shim (which
+# produces the MULTI-PID zombie pattern). Pattern match is intentionally
+# broad — any \WindowsApps\ in the executable path flags it.
+_WINDOWS_APPS_SHIM_RE = re.compile(
+    r"\\WindowsApps\\", re.IGNORECASE,
+)
+
+
+def _bot_process_meta(name: str) -> dict:
+    """Inspect the running interpreter for `{name}_bot.py`.
+
+    Returns a dict with `status`, `interpreter`, `parent_pid`,
+    `external`, `shim_warn`. Safe to call frequently — psutil is
+    only consulted when the registry entry doesn't already give us
+    the answer, and AccessDenied / NoSuchProcess are swallowed.
+
+    Closes FINDING-2026-06-04-WATCHDOG-OPACITY by surfacing the
+    interpreter path + parent PID, so an accidentally-shim-launched
+    bot is loud rather than silent.
+    """
+    status = _bot_status(name)
+    meta = {
+        "status": status,
+        "interpreter": None,
+        "parent_pid": None,
+        "external": False,
+        "shim_warn": False,
+    }
+
+    # Registry-tracked subprocess — we know the interpreter
+    # (it's our own sys.executable since _start_bot uses it).
+    with _bot_proc_lock:
+        proc = _bot_processes.get(name)
+    if proc and proc.poll() is None:
+        meta["interpreter"] = sys.executable
+        try:
+            meta["parent_pid"] = os.getpid()
+        except Exception:
+            pass
+        meta["shim_warn"] = bool(
+            _WINDOWS_APPS_SHIM_RE.search(sys.executable or "")
+        )
+        return meta
+
+    # Not in registry: scan psutil for an externally-launched bot
+    if status != "running":
+        return meta
+
+    target_script = f"{name}_bot.py"
+    try:
+        import psutil  # type: ignore
+        for p in psutil.process_iter(
+            ["pid", "name", "exe", "ppid", "cmdline"]
+        ):
+            try:
+                pname = p.info.get("name") or ""
+                if "python" not in pname.lower():
+                    continue
+                cmd = " ".join(p.info.get("cmdline") or [])
+                if target_script not in cmd:
+                    continue
+                exe = p.info.get("exe") or ""
+                meta["interpreter"] = exe
+                meta["parent_pid"] = p.info.get("ppid")
+                meta["external"] = True
+                meta["shim_warn"] = bool(_WINDOWS_APPS_SHIM_RE.search(exe))
+                break
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+    except ImportError:
+        # psutil unavailable — return status-only meta. Acceptable
+        # degradation; the WATCHDOG-OPACITY closure is best-effort
+        # not a correctness guarantee.
+        pass
+    return meta
+
+
 @app.route("/api/bot/status")
 def api_bot_proc_status():
+    """Return per-bot process status + enriched metadata.
+
+    Schema (kept backward-compatible for the frontend's
+    `proc[activeBot] === 'running'` check):
+
+        {
+          "prod": "running" | "stopped",
+          "sim":  "running" | "stopped",
+          "processes": {
+            "prod": {
+              "status": "running" | "stopped",
+              "interpreter": <abs path or null>,
+              "parent_pid": <int or null>,
+              "external": bool,   # True = not in dashboard registry
+              "shim_warn": bool,  # True = WindowsApps shim detected
+            },
+            "sim":  { ... same shape ... }
+          }
+        }
+
+    The bare-string top-level fields are preserved verbatim. The
+    enriched dict under `processes` closes FINDING-2026-06-04-
+    WATCHDOG-OPACITY by surfacing the interpreter + parent PID per bot.
+    """
+    prod_meta = _bot_process_meta("prod")
+    sim_meta = _bot_process_meta("sim")
     return jsonify({
-        "prod": _bot_status("prod"),
-        "sim": _bot_status("sim"),
+        "prod": prod_meta["status"],
+        "sim": sim_meta["status"],
+        "processes": {"prod": prod_meta, "sim": sim_meta},
     })
 
 

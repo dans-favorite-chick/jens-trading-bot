@@ -17,6 +17,14 @@ if exist "memory\.KILL_SWITCH_ENGAGED" (
     exit /b 0
 )
 
+REM 2026-06-04 FINDING-2026-06-04-MULTI-PID: runtime guard refuses
+REM to start under the WindowsApps shim. See docs/operator/safe_launch.md.
+%PY% tools\check_interpreter.py
+if errorlevel 1 (
+    echo [WatcherAgent] Interpreter check FAILED — see stderr above.
+    exit /b 2
+)
+
 echo [WatcherAgent] Starting at %date% %time%
 %PY% tools\watcher_agent.py
 set RC=%ERRORLEVEL%

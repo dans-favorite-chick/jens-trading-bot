@@ -1577,10 +1577,14 @@ function startBot() {
 }
 
 function stopBot() {
+  // 2026-06-04 SUPERVISOR-DRIFT fix: send force:true so operator clicks
+  // engage the graceful-shutdown-via-command-queue path (Path 1.5) and
+  // psutil fallback (Path 2) for externally-launched bots. Watchdog
+  // auto-restart cycles still default force=false and remain safe.
   const btn = el('bot-stop-btn');
   btn.disabled = true;
   btn.textContent = 'Stopping...';
-  fetch('/api/bot/stop', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name: activeBot})})
+  fetch('/api/bot/stop', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name: activeBot, force: true})})
     .then(r => r.json())
     .then(() => { btn.disabled = false; btn.textContent = 'Stop'; })
     .catch(() => { btn.disabled = false; btn.textContent = 'Stop'; });
