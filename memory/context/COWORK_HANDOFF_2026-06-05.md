@@ -36,7 +36,7 @@
 | T-BRIDGE protected edit (bridge sized PARTIAL_EXIT) | `607ac74` (PROTECTED, OPERATOR-APPROVED 2026-06-05) + `ad95305` | Bridge translates WS EXIT qty>0 + direction → sized PARTIAL_EXIT. ⚠️ ad95305 bundled 3 PHANTOM-NT8 R3 files due to scope-hygiene breach; all complete, no broken code. |
 | PHANTOM-NT8 R3 dedup + NT8_DISCONNECTED | (co-shipped in `ad95305`) | FindingDedup state machine in tools/watcher_agent.py; phase tags OPEN/ESCALATED/RESOLVED in SMS; operator recovery doc |
 | Oracle R2 Finding 3 (detrended diagnostic) | `09f42e5` + `5bc7ecb` | `_PULL_MONTHS=13`, `check_regime_stability_detrended`, env-var routing. Verdict **MARGINAL** (red-team-corrected z≈2.91 from raw 3.35); HALT stands operationally. |
-| T-BRIDGE engagement closure (bot WS payloads) | `42959f6` + `8ce3782` | All 3 bot WS EXIT senders now include `direction` field. Bug hunter caught getattr trap at site 3, fixed inline. |
+| T-BRIDGE engagement closure (bot WS payloads) | `42959f6` + `8ce3782` | All 3 bot WS EXIT senders now include `direction` field. Bug hunter caught getattr trap at site 3, fixed inline. **Phase 0 STOP twice re-verified** (CC correctly refused re-dispatch); acceptance 6/6 GREEN against live HEAD. |
 
 ---
 
@@ -62,7 +62,21 @@
 5. **NT8 auto-reconnect AddOn** (`PhoenixAutoReconnect.cs`) — ~150 LOC C# AddOn, self-healing on disconnect. Prompt drafted in earlier session; check chat history if needed.
 6. **READ-ONLY MCP evaluation** — CrossTrade subscription vs open-source GitHub MCP. Observability only, NOT execution.
 7. **Sibling code path audit** — every path that bypasses `is_flat_for` beyond what Cluster 2 covered.
-8. **Footprint follow-ups** — new_strategy_buildout + filter_integration.
+8. **Footprint follow-ups — CORRECTED STATUS 2026-06-05 evening**
+   - **🚨 Feasibility sprint at `out/footprint_feasibility_report_2026-06-04.md` was PARTIALLY complete.** It shipped Phase 0-5 + 7 narratively but:
+     - **Phase 6.5 outline files NEVER CREATED.** `out/footprint_followup_outlines/` directory is empty. The 3 follow-up specs (`new_strategy_buildout.md`, `filter_integration.md`, `data_collection_uplift.md`) the report links to do NOT exist on disk.
+     - **TBBO tick cache (438 MB, 60 days) NEVER USED.** Phase 3 only analyzed 167/397 trades against volumetric data; the other 230 trades predate the volumetric window AND fall inside the unused TBBO window.
+     - **Only 14 pre-defined features tested.** Phoenix's actual footprint primitives (per-level imbalance, stacked-flag, max_imbalance_ratio up to 75×, POC drift, vol_climax_ratio) were not exhaustively explored. No within-window entry-timing analysis, no multi-feature confluence beyond one 2-combo on bias_momentum.
+   - **Two sprints originally queued (Task #9 — NARROW):**
+     - `new_strategy_buildout` — plumb dormant `footprint_cvd_reversal` (1,679 LOC, disabled at `b9a3b2e` for operational reasons, never tested) into Databento-aware backtest over 80-day window
+     - `filter_integration` — validate INVERTED-direction filter on `bias_momentum`
+     - BLOCKED: outline files don't exist; would need writing before expansion to prompts
+   - **One bigger sprint operator actually needs (Task #11 — DEEP):**
+     - Tick-level entry timing on 60-day Databento window
+     - Exhaustive feature discovery from rich primitives (not just 14 pre-listed)
+     - Multi-feature confluence testing for signals to WRITE INTO strategies, not just filters
+     - Use FULL 80-day window (TBBO 2026-03-17→2026-05-17 + live 2026-05-04→, 14-day overlap for sanity-check)
+   - **Status:** Task #11 is the operator's actual need. Tasks #9 follow-ups are narrower research deliverables that could happen after.
 9. **Freeze-lift sprint** — PREREQ: emergency fully cleared + 48h verified live.
 
 ---
@@ -116,6 +130,9 @@ Known active as of 8ce3782:
 10. Long Cowork sessions saturate context. Behavioral signals (operator duplicating things, missing obvious details) > any percentage indicator. Handoff at first symptom.
 11. **NEW: Cowork TaskList tool itself is not reliable across context windows.** Tasks vanished mid-session. Persistent file (this doc) is the source of truth.
 12. **NEW: "Optimize" pass via prompt-master skill yields measurable tightening (~15% denser prompts, stronger MUST/NEVER signals). Worth doing for every protected-file or multi-file sprint prompt.**
+13. **NEW: When writing RED-first test specs that include real-world numbers, verify the numbers actually exercise the function under test, not a guard clause.** Caught 2026-06-05 by Oracle weighted-variant R3 Test Quality: spec asked for May replay test at 826/1372 = 0.602 ratio, which trips the 0.7 floor refuse-to-compute, so Welch math under test never ran. Fix: add a corrective-zone test with ratio in [0.7, 1.0).
+14. **NEW: Configurable thresholds that override hard-coded operator pre-decision rules are silent-mislabel landmines.** Caught 2026-06-05 by Oracle weighted-variant red-team HIGH: weekly-mode `z_threshold=1.5` made MARGINAL band [2.0, 3.0] unreachable, would have mislabeled marginal cases as REGIME_REAL. Pattern: ANY env-var or config knob that touches category-mapping boundaries needs a paranoid test asserting the operator-rule bands stay reachable.
+15. **NEW: "Sprint completed" claims must be verified by globbing the deliverable filesystem AND auditing data sources, not by reading the executive summary.** Caught 2026-06-05 evening by operator on the footprint feasibility framing: Cowork-Claude called the 2026-06-04 sprint "done" based on the report's narrative; operator pushed back; Glob revealed `out/footprint_followup_outlines/` directory was EMPTY (Phase 6.5 specs missing), and the 438 MB TBBO tick cache referenced in the master prompt as "preferred data source" was NEVER USED in Phase 3 analysis. Standing rule going forward: before calling any past sprint "done," (a) Glob every directory the report references, (b) verify the data sources the master prompt specified actually appear in the analysis methodology, (c) audit the feature/scope coverage against what the OPERATOR's framing of the question demanded — not what the master prompt's narrow scope limited it to.
 
 ---
 
