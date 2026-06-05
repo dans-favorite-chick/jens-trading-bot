@@ -469,15 +469,99 @@ class PositionManager:
     def active_count(self) -> int:
         return len(self._positions)
 
-    def is_flat_for(self, strategy: str) -> bool:
+    def is_flat_for(self, strategy: str, account: str | None = None) -> bool:
         """True if the given strategy has NO active position.
 
         Used by _evaluate_strategies in multi-position runtime to allow
         each strategy to independently enter when its own slot is free.
+
+        2026-06-05 H3 fix (FINDING-2026-06-04-RECON-REPLAY-AS-ENTRY round 3):
+        when a reconciled orphan position labeled
+        ``_reconciled_<account>`` is held against the account this
+        strategy routes to, the slot is NOT free — emitting a fresh
+        entry on top of it produced the 2026-06-04 18:01:13 7-contract
+        SHORT pile-on on Sim101.
+
+          - If ``account`` is explicitly supplied (preferred for new
+            callers), check ``_reconciled_<account>`` directly.
+          - If ``account`` is omitted, auto-detect via
+            ``config.account_routing.get_account_for_signal(strategy)``
+            so the 3 existing in-tree callers
+            (``bots/sim_bot.py:694``, ``bots/_ws_dispatcher.py:725, 730``)
+            pick up the H3 protection automatically without signature
+            changes.
+
+        Fail-open posture: any exception during routing lookup is
+        treated as "slot free" (returns True) so a broken routing
+        import cannot silently block the live signal path. Mirrors the
+        Round 2 ``_pipeline_healthy`` convention.
         """
+        # Direct strategy-slot collision (legacy invariant).
         for pos in self._positions.values():
             if pos.strategy == strategy:
                 return False
+
+        # H3 — reconciled-orphan slot interlock on the routed account.
+        # Round 3 Bug-Hunter refinement: only apply H3 when we have an
+        # *explicit* account either (a) supplied by the caller or
+        # (b) resolved via an explicit STRATEGY_ACCOUNT_MAP entry. If
+        # routing falls back to `_default` for an UNMAPPED strategy,
+        # skip the H3 block — otherwise a Sim101 reconciled orphan
+        # would over-block any future strategy added to the signal
+        # path before being added to the map.
+        target_account = account
+        explicit_routing = account is not None
+        if target_account is None:
+            try:
+                from config.account_routing import (
+                    STRATEGY_ACCOUNT_MAP,
+                    get_account_for_signal,
+                )
+                # Only route via the map if the strategy is explicitly
+                # present as a key (covers the top-level case). For
+                # opening_session sub-strategies the key is the parent
+                # `opening_session` — those land here too.
+                if strategy in STRATEGY_ACCOUNT_MAP:
+                    target_account = get_account_for_signal(strategy)
+                    explicit_routing = True
+            except Exception as _h3_route_err:
+                # Round 3 red-team Bucket 3 fix: fail-open is intentional
+                # (Phoenix invariant — never let observability code block
+                # the live signal path) but it MUST be loud. A silent
+                # bypass violates the standing fail-loudly principle
+                # (memory/feedback_silent_failures.md). One WARNING line
+                # is enough — dedup is the operator's job.
+                logger.warning(
+                    "[H3] routing import/lookup failed — H3 interlock "
+                    "BYPASSED for strategy=%r (slot returned as free). "
+                    "Investigate config.account_routing if this persists. "
+                    "Error: %r",
+                    strategy, _h3_route_err,
+                )
+                target_account = None
+                explicit_routing = False
+        if target_account and explicit_routing:
+            recon_label = f"_reconciled_{target_account}"
+            for pos in self._positions.values():
+                if (pos.strategy == recon_label
+                        and getattr(pos, "account", None) == target_account):
+                    # Round 3 red-team Bucket 1 fix: surface when H3
+                    # blocks a signal so the operator can see WHY entries
+                    # aren't firing during the orphan lifetime. INFO level
+                    # (not WARNING) because this IS the designed behavior
+                    # — the master-prompt Option A inversion explicitly
+                    # holds the slot against every strategy routed to an
+                    # account where a reconciled orphan exists. Dashboard
+                    # / Telegram surfacing of this state is tracked
+                    # separately as a follow-up observability item.
+                    logger.info(
+                        "[H3] is_flat_for(%r) -> False (BLOCKED): "
+                        "reconciled orphan %r held on account=%r. "
+                        "Slot stays closed until the orphan finalizes.",
+                        strategy, pos.trade_id, target_account,
+                    )
+                    return False
+
         return True
 
     def get_position(self, trade_id: str) -> Position | None:

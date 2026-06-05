@@ -65,12 +65,28 @@ def test_multi_strategy_account_orphan_keeps_pseudo_label(outgoing_dir):
     assert pos.metadata.get("strategy_original_attribution") == "big_move_signal"
 
 
-def test_multi_strategy_account_does_NOT_block_real_signal_on_other_strategies(
+def test_multi_strategy_account_DOES_block_real_signal_on_other_strategies_H3(
     outgoing_dir,
 ):
-    """The whole point of keeping the pseudo-label on Sim101: a real
-    big_move_signal or es_nq_confluence signal MUST still be able to fire
-    while an orphan is open on Sim101. Sim101 is multi-strategy by design.
+    """**2026-06-05 H3 deliberate design reversal** of REDTEAM-1-FIX-3A.
+
+    Prior behavior (REDTEAM-1-FIX-3A, 257df2f): a reconciled orphan on
+    Sim101 labeled `_reconciled_Sim101` did NOT block real strategies
+    routed to Sim101 — the rationale was that Sim101 is "multi-strategy
+    by design" so legitimate concurrent fills should still work.
+
+    New behavior (FINDING-2026-06-04-RECON-REPLAY-AS-ENTRY Round 3, this
+    sprint): the 2026-06-04 18:01:13 CDT incident built Sim101 from
+    FLAT to SHORT 7 in 137 ms — exactly because the prior design let
+    fresh entries pile on top of a reconciled orphan. The slot IS now
+    held against every strategy mapped to the same account, per the
+    master-prompt Option A specification.
+
+    The dashboard/labeling half of REDTEAM-1-FIX-3A is preserved (the
+    pseudo-label is still used so manual-fill P&L is not misattributed
+    to a real strategy in dashboard aggregations — tested in
+    `test_multi_strategy_account_orphan_keeps_pseudo_label` above).
+    Only the slot-interlock half is reversed.
     """
     _write_pos_file(outgoing_dir, "Sim101", "SHORT;1;30100.00")
     pm = PositionManager()
@@ -81,12 +97,16 @@ def test_multi_strategy_account_does_NOT_block_real_signal_on_other_strategies(
         routed_accounts=["Sim101"],
         oco_writer=lambda **kw: ["ok1", "ok2"],
     )
-    # The orphan claims `_reconciled_Sim101` only; the real strategy slots
-    # remain free.
-    assert pm.is_flat_for("big_move_signal") is True
-    assert pm.is_flat_for("es_nq_confluence") is True
-    # And a real big_move_signal can open concurrently — this is the
-    # legitimate multi-strategy-account behavior.
+    # The orphan still labels as `_reconciled_Sim101` (labeling unchanged),
+    # but is_flat_for now ALSO checks the routed account — real strategies
+    # routing to Sim101 see the slot as held.
+    assert pm.is_flat_for("big_move_signal") is False, (
+        "H3 reversal: a Sim101-routed strategy must see the slot as held "
+        "when a `_reconciled_Sim101` orphan exists."
+    )
+    assert pm.is_flat_for("es_nq_confluence") is False
+    # And a real big_move_signal open is refused at the slot-collision
+    # guard inside open_position (line 634, which calls is_flat_for).
     ok = pm.open_position(
         trade_id="trade_real_big_move",
         direction="LONG",
@@ -99,9 +119,27 @@ def test_multi_strategy_account_does_NOT_block_real_signal_on_other_strategies(
         market_snapshot={},
         account="Sim101",
     )
-    assert ok is True, (
-        "Multi-strategy account must NOT block a real strategy signal while "
-        "an orphan-adopted position is open under the pseudo-label."
+    assert ok is False, (
+        "H3 reversal: a real strategy entry on the same routed account as "
+        "a reconciled orphan must be refused at the slot-collision guard."
+    )
+    # And a strategy that routes to a DIFFERENT account must still be
+    # free to enter (the fix is account-scoped, not global).
+    ok_other = pm.open_position(
+        trade_id="trade_real_bias",
+        direction="SHORT",
+        entry_price=30100.0,
+        contracts=1,
+        stop_price=30125.0,
+        target_price=30062.5,
+        strategy="bias_momentum",  # routes to "SimBias Momentum"
+        reason="bias_momentum_short",
+        market_snapshot={},
+        account="SimBias Momentum",
+    )
+    assert ok_other is True, (
+        "Cross-account isolation: a strategy routing to a different "
+        "account must NOT be blocked by a Sim101 orphan."
     )
 
 
