@@ -138,3 +138,14 @@ Default `check_regime_stability` behavior preserved byte-identical (158/158 in t
 - Oracle wiring + mutual exclusion: `agents/strategy_oracle.py:_check_regime_gate`
 - Tests: `tests/test_regime_gate_detrended.py` (11 tests), `tests/test_regime_gate_pull_window.py` (4 tests)
 - Subagent transcripts: R1 PASS `a0c2209bee595bd74`, R2 SHIP `abbdf1d1d08ee1e12`, R3 2 MEDIUM + missing-test (all addressed) `ae0e7b39d64de96bb`, R4 NO-CONFLICT `a7e1576a3db989902`, **P5.7 red-team CRITICAL `ac199c12f670e8999`**.
+
+---
+
+## §8 — Rev. 3 status pointer (appended 2026-06-05 evening)
+
+**Rev. 2's "FINDING-2026-06-05-ORACLE-DETRENDED-SAMPLE-SIZE-WEIGHTING follow-up" is now shipped and discharged.**
+
+- Code: `24810f8` — `check_regime_stability_detrended_weighted` in `analytics/regime_gate.py` + Oracle wiring in `agents/strategy_oracle.py` + 9 behavioral tests in `tests/test_regime_gate_detrended_weighted.py`.
+- Tracker flip: `a4b3155` — finding row 77 → `RESOLVED` at `24810f8`.
+- **Rev. 3 May verdict + side-by-side** (real warehouse run): `out/oracle_detrended_weighted_may_2026-06-05.md`. Headline: **INSUFFICIENT_SAMPLE — 0.7 floor trips at 826/1264.5 = 0.653**. Verdict aligns with rev. 2's recommendation (#2, #6): wait for May trade count to settle; freeze-lift conversation does NOT advance.
+- This rev. 2 doc is **NOT superseded** — preserved as the rev. 1 → rev. 2 audit trail. Future Oracle May-related reads should start from rev. 3 above.
