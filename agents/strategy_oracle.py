@@ -605,9 +605,47 @@ def _check_regime_gate(conn, mode: str) -> dict:
     Looks up the per-mode `z_threshold` override in MODE_CONFIG and passes
     it to ``regime_gate.check_regime_stability`` when set; otherwise the
     regime gate's default (1.5) is used.
+
+    R2-diagnostic opt-in (2026-06-05 sprint): when env var
+    ``ORACLE_REGIME_GATE_FILTER`` is truthy, route through the
+    filtered-baseline variant ``check_regime_stability_with_filter``.
+    Additional knobs (optional):
+
+    - ``ORACLE_REGIME_GATE_SPARSE_FACTOR``  float, default 0.5
+    - ``ORACLE_REGIME_GATE_MIN_BASELINE_N`` int,   default 6
+
+    The default (unset) behavior is byte-identical to the pre-sprint
+    function -- existing callers, tests, and prior debriefs are unaffected.
     """
     cfg = MODE_CONFIG.get(mode, {})
     z_threshold = cfg.get("z_threshold")
+
+    use_filter_raw = os.environ.get("ORACLE_REGIME_GATE_FILTER", "")
+    use_filter = use_filter_raw.strip().lower() not in ("", "0", "false", "no", "off")
+    if use_filter:
+        try:
+            sparse_factor = float(
+                os.environ.get("ORACLE_REGIME_GATE_SPARSE_FACTOR", "0.5")
+            )
+        except ValueError:
+            sparse_factor = 0.5
+        try:
+            min_baseline_n_after_filter = int(
+                os.environ.get("ORACLE_REGIME_GATE_MIN_BASELINE_N", "6")
+            )
+        except ValueError:
+            min_baseline_n_after_filter = 6
+
+        kwargs = {
+            "sparse_factor": sparse_factor,
+            "min_baseline_n_after_filter": min_baseline_n_after_filter,
+        }
+        if z_threshold is not None:
+            kwargs["z_threshold"] = z_threshold
+        return regime_gate.check_regime_stability_with_filter(
+            conn, mode, **kwargs
+        )
+
     if z_threshold is not None:
         return regime_gate.check_regime_stability(conn, mode, z_threshold=z_threshold)
     return regime_gate.check_regime_stability(conn, mode)
