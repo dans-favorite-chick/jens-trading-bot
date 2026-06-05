@@ -624,15 +624,39 @@ def _check_regime_gate(conn, mode: str) -> dict:
     use_filter = use_filter_raw.strip().lower() not in ("", "0", "false", "no", "off")
     use_detrend_raw = os.environ.get("ORACLE_REGIME_GATE_DETREND", "")
     use_detrend = use_detrend_raw.strip().lower() not in ("", "0", "false", "no", "off")
+    use_weighted_raw = os.environ.get("ORACLE_REGIME_GATE_DETREND_WEIGHTED", "")
+    use_weighted = use_weighted_raw.strip().lower() not in ("", "0", "false", "no", "off")
 
-    # Mutual exclusion: the two variants test different methodology
-    # questions (sparse-month contamination vs gradual drift) and combining
+    # Three-way mutual exclusion: the variants test different methodology
+    # questions (sparse-month contamination vs gradual drift vs equal-
+    # variance violation under under-traded latest months) and combining
     # them produces a meaningless cross-method result. Fail loud at call
-    # site so the operator picks one. 2026-06-05 R2 Finding 3 sprint.
-    if use_filter and use_detrend:
+    # site so the operator picks one. Extended 2026-06-05 to add the
+    # DETREND_WEIGHTED variant per
+    # FINDING-2026-06-05-ORACLE-DETRENDED-SAMPLE-SIZE-WEIGHTING.
+    n_variants_set = int(use_filter) + int(use_detrend) + int(use_weighted)
+    if n_variants_set > 1:
         raise ValueError(
-            "ORACLE_REGIME_GATE_FILTER and ORACLE_REGIME_GATE_DETREND are "
-            "mutually exclusive — pick one variant per Oracle run."
+            "ORACLE_REGIME_GATE_FILTER, ORACLE_REGIME_GATE_DETREND, and "
+            "ORACLE_REGIME_GATE_DETREND_WEIGHTED are mutually exclusive — "
+            "pick one variant per Oracle run."
+        )
+
+    if use_weighted:
+        try:
+            min_latest_frac = float(
+                os.environ.get(
+                    "ORACLE_REGIME_GATE_MIN_LATEST_TRADE_COUNT_FRACTION",
+                    "0.7",
+                )
+            )
+        except ValueError:
+            min_latest_frac = 0.7
+        kwargs = {"min_latest_trade_count_fraction": min_latest_frac}
+        if z_threshold is not None:
+            kwargs["z_threshold"] = z_threshold
+        return regime_gate.check_regime_stability_detrended_weighted(
+            conn, mode, **kwargs
         )
 
     if use_detrend:

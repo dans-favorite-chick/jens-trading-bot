@@ -94,6 +94,7 @@ __all__ = [
     "check_regime_stability",
     "check_regime_stability_with_filter",
     "check_regime_stability_detrended",
+    "check_regime_stability_detrended_weighted",
     "Z_THRESHOLD_DEFAULT",
 ]
 
@@ -1131,4 +1132,546 @@ def check_regime_stability_detrended(
         "latest_sharpe_proxy": latest_sharpe,
         "z_score_detrended": z_detrended,
         **diagnostics,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Sample-size-weighted detrended variant — 2026-06-05 sprint discharges
+# FINDING-2026-06-05-ORACLE-DETRENDED-SAMPLE-SIZE-WEIGHTING.
+# ---------------------------------------------------------------------------
+
+_MIN_LATEST_TRADE_COUNT_FRACTION_DEFAULT = 0.7
+
+
+def check_regime_stability_detrended_weighted(
+    conn: duckdb.DuckDBPyConnection,
+    mode: Mode,
+    *,
+    z_threshold: float = Z_THRESHOLD_DEFAULT,
+    min_latest_trade_count_fraction: float = _MIN_LATEST_TRADE_COUNT_FRACTION_DEFAULT,
+) -> dict:
+    """Sample-size-weighted version of :func:`check_regime_stability_detrended`.
+
+    Discharges ``FINDING-2026-06-05-ORACLE-DETRENDED-SAMPLE-SIZE-WEIGHTING``
+    surfaced by the Phase 5.7 red-team CRITICAL on the unweighted variant:
+    the unweighted detrended gate treats every month as equal-variance, but
+    a latest month with FEWER trades than the baseline median has *higher
+    sampling variance* in its sharpe-proxy. Inflating the latest standard
+    error by a Welch-style factor flips the May 2026 verdict from
+    REGIME_REAL (z=3.35 unweighted) into a MARGINAL band -- the operator
+    should NOT advance the freeze-lift conversation on an equal-variance
+    artifact.
+
+    Two protections vs the unweighted variant:
+
+    1. **Refuse-to-compute floor.** When ``latest_trade_count <
+       min_latest_trade_count_fraction * baseline_median_trade_count``
+       (default 0.7), the gate returns ``INSUFFICIENT_SAMPLE`` without
+       computing z. The 0.7 default matches the spirit of the filtered
+       variant's sparse-month rule applied to the LATEST month: below
+       70 % of typical baseline volume, the corrected std is large enough
+       that any z is hard to interpret -- better to refuse and let the
+       operator wait for the latest month to accumulate more trades.
+
+    2. **Welch-style sampling correction.** If the floor passes, compute
+       ``corrected_std = residual_std * sqrt(baseline_median /
+       latest_trade_count)``. Latest standard error inflates when latest
+       has fewer trades, deflates when latest has more. ``z_weighted =
+       latest_residual / corrected_std``.
+
+    Returns the same key set as :func:`check_regime_stability_detrended`
+    plus:
+
+    - ``weighted_applied`` (bool): True iff the weighted path ran.
+    - ``insufficient_sample`` (bool): True iff the refuse-to-compute
+      floor triggered.
+    - ``category`` (str): one of INSUFFICIENT_BASELINE,
+      INSUFFICIENT_SAMPLE, REGIME_REAL, MARGINAL, DRIFT_ARTIFACT,
+      AMBIGUOUS. Maps the operator's pre-decision rule mechanically.
+    - ``latest_trade_count`` (int | None).
+    - ``baseline_median_trade_count`` (float | None).
+    - ``weight_factor`` (float | None): the sqrt-ratio applied to
+      residual std; 1.0 when balanced.
+    - ``corrected_residual_std`` (float | None).
+    - ``z_score_detrended_weighted`` (float): the operative z; NaN when
+      not computable.
+
+    Pre-decision rule (per operator spec, mapped to ``category``):
+
+    - ``insufficient_sample`` -> INSUFFICIENT_SAMPLE.
+    - ``baseline_n_months < 4`` -> INSUFFICIENT_BASELINE.
+    - ``|z_weighted| > 3.0`` -> REGIME_REAL.
+    - ``|z_weighted| < 2.0`` AND ``r_squared > 0.5`` -> DRIFT_ARTIFACT.
+    - ``|z_weighted| < 2.0`` AND ``r_squared < 0.5`` -> AMBIGUOUS.
+    - ``2.0 <= |z_weighted| <= 3.0`` -> MARGINAL.
+
+    Raises ``ValueError`` on negative ``min_latest_trade_count_fraction``
+    (matches the input-validation pattern of
+    :func:`check_regime_stability_with_filter`).
+
+    Same per-shape safety contract as the other gates: NEVER halts on
+    missing data; only on a detected regime shift.
+    """
+    # --- input validation ---
+    if min_latest_trade_count_fraction < 0:
+        raise ValueError(
+            f"min_latest_trade_count_fraction must be >= 0 "
+            f"(got {min_latest_trade_count_fraction!r}); negative values "
+            "silently disable the refuse-to-compute floor."
+        )
+    # Upper-bound guard per 2026-06-05 red-team MEDIUM: an over-large
+    # fraction (e.g. operator typo `7` instead of `0.7`) would silently
+    # refuse every month forever, masquerading as a "regime instability"
+    # signal. 1.5 means latest needs 150% of baseline median to clear --
+    # absurd; reject loud.
+    if min_latest_trade_count_fraction > 1.5:
+        raise ValueError(
+            f"min_latest_trade_count_fraction must be <= 1.5 "
+            f"(got {min_latest_trade_count_fraction!r}); values above "
+            "1.5 silently refuse every Oracle run."
+        )
+
+    def _weighted_diag_stub() -> dict:
+        return {
+            "weighted_applied": False,
+            "insufficient_sample": False,
+            "category": "INSUFFICIENT_BASELINE",
+            "latest_trade_count": None,
+            "baseline_median_trade_count": None,
+            "weight_factor": None,
+            "corrected_residual_std": None,
+            "z_score_detrended_weighted": float("nan"),
+            "baseline_slope": None,
+            "baseline_intercept": None,
+            "baseline_r_squared": None,
+            "residuals": [],
+            "latest_residual": None,
+        }
+
+    # --- daily mode short-circuit (mirror existing variants) ---
+    if mode == "daily":
+        return {
+            "stable": True,
+            "z_score": float("nan"),
+            "warning": None,
+            "mode_skipped": True,
+            "baseline_n_months": 0,
+            "latest_month": None,
+            "latest_sharpe_proxy": None,
+            **_weighted_diag_stub(),
+        }
+
+    # --- query ---
+    try:
+        df = prepared_queries.monthly_sharpe_proxy(conn, months_back=_PULL_MONTHS)
+    except Exception as e:  # pragma: no cover -- operator visibility
+        logger.warning(
+            "regime_gate(detrended_weighted): monthly_sharpe_proxy query "
+            "failed (%s); treating as insufficient data, returning "
+            "stable=True.",
+            e,
+        )
+        return {
+            "stable": True,
+            "z_score": float("nan"),
+            "warning": (
+                "Regime gate (detrended_weighted) could not run: warehouse "
+                f"query failed ({type(e).__name__}). Analysis not halted on "
+                "missing data."
+            ),
+            "mode_skipped": False,
+            "baseline_n_months": 0,
+            "latest_month": None,
+            "latest_sharpe_proxy": None,
+            **_weighted_diag_stub(),
+        }
+
+    if df is None or df.empty:
+        return {
+            "stable": True,
+            "z_score": float("nan"),
+            "warning": (
+                "Regime gate (detrended_weighted) could not run: no "
+                "friction-applied trades found in the trailing window. "
+                "Analysis not halted on missing data."
+            ),
+            "mode_skipped": False,
+            "baseline_n_months": 0,
+            "latest_month": None,
+            "latest_sharpe_proxy": None,
+            **_weighted_diag_stub(),
+        }
+
+    # The weighted variant requires trade_count in addition to the
+    # standard columns.
+    required_columns = {"month", "sharpe_proxy", "trade_count"}
+    missing = required_columns - set(df.columns)
+    if missing:
+        return {
+            "stable": True,
+            "z_score": float("nan"),
+            "warning": (
+                "Regime gate (detrended_weighted) could not run: "
+                "prepared_queries.monthly_sharpe_proxy is missing required "
+                f"columns {sorted(missing)}. Schema may have drifted."
+            ),
+            "mode_skipped": False,
+            "baseline_n_months": 0,
+            "latest_month": None,
+            "latest_sharpe_proxy": None,
+            **_weighted_diag_stub(),
+        }
+
+    try:
+        df = df.sort_values("month").reset_index(drop=True)
+        latest_row = df.iloc[-1]
+        latest_month = _latest_month_str(latest_row["month"])
+        latest_sharpe = latest_row["sharpe_proxy"]
+        if pd.notna(latest_sharpe):
+            latest_sharpe = float(latest_sharpe)
+        else:
+            latest_sharpe = None
+        try:
+            latest_trade_count = int(latest_row["trade_count"])
+        except (TypeError, ValueError):
+            latest_trade_count = None
+
+        baseline_df = df.iloc[:-1].copy()
+        baseline_df = baseline_df[baseline_df["sharpe_proxy"].notna()]
+        baseline_n = int(len(baseline_df))
+    except (KeyError, TypeError, AttributeError, ValueError) as e:
+        logger.warning(
+            "regime_gate(detrended_weighted): unexpected DataFrame shape "
+            "(%s: %s); treating as schema drift and returning stable=True.",
+            type(e).__name__, e,
+        )
+        return {
+            "stable": True,
+            "z_score": float("nan"),
+            "warning": (
+                "Regime gate (detrended_weighted) could not run: unexpected "
+                f"DataFrame shape ({type(e).__name__}). Schema may have "
+                "drifted."
+            ),
+            "mode_skipped": False,
+            "baseline_n_months": 0,
+            "latest_month": None,
+            "latest_sharpe_proxy": None,
+            **_weighted_diag_stub(),
+        }
+
+    # Baseline median trade_count -- the reference for the floor and
+    # the Welch correction.
+    baseline_median_trade_count: float | None = None
+    if not baseline_df.empty:
+        try:
+            baseline_median_trade_count = float(
+                baseline_df["trade_count"].astype(float).median()
+            )
+        except (TypeError, ValueError):
+            baseline_median_trade_count = None
+
+    # --- refuse-to-compute floor (Bug-Hunter safety: catch zero-latest
+    # BEFORE the Welch division below) ---
+    floor_triggered = False
+    if (
+        baseline_median_trade_count is not None
+        and baseline_median_trade_count > 0
+        and latest_trade_count is not None
+    ):
+        cutoff = min_latest_trade_count_fraction * baseline_median_trade_count
+        if latest_trade_count < cutoff:
+            floor_triggered = True
+
+    if floor_triggered:
+        return {
+            "stable": True,
+            "z_score": float("nan"),
+            "warning": (
+                f"Regime gate (detrended_weighted) refused to compute: "
+                f"latest_trade_count={latest_trade_count} is below the "
+                f"floor "
+                f"(min_latest_trade_count_fraction="
+                f"{min_latest_trade_count_fraction} * "
+                f"baseline_median_trade_count="
+                f"{baseline_median_trade_count:.1f} = "
+                f"{cutoff:.1f}). Insufficient sample: latest month is "
+                f"under-traded relative to baseline; equal-variance "
+                f"assumption violated. Analysis not halted."
+            ),
+            "mode_skipped": False,
+            "baseline_n_months": baseline_n,
+            "latest_month": latest_month,
+            "latest_sharpe_proxy": latest_sharpe,
+            "weighted_applied": True,
+            "insufficient_sample": True,
+            "category": "INSUFFICIENT_SAMPLE",
+            "latest_trade_count": latest_trade_count,
+            "baseline_median_trade_count": baseline_median_trade_count,
+            "weight_factor": None,
+            "corrected_residual_std": None,
+            "z_score_detrended_weighted": float("nan"),
+            "baseline_slope": None,
+            "baseline_intercept": None,
+            "baseline_r_squared": None,
+            "residuals": [],
+            "latest_residual": None,
+        }
+
+    # --- legacy minimum baseline (matches detrended) ---
+    if baseline_n < _MIN_BASELINE_MONTHS:
+        return {
+            "stable": True,
+            "z_score": float("nan"),
+            "warning": (
+                f"Regime gate (detrended_weighted) could not run: only "
+                f"{baseline_n} baseline month(s) of usable sharpe-proxy "
+                f"data available (need >= {_MIN_BASELINE_MONTHS}). "
+                "Insufficient data; analysis not halted."
+            ),
+            "mode_skipped": False,
+            "baseline_n_months": baseline_n,
+            "latest_month": latest_month,
+            "latest_sharpe_proxy": latest_sharpe,
+            "weighted_applied": True,
+            "insufficient_sample": False,
+            "category": "INSUFFICIENT_BASELINE",
+            "latest_trade_count": latest_trade_count,
+            "baseline_median_trade_count": baseline_median_trade_count,
+            "weight_factor": None,
+            "corrected_residual_std": None,
+            "z_score_detrended_weighted": float("nan"),
+            "baseline_slope": None,
+            "baseline_intercept": None,
+            "baseline_r_squared": None,
+            "residuals": [],
+            "latest_residual": None,
+        }
+
+    if latest_sharpe is None:
+        return {
+            "stable": True,
+            "z_score": float("nan"),
+            "warning": (
+                "Regime gate (detrended_weighted) could not run: latest "
+                "month has no usable sharpe-proxy value (single trade or "
+                "zero variance). Insufficient data; analysis not halted."
+            ),
+            "mode_skipped": False,
+            "baseline_n_months": baseline_n,
+            "latest_month": latest_month,
+            "latest_sharpe_proxy": None,
+            "weighted_applied": True,
+            "insufficient_sample": False,
+            "category": "INSUFFICIENT_BASELINE",
+            "latest_trade_count": latest_trade_count,
+            "baseline_median_trade_count": baseline_median_trade_count,
+            "weight_factor": None,
+            "corrected_residual_std": None,
+            "z_score_detrended_weighted": float("nan"),
+            "baseline_slope": None,
+            "baseline_intercept": None,
+            "baseline_r_squared": None,
+            "residuals": [],
+            "latest_residual": None,
+        }
+
+    # --- linear regression (same math as the unweighted variant) ---
+    try:
+        y = baseline_df["sharpe_proxy"].astype(float).to_numpy()
+        x = np.arange(len(y), dtype=float)
+        coefs = np.polyfit(x, y, deg=1)
+        slope = float(coefs[0])
+        intercept = float(coefs[1])
+    except (np.linalg.LinAlgError, ValueError, TypeError) as e:
+        logger.warning(
+            "regime_gate(detrended_weighted): polyfit failed (%s: %s); "
+            "returning stable=True with NaN z.",
+            type(e).__name__, e,
+        )
+        return {
+            "stable": True,
+            "z_score": float("nan"),
+            "warning": (
+                "Regime gate (detrended_weighted) could not run: linear-fit "
+                f"failed ({type(e).__name__}). Degenerate baseline; analysis "
+                "not halted."
+            ),
+            "mode_skipped": False,
+            "baseline_n_months": baseline_n,
+            "latest_month": latest_month,
+            "latest_sharpe_proxy": latest_sharpe,
+            "weighted_applied": True,
+            "insufficient_sample": False,
+            "category": "INSUFFICIENT_BASELINE",
+            "latest_trade_count": latest_trade_count,
+            "baseline_median_trade_count": baseline_median_trade_count,
+            "weight_factor": None,
+            "corrected_residual_std": None,
+            "z_score_detrended_weighted": float("nan"),
+            "baseline_slope": None,
+            "baseline_intercept": None,
+            "baseline_r_squared": None,
+            "residuals": [],
+            "latest_residual": None,
+        }
+
+    predicted = slope * x + intercept
+    residuals = (y - predicted).tolist()
+    predicted_latest = slope * float(len(y)) + intercept
+    latest_residual = float(latest_sharpe - predicted_latest)
+
+    if len(residuals) > 2:
+        residual_std = float(np.std(np.asarray(residuals), ddof=2))
+    else:
+        residual_std = float("nan")
+
+    y_mean = float(np.mean(y))
+    ss_res = float(np.sum((y - predicted) ** 2))
+    ss_tot = float(np.sum((y - y_mean) ** 2))
+    if ss_tot > 1e-12:
+        r_squared = 1.0 - (ss_res / ss_tot)
+        r_squared = max(0.0, min(1.0, r_squared))
+    else:
+        r_squared = 0.0
+
+    # --- Welch-style sample-size correction ---
+    # Floor already caught latest_trade_count < cutoff, so latest_n > 0 here.
+    # baseline_median_trade_count > 0 also enforced (the floor branch only
+    # triggers when both are positive).
+    if (
+        baseline_median_trade_count is not None
+        and baseline_median_trade_count > 0
+        and latest_trade_count is not None
+        and latest_trade_count > 0
+    ):
+        weight_factor = math.sqrt(
+            baseline_median_trade_count / float(latest_trade_count)
+        )
+    else:
+        # Degenerate: missing trade_count metadata. Fall back to weight=1.0
+        # (equivalent to the unweighted detrended variant) and flag in the
+        # warning. The earlier floor check would have caught the more common
+        # under-traded case; this branch is for missing-data only.
+        weight_factor = 1.0
+
+    if (
+        math.isfinite(residual_std)
+        and residual_std > 1e-10
+    ):
+        corrected_residual_std = residual_std * weight_factor
+    else:
+        corrected_residual_std = float("nan")
+
+    diagnostics_common = {
+        "baseline_slope": slope,
+        "baseline_intercept": intercept,
+        "baseline_r_squared": r_squared,
+        "residuals": [float(r) for r in residuals],
+        "latest_residual": latest_residual,
+    }
+
+    if (
+        not math.isfinite(corrected_residual_std)
+        or corrected_residual_std < 1e-10
+    ):
+        return {
+            "stable": True,
+            "z_score": float("nan"),
+            "warning": (
+                "Regime gate (detrended_weighted) could not run: residual "
+                "standard deviation is zero (baseline is a perfect linear "
+                "fit or degenerate). Z-score undefined; analysis not halted."
+            ),
+            "mode_skipped": False,
+            "baseline_n_months": baseline_n,
+            "latest_month": latest_month,
+            "latest_sharpe_proxy": latest_sharpe,
+            "weighted_applied": True,
+            "insufficient_sample": False,
+            "category": "INSUFFICIENT_BASELINE",
+            "latest_trade_count": latest_trade_count,
+            "baseline_median_trade_count": baseline_median_trade_count,
+            "weight_factor": weight_factor,
+            "corrected_residual_std": (
+                float("nan")
+                if not math.isfinite(corrected_residual_std)
+                else corrected_residual_std
+            ),
+            "z_score_detrended_weighted": float("nan"),
+            **diagnostics_common,
+        }
+
+    z_weighted = float(latest_residual / corrected_residual_std)
+
+    # --- category mapping per operator pre-decision rule ---
+    # Operator's pre-decision rule is HARD-PINNED on |z|=3.0 and |z|=2.0 --
+    # NOT on the configurable z_threshold. The two thresholds serve
+    # different audiences:
+    #   - z_threshold controls the gate's HALT signal (stable=False), which
+    #     the Oracle orchestrator uses to halt_on_unstable_regime. Weekly
+    #     mode uses 1.5, research uses 3.0.
+    #   - category serves the OPERATOR's freeze-lift decision and is
+    #     pinned to the literal rule (REGIME_REAL > 3.0, MARGINAL [2.0, 3.0]).
+    # Conflating them (the 2026-06-05 red-team HIGH bug pre-fix) made
+    # the MARGINAL band unreachable in weekly mode.
+    _CATEGORY_HIGH_THRESHOLD = 3.0
+    _CATEGORY_LOW_THRESHOLD = 2.0
+    abs_z = abs(z_weighted)
+    if abs_z > _CATEGORY_HIGH_THRESHOLD:
+        category = "REGIME_REAL"
+    elif abs_z < _CATEGORY_LOW_THRESHOLD:
+        if r_squared > 0.5:
+            category = "DRIFT_ARTIFACT"
+        else:
+            category = "AMBIGUOUS"
+    else:  # 2.0 <= abs_z <= 3.0
+        category = "MARGINAL"
+
+    diagnostics_full = {
+        "weighted_applied": True,
+        "insufficient_sample": False,
+        "category": category,
+        "latest_trade_count": latest_trade_count,
+        "baseline_median_trade_count": baseline_median_trade_count,
+        "weight_factor": weight_factor,
+        "corrected_residual_std": corrected_residual_std,
+        "z_score_detrended_weighted": z_weighted,
+        **diagnostics_common,
+    }
+
+    if category == "REGIME_REAL":
+        warning = (
+            f"Regime instability detected (detrended_weighted): latest-month "
+            f"sample-size-corrected residual z-score = {z_weighted:+.2f} "
+            f"(threshold +/- {z_threshold:.2f}). Welch factor "
+            f"{weight_factor:.3f} (latest_n={latest_trade_count} vs "
+            f"baseline_median_n={baseline_median_trade_count:.0f}). "
+            f"Baseline trend slope={slope:+.5f} per month, "
+            f"intercept={intercept:+.5f}, r^2={r_squared:.3f}. Latest "
+            f"sharpe {latest_sharpe:.3f} ({latest_month}) -> residual "
+            f"{latest_residual:+.4f}; corrected_std="
+            f"{corrected_residual_std:.4f}. Analysis halted."
+        )
+        logger.warning("regime_gate(detrended_weighted): %s", warning)
+        return {
+            "stable": False,
+            "z_score": z_weighted,
+            "warning": warning,
+            "mode_skipped": False,
+            "baseline_n_months": baseline_n,
+            "latest_month": latest_month,
+            "latest_sharpe_proxy": latest_sharpe,
+            **diagnostics_full,
+        }
+
+    return {
+        "stable": True,
+        "z_score": z_weighted,
+        "warning": None,
+        "mode_skipped": False,
+        "baseline_n_months": baseline_n,
+        "latest_month": latest_month,
+        "latest_sharpe_proxy": latest_sharpe,
+        **diagnostics_full,
     }
