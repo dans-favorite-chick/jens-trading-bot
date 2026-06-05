@@ -2193,6 +2193,7 @@ class BaseBot:
                 await ws.send(json.dumps({
                     "type": "trade", "trade_id": trade_id,
                     "action": "EXIT", "qty": pos.contracts,
+                    "direction": pos.direction,
                     "reason": reason,
                     "account": getattr(pos, "account", None),
                     "sub_strategy": getattr(pos, "sub_strategy", None),

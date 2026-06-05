@@ -135,6 +135,7 @@ class TradeExit:
                     await ws.send(json.dumps({
                         "type": "trade", "trade_id": tid,
                         "action": "EXIT", "qty": pos.contracts,
+                        "direction": pos.direction,
                         "account": pos.account,
                         "reason": reason,
                     }))

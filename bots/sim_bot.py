@@ -516,6 +516,7 @@ class SimBot(BaseBot):
                 await ws.send(json.dumps({
                     "type": "trade", "trade_id": trade_id,
                     "action": "EXIT", "qty": pos.contracts,
+                    "direction": pos.direction,
                     "reason": reason,
                     "account": pos.account,
                     "sub_strategy": pos.sub_strategy,
